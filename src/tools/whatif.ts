@@ -1,10 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { exec } from './exec.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 
 const PY = process.platform === 'win32' ? 'python' : 'python3';
+/** This app's own pipeline scripts (source import, voice, Modal render), next to the skill's. */
+const PIPELINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'pipeline');
 
 const EPISODE_STUB = (slug: string) => ({
   id: slug.replace(/(^|-)([a-z])/g, (_, __, c: string) => c.toUpperCase()),
@@ -123,16 +126,27 @@ function diffArtifacts(root: string, before: Map<string, number>): Artifact[] {
   return changed.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 40);
 }
 
-const STEPS: Record<string, { py?: string; node?: string; timeoutMs?: number; desc: string }> = {
+/**
+ * Pipeline steps. `own: true` runs a script shipped with this app (pipeline/) instead of the skill's
+ * scripts/, both with cwd = the project root: the nouvelle chain (import + voice through :8005) and
+ * the Modal renderer live here, everything else stays the skill's, untouched.
+ */
+const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeoutMs?: number; desc: string }> = {
   install: { desc: 'npm install in the project studio', timeoutMs: 900_000 },
-  voice: { py: 'voice.py', desc: 'ElevenLabs voice + word timings (costs credits)' },
+  source: {
+    py: 'source_import.py',
+    own: true,
+    timeoutMs: 1_200_000,
+    desc: 'nouveau video id -> English transcript -> French narration proposals (needs a video id)',
+  },
+  voice: { py: 'voice_fish.py', own: true, timeoutMs: 900_000, desc: 'Fish Audio TTS through :8005 + word timings (free tier)' },
   plan: { py: 'plan.py', desc: 'resolve cues into timeline.json' },
-  stills: { node: 'stills.mjs', desc: 'render one still per shot' },
+  stills: { py: 'modal_render.py', own: true, timeoutMs: 1_200_000, desc: 'storyboard stills on Modal' },
   board: { py: 'board.py', desc: 'build the storyboard sheet' },
-  sfx: { py: 'sfx.py', desc: 'generate and place sound effects (costs credits)' },
+  sfx: { py: 'sfx.py', timeoutMs: 900_000, desc: 'sound effects on ElevenLabs (costs credits)' },
   mixcheck: { py: 'mixcheck.py', desc: 'check the voice stays clear' },
   motiongrid: { py: 'motiongrid.py', desc: 'frame grids per shot' },
-  master: { py: 'master.py', desc: 'render + master to -14 LUFS' },
+  master: { py: 'master.py', timeoutMs: 1_800_000, desc: 'master to -14 LUFS (renders locally only if no Modal render exists)' },
 };
 
 const newProject: Tool = {
@@ -145,13 +159,14 @@ const newProject: Tool = {
     type: 'object',
     properties: {
       episode: { type: 'string', description: 'Slug, e.g. "pause-everyone".' },
+      video: { type: 'string', description: 'nouveau video id to use as the source of the episode.' },
       force: { type: 'boolean', description: 'Scaffold into a non-empty folder.' },
     },
     required: ['episode'],
     additionalProperties: false,
   },
   validate: (input) => (/^[a-z0-9][a-z0-9-]*$/.test(String(input.episode ?? '')) ? null : 'episode must be a kebab-case slug'),
-  async run(input: { episode: string; force?: boolean }, ctx): Promise<ToolResult> {
+  async run(input: { episode: string; video?: string; force?: boolean }, ctx): Promise<ToolResult> {
     if (!ctx.skillDir) throw new Error('WHATIF_SKILL_DIR is not set: point it at the what-if-animation skill folder');
     const studio = path.join(ctx.skillDir, 'studio');
     if (!fs.existsSync(studio)) throw new Error(`no studio/ in ${ctx.skillDir}`);
@@ -181,7 +196,12 @@ const newProject: Tool = {
     const slug = input.episode;
     const dir = safeJoin(ctx.projectRoot, `src/episodes/${slug}`);
     fs.mkdirSync(dir, { recursive: true });
-    const ep = EPISODE_STUB(slug);
+    const ep: Record<string, any> = EPISODE_STUB(slug);
+    if (input.video) {
+      ep.source = { provider: 'nouveau', videoId: input.video };
+      // the voice goes through the local TTS API, on the source video
+      ep.voice = { provider: 'fish', voiceId: 'a688e2ec8bde444a876c160875a61804', modelId: 's2.1-pro-free', speakingRate: 1 };
+    }
     fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify(ep, null, 1) + '\n');
     fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify(TIMELINE_STUB(slug), null, 1) + '\n');
     fs.writeFileSync(path.join(dir, 'shots.tsx'), SHOT_STUB);
@@ -218,7 +238,7 @@ const newProject: Tool = {
     if (!fs.existsSync(memory)) {
       fs.writeFileSync(
         memory,
-        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n- pipeline: voice -> plan -> stills -> board -> (approval) -> sfx -> master\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
+        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n${input.video ? `- source video (nouveau): ${input.video}\n` : ''}- pipeline: source -> voice -> plan -> stills -> board -> (approval) -> sfx -> master -> render\n- voice: Fish Audio (free tier) through the local TTS API; ElevenLabs is only used for the SFX\n- render: Modal (out/<slug>/<slug>-raw.mp4), then master.py --skip-render\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
       );
     }
     return {
@@ -232,14 +252,17 @@ const newProject: Tool = {
 const runStep: Tool = {
   name: 'whatif_run',
   description:
-    'Run one pipeline step on an episode, using the skill scripts (voice, plan, stills, board, sfx, mixcheck, motiongrid, master) or install/render. Returns new artifacts (board stills, sheets, videos) you can look at.',
+    'Run one pipeline step on an episode: source (import a nouveau video id), voice (Fish Audio through the local TTS API), plan, stills (Modal), board, sfx (ElevenLabs, costs credits), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
   policy: 'ask',
   schema: {
     type: 'object',
     properties: {
       episode: { type: 'string' },
-      step: { type: 'string', enum: ['install', 'voice', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'] },
-      args: { type: 'array', items: { type: 'string' }, description: 'Extra argv, e.g. ["--dry"] or ["S2","S5"].' },
+      step: {
+        type: 'string',
+        enum: ['install', 'source', 'voice', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'],
+      },
+      args: { type: 'array', items: { type: 'string' }, description: 'Extra argv, e.g. ["--pick","hook"] or ["S2","S5"].' },
     },
     required: ['episode', 'step'],
     additionalProperties: false,
@@ -249,13 +272,15 @@ const runStep: Tool = {
     if (step !== 'render' && !STEPS[step]) return `unknown step ${step}`;
     return null;
   },
-  cost: (input) => (['voice', 'sfx', 'master'].includes(String(input.step)) ? 200 : 0),
+  cost: (input) => (['sfx', 'master'].includes(String(input.step)) ? 200 : 0),
   async run(input: { episode: string; step: string; args?: string[] }, ctx): Promise<ToolResult> {
     if (!ctx.skillDir) throw new Error('WHATIF_SKILL_DIR is not set');
     const scripts = path.join(ctx.skillDir, 'scripts');
     const extra = input.args ?? [];
     const slug = input.episode;
     const before = snapshot(ctx.projectRoot);
+    const renderMode = (process.env.WHATIF_RENDER ?? 'modal').toLowerCase();
+    const rawMp4 = `out/${slug}/${slug}-raw.mp4`;
 
     let argv: string[];
     let timeoutMs = 600_000;
@@ -265,28 +290,63 @@ const runStep: Tool = {
     } else if (input.step === 'render') {
       const epJson = safeJoin(ctx.projectRoot, `src/episodes/${slug}/episode.json`);
       if (!fs.existsSync(epJson)) throw new Error(`no episode.json for ${slug}`);
-      const id = JSON.parse(fs.readFileSync(epJson, 'utf8')).id as string;
-      argv = ['npx', 'remotion', 'render', 'src/index.ts', id, `out/${slug}/${slug}-raw.mp4`, '--log', 'error'];
+      if (renderMode === 'local') {
+        // escape hatch when Modal is unavailable: the exact command the skill's master.py runs
+        const id = JSON.parse(fs.readFileSync(epJson, 'utf8')).id as string;
+        argv = ['npx', 'remotion', 'render', 'src/index.ts', id, rawMp4, '--log', 'error', ...extra];
+      } else {
+        argv = [PY, path.join(PIPELINE, 'modal_render.py'), slug, '--mode', 'video', '--project', '.', ...extra];
+      }
+      timeoutMs = 1_800_000;
+    } else if (
+      input.step === 'master' &&
+      renderMode !== 'local' &&
+      fs.existsSync(safeJoin(ctx.projectRoot, rawMp4))
+    ) {
+      // the video came from Modal: master it instead of rendering it again locally
+      argv = [PY, path.join(scripts, 'master.py'), slug, '--skip-render', ...extra.filter((a) => a !== '--skip-render')];
       timeoutMs = 1_800_000;
     } else {
       const step = STEPS[input.step]!;
-      if (step.py) argv = [PY, path.join(scripts, step.py), slug, ...extra];
-      else if (step.node) argv = ['node', path.join(scripts, step.node), slug, ...extra];
+      const dir = step.own ? PIPELINE : scripts;
+      if (input.step === 'stills') {
+        argv =
+          renderMode === 'local'
+            ? ['node', path.join(scripts, 'stills.mjs'), slug, ...extra]
+            : [PY, path.join(PIPELINE, 'modal_render.py'), slug, '--mode', 'stills', '--project', '.', '--scale', '0.5', ...extra];
+      } else if (step.py) argv = [PY, path.join(dir, step.py), slug, ...extra];
+      else if (step.node) argv = ['node', path.join(dir, step.node), slug, ...extra];
       else throw new Error(`step ${input.step} has no command`);
       if (step.timeoutMs) timeoutMs = step.timeoutMs;
     }
 
     ctx.log(`whatif_run ${input.step} ${slug}: ${argv.join(' ')}`);
     const res = await exec(argv, { cwd: ctx.projectRoot, timeoutMs, signal: ctx.signal });
-    const tail = (s: string) => s.split('\n').filter(Boolean).slice(-25).join('\n');
+    const lines = res.stdout.split('\n').filter(Boolean);
+    // our pipeline scripts report one machine-readable line; the rest is the human log
+    let payload: Record<string, unknown> | undefined;
+    const resultLine = lines.filter((l) => l.startsWith('RESULT_JSON:')).pop();
+    if (resultLine) {
+      try {
+        payload = JSON.parse(resultLine.slice('RESULT_JSON:'.length)) as Record<string, unknown>;
+      } catch {
+        payload = undefined;
+      }
+    }
+    for (const l of lines) if (l.startsWith('PROGRESS_JSON:')) ctx.log(l.slice('PROGRESS_JSON:'.length));
+    const visible = lines.filter((l) => !l.startsWith('RESULT_JSON:') && !l.startsWith('PROGRESS_JSON:'));
+    const tail = (s: string[]) => s.slice(-25).join('\n');
     const artifacts = diffArtifacts(ctx.projectRoot, before);
     const credits = /credits?[^0-9]{0,12}(\d+)/i.exec(res.stdout);
+    const failed = payload ? payload.ok === false : res.code !== 0;
     return {
-      ok: res.code === 0,
-      summary: `$ ${argv.join(' ')}\nexit ${res.code}${res.timedOut ? ' (timeout)' : ''}\n${tail(res.stdout)}${res.stderr ? `\n[stderr]\n${tail(res.stderr)}` : ''}${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}`,
+      ok: !failed,
+      summary: `$ ${argv.join(' ')}\nexit ${res.code}${res.timedOut ? ' (timeout)' : ''}\n${tail(visible)}${res.stderr ? `\n[stderr]\n${tail(res.stderr.split('\n').filter(Boolean))}` : ''}${
+        payload ? `\n\nresult: ${JSON.stringify(payload).slice(0, 1200)}` : ''
+      }${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}`,
       artifacts,
       credits: credits ? Number(credits[1]) : undefined,
-      data: { step: input.step, code: res.code },
+      data: { step: input.step, code: res.code, result: payload },
     };
   },
 };

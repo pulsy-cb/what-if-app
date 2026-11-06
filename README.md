@@ -41,15 +41,27 @@ Le skill est détecté automatiquement s'il est juste à côté (`../what-if-ani
 ### Sous Docker
 
 ```bash
-cp .env.example .env          # mets la clé du modèle et ELEVENLABS_API_KEY
+cp .env.example .env          # mets la clé du modèle, puis MODAL_TOKEN_ID / MODAL_TOKEN_SECRET
+modal token new               # une fois : écrit ~/.modal.toml (ou passe les deux variables ci-dessus)
 docker compose up --build
 ```
 
-Le conteneur tourne **non-root**, écoute sur `127.0.0.1:3000` seulement, avec `shm_size: 1gb` pour
-Chromium. Volumes : `./data` (projets, SQLite, checkpoints git) et `../what-if-animation:/skill:ro`.
+Le conteneur tourne **non-root**, écoute sur `127.0.0.1:3000` seulement, en `network_mode: host` :
+l'API locale `nouveau` (:8005, transcriptions, propositions de narration, TTS Fish) écoute elle aussi
+sur le `127.0.0.1` de l'hôte, donc un réseau bridge ne la verrait pas. Volumes : `./data` (projets,
+SQLite, checkpoints git), `../what-if-animation:/skill:ro` et `~/.modal.toml`.
 
-> Dans le conteneur, les rendus Remotion ont besoin de `--gl=swangle` (pas de GPU) ; l'agent le passe
-> quand il appelle `npx remotion`. `node_modules` du studio est installé par l'étape `install`.
+> **Le rendu ne se fait pas dans ce conteneur.** `whatif_run stills|render` envoie les sources à une
+> fonction Modal (`pipeline/modal_render.py`) dont l'image contient déjà Node 24, Chromium, les polices
+> et `node_modules` : premier run ≈ 70 s (build de l'image), ensuite ≈ 20 s pour les stills et
+> quelques minutes pour une vidéo de 20 s. L'image Docker locale n'a donc pas besoin de Chromium ;
+> `WHATIF_RENDER=local` reste une échappatoire (nécessite `whatif_run install` dans le projet).
+
+> **Le TTS passe par `nouveau`.** `whatif_run source` et `whatif_run voice` appellent
+> `http://127.0.0.1:8005` (`WHATIF_NOUVEAU_URL` pour changer) : la transcription anglaise (Deepgram), les
+> propositions de narration française et la prise Fish Audio restent attachées au `video_id` d'origine,
+> donc visibles dans l'UI de `nouveau` à côté de la vidéo source. Fish `s2.1-pro-free` est gratuit ;
+> ElevenLabs ne sert plus qu'aux SFX.
 
 ## Ce qui existe dans cette v0.1
 
@@ -87,7 +99,7 @@ Zéro dépendance runtime : `node:http`, `node:sqlite`, `fetch` natif. Seul Type
 | `shell` | **ask** | une seule commande, dans une allowlist (`npx tsc`, `npx remotion`, `python scripts/…`, `ffmpeg`, `git`…) |
 | `git` | auto | statut, diff, checkpoint, log, restore |
 | `whatif_new` | **ask** | copie le studio du skill + squelette d'épisode (`episode.json`, `timeline.json`, `shots.tsx`, `index.tsx`), enregistré dans `src/episodes/index.ts` |
-| `whatif_run` | **ask** | une étape du pipeline : `install, voice, plan, stills, board, sfx, mixcheck, motiongrid, render, master` |
+| `whatif_run` | **ask** | une étape du pipeline : `install, source, voice, plan, stills, board, sfx, mixcheck, motiongrid, render, master` |
 | `whatif_status` | auto | où en est l'épisode (script, words, timeline, stills, board, sfx, render, report) |
 | `whatif_sync_engine` | **ask** | compare `src/engine` au skill, liste les fichiers modifiés localement, n'écrase que sur `apply` |
 
@@ -97,12 +109,19 @@ de l'épisode, `git restore` revient en arrière.
 
 ## Le cycle d'un épisode
 
-1. **Projet** : `+` dans la colonne Projets → copie du studio (engine + public + `package.json`) et un
-   squelette d'épisode qui type-checke déjà (`npx tsc --noEmit` passe).
+1. **Source** : la plupart du temps tu ne donnes qu'un `video_id` (YouTube ou TikTok, déjà dans
+   `nouveau`). `whatif_new { video }` crée le projet avec cette source, `whatif_run source`
+   transcrit (anglais, Deepgram), demande deux propositions de **narration française**, garde celle que
+   tu choisis dans `out/<slug>/source.fr.md` et remplit `episode.json`. L'agent relit ce fichier et
+   écrit lui-même un script de 15–25 s : une condensation, pas une traduction.
 2. **Script** : l'agent remplit `episode.json` (cold open en 3 démos, prémisse, coût avec un fait sourcé).
-3. **`voice`** → `words.json` (timings par mot). **`plan`** → `timeline.json` (segments, shots, fx, audio).
-4. **`stills`** puis **`board`** : l'agent regarde la planche (`view_image`) et te demande l'accord.
-5. **Après accord seulement** : `sfx`, `mixcheck`, `master` (−14 LUFS, crêtes < −1 dBTP, `report.json`).
+3. **`voice`** → Fish Audio via `nouveau`, même `video_id` : `public/<slug>/voice.wav` + `words.json`.
+   Fish ne rend pas d'horodatage, donc la prise est retranscrite (Deepgram) puis réalignée sur
+   l'orthographe du script. **`plan`** → `timeline.json` (segments, shots, fx, audio).
+4. **`stills`** (sur Modal) puis **`board`** : l'agent regarde la planche (`view_image`) et te demande l'accord.
+5. **Après accord seulement** : `sfx` (ElevenLabs), `mixcheck`, `render` (Modal, sans audio ajouté : le
+   son vient des `<Audio>` de la composition), `master` → `master.py --skip-render`
+   (−14 LUFS, crêtes < −1 dBTP, `report.json`).
 6. Il tient `PROJECT.md` à jour : décisions, sources, ce qui est approuvé. C'est sa mémoire entre deux
    sessions, et ton point de reprise.
 

@@ -15,6 +15,8 @@ if [ "$(id -u)" = "0" ]; then
   mkdir -p "$DATA"
   chown -R node:node "$DATA" 2>/dev/null || echo "warning: cannot chown $DATA (read-only mount?)" >&2
   if command -v setpriv >/dev/null 2>&1; then
+    # HOME must follow the uid, otherwise Modal looks for /root/.modal.toml instead of /home/node/.modal.toml
+    export HOME=/home/node
     exec setpriv --reuid=1000 --regid=1000 --init-groups node /app/dist/orchestrator/main.js
   fi
   echo "warning: setpriv not found — running as root" >&2

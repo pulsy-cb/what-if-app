@@ -13,6 +13,10 @@ export type Config = {
   maxSteps: number;
   contextChars: number;
   approvalTimeoutMs: number;
+  /** Local TTS/translation API (the "nouveau" app), the one the videos and their takes live in. */
+  nouveauUrl: string;
+  /** "modal" (default) renders on Modal, "local" falls back to npx remotion inside this container. */
+  renderMode: 'modal' | 'local';
 };
 
 /** Find the upstream skill folder: env first, then a sibling clone of this app. */
@@ -48,5 +52,7 @@ export function loadConfig(): Config {
     maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 24),
     contextChars: Number(process.env.WHATIF_CONTEXT_CHARS ?? 90_000),
     approvalTimeoutMs: Number(process.env.WHATIF_APPROVAL_TIMEOUT_MS ?? 30 * 60_000),
+    nouveauUrl: (process.env.WHATIF_NOUVEAU_URL ?? 'http://127.0.0.1:8005').replace(/\/$/, ''),
+    renderMode: process.env.WHATIF_RENDER === 'local' ? 'local' : 'modal',
   };
 }

@@ -3,22 +3,34 @@ services:
     build: .
     image: what-if-app
     init: true
-    ports:
-      # bound to localhost: never expose the agent (it can edit files) on a public interface
-      - "127.0.0.1:3000:3000"
+    # Host networking: the local TTS/translation API (nouveau, :8005) listens on the host's 127.0.0.1,
+    # so a bridge network cannot reach it. The app therefore binds 127.0.0.1 itself (never 0.0.0.0).
+    # If you prefer a bridge, run uvicorn on 0.0.0.0:8005 and use extra_hosts + WHATIF_NOUVEAU_URL.
+    network_mode: host
     environment:
       WHATIF_SKILL_DIR: /skill
       WHATIF_DATA: /data
+      WHATIF_HOST: 127.0.0.1
+      WHATIF_PORT: 3000
       WHATIF_AUTH_TOKEN: ${WHATIF_AUTH_TOKEN:-}
       WHATIF_PROVIDER: ${WHATIF_PROVIDER:-mock}
       WHATIF_BASE_URL: ${WHATIF_BASE_URL:-}
       WHATIF_MODEL: ${WHATIF_MODEL:-}
       WHATIF_API_KEY: ${WHATIF_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       WHATIF_CONTEXT_CHARS: ${WHATIF_CONTEXT_CHARS:-90000}
       WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-24}
+      # the local app that owns the videos, the French narrations and the TTS takes
+      WHATIF_NOUVEAU_URL: ${WHATIF_NOUVEAU_URL:-http://127.0.0.1:8005}
+      # renders: "modal" (default) or "local" (needs npm install in the project + a browser)
+      WHATIF_RENDER: ${WHATIF_RENDER:-modal}
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:-}
+      WHATIF_MODAL_APP: ${WHATIF_MODAL_APP:-whatif-app-render}
+      # ElevenLabs is only used by the SFX step now
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
     volumes:
-      - ./data:/data                     # projects, sqlite, git checkpoints
-      - ../what-if-animation:/skill:ro   # the skill: engine, scripts, references (read-only)
-    shm_size: "1gb"                      # Chromium headless
+      - ./data:/data                                   # projects, sqlite, git checkpoints
+      - ../what-if-animation:/skill:ro                 # the skill: engine, scripts, references
+      - ${HOME}/.modal.toml:/home/node/.modal.toml:ro  # Modal credentials, if not passed as env
+    shm_size: "1gb"
     restart: unless-stopped
