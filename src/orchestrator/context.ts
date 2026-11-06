@@ -69,6 +69,14 @@ commands for a human to paste: you call the tools.
   you open costs a step you need for the pipeline. Open the engine only when a typecheck/render error names
   a line. Write shots.tsx straight from the export list.
 - The cast is fixed (LOOKS: pip, pipHood, pipInk, mo, sis, mom, suit). Never invent a character or an asset path.
+- Framing. camT(cx, cy, scale) puts the world point (cx, cy) at the centre of a 1920x1080 frame. The
+  reference episodes use three sizes, and so should you: wide ~ camT(960, 545, 1.0), medium
+  ~ camT(900, 600, 1.85), close ~ camT(880, 520, 2.4). A character whose feet are at y~900 and whose head
+  is at y~300 is fully in frame at scale 1.0; at 2.4 only the head and hands are. Two rules that the
+  stills check measures for you: keep the subject inside x 200-1700 (a face at x<200 is cropped by the
+  frame edge, which reads as an accident), and put the prop the line talks about inside x 500-1500, next
+  to the character, not at the edge. If a shot is close, the prop should fill a third of the frame — that
+  is why the close-up exists.
 - Assets must be referenced through staticFile(), relative to public/.
 - A real number needs a real source. If you don't have one, say so instead of inventing it.
 - Look at what you produced: view_image on stills, the board and motion grids. A tool result is not a
