@@ -166,12 +166,15 @@ function renderMessage(m) {
 }
 
 function renderEmpty() {
+  const head = S.project
+    ? el('p', { text: `Projet « ${S.project.name} » ouvert, aucun fil de discussion.` })
+    : el('p', { text: 'Aucun projet ouvert.' });
   messagesBox().append(
     el(
       'div',
       { class: 'empty' },
-      el('p', { text: 'Aucun projet ouvert.' }),
-      el('p', { html: 'Crée un projet avec <code>+</code> dans la colonne « Projets », puis demande par exemple&nbsp;:' }),
+      head,
+      el('p', { html: S.project ? 'Crée un fil avec <code>+</code> dans la colonne « Fils », puis demande par exemple&nbsp;:' : 'Crée un projet avec <code>+</code> dans la colonne « Projets », puis demande par exemple&nbsp;:' }),
       el('p', { html: '<em>« Nouvel épisode “pause-everyone” : le monde se met en pause quand tu appuies sur espace. Écris le script, puis lance voice et plan. »</em>' }),
     ),
   );
@@ -219,9 +222,51 @@ async function selectProject(project) {
   detach();
   messagesBox().replaceChildren();
   renderSidebar();
+  loadDeliverables();
   $('#credits').textContent = `${project.credits ?? 0} cr`;
   if (S.threads.length) await selectThread(S.threads[0]);
   else renderEmpty();
+}
+
+// The final mp4, the board and the loudness report: what you want to look at after a reload,
+// and what the chat scrolls away from.
+async function loadDeliverables() {
+  const box = $('#deliverables');
+  if (!S.project || !box) return;
+  box.replaceChildren();
+  box.hidden = true;
+  let files = [];
+  try {
+    ({ files } = await api(`/api/projects/${encodeURIComponent(S.project.id)}/artifacts`));
+  } catch {
+    return;
+  }
+  const fileUrl = (p) => new URL(`/api/file?project=${encodeURIComponent(S.project.id)}&path=${encodeURIComponent(p)}`, location.origin);
+  const finals = files.filter((f) => /-final\.mp4$/.test(f.name)).slice(0, 2);
+  const videos = finals.length ? finals : files.filter((f) => f.name.endsWith('.mp4')).slice(0, 1);
+  const boards = files.filter((f) => /(storyboard|board\/S\d+|stills)/i.test(f.path) && /\.(jpg|png)$/i.test(f.name)).slice(0, 2);
+  const report = files.find((f) => f.name === 'report.json');
+  for (const v of videos) {
+    box.append(el('div', { class: 'deliverable' },
+      el('video', { src: fileUrl(v.path).toString(), controls: true, preload: 'metadata' }),
+      el('a', { href: fileUrl(v.path).toString(), target: '_blank', text: `${v.name} · ${(v.size / 1048576).toFixed(1)} Mo` })));
+  }
+  for (const b of boards) {
+    box.append(el('div', { class: 'deliverable' },
+      el('a', { href: fileUrl(b.path).toString(), target: '_blank' }, el('img', { src: fileUrl(b.path).toString(), alt: b.name })),
+      el('span', { class: 'tag', text: 'planche' })));
+  }
+  if (report) {
+    const url = fileUrl(report.path);
+    api(`/api/file?project=${encodeURIComponent(S.project.id)}&path=${encodeURIComponent(report.path)}`)
+      .then((r) => {
+        const txt = `−${Math.abs(r.lufs ?? 0).toFixed(1)} LUFS · ${(r.true_peak_dbtp ?? 0).toFixed(1)} dBTP · ${(r.seconds ?? 0).toFixed(1)} s`;
+        box.append(el('div', { class: 'deliverable' }, el('span', { class: 'tag', text: 'master' }), el('span', { class: 'tag', text: txt }),
+          el('a', { href: url.toString(), target: '_blank', text: 'report.json' })));
+      })
+      .catch(() => {});
+  }
+  box.hidden = box.children.length === 0;
 }
 
 function detach() {

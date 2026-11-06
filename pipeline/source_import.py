@@ -13,6 +13,7 @@ out/<slug>/source.fr.md, then writes the 15-25 s episode script itself.
 from __future__ import annotations
 
 import re
+import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -77,7 +78,8 @@ def main(argv: List[str]) -> int:
 
     want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal")
     script_mode = proj.arg(argv, "--script-mode", "narration") or "narration"
-    model = proj.arg(argv, "--model")
+    # nouveau picks its own default provider, which may have no quota: WHATIF_NARRATION_MODEL overrides it
+    model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or None
     apply_script = "--apply" in argv
     want_generate = "--generate" in argv
     nv = Nouveau()
@@ -124,14 +126,17 @@ def main(argv: List[str]) -> int:
             proj.result(ok=False, error=f"translation failed: {e}", videoId=video_id)
             return 5
 
-    chosen = pick(usable(proposals) or proposals, want)
+    pool = usable(proposals)
+    chosen = pick(pool or proposals, want)
+    fell_back = False
     if chosen is None and want:
-        proj.result(
-            ok=False,
-            error=f"no proposal matching {want!r}",
-            videoId=video_id,
-            proposals=[{"id": p.get("id"), "prompt_type": p.get("prompt_type"), "title": p.get("title")} for p in proposals],
-        )
+        # nouveau may only have a plain translation for this video: a wanted *kind* is a preference,
+        # not a requirement — an episode without a source is worse than a non-hooky one.
+        chosen = (pool or proposals)[0] if (pool or proposals) else None
+        fell_back = chosen is not None
+    if chosen is None:
+        proj.result(ok=False, error="no French proposal available", videoId=video_id,
+                    proposals=[{"id": p.get("id"), "prompt_type": p.get("prompt_type"), "title": p.get("title")} for p in proposals])
         return 6
 
     payload: Dict[str, Any] = {
@@ -141,6 +146,7 @@ def main(argv: List[str]) -> int:
         "durationSeconds": duration,
         "transcript": transcript_state,
         "scriptMode": script_mode,
+        "pickedFallback": fell_back,
         "proposals": [
             {
                 "id": p.get("id"),

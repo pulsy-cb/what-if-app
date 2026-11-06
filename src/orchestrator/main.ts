@@ -177,6 +177,22 @@ export function createApp(config: Config = loadConfig()): App {
         if (!project) return json(res, 404, { error: 'no such project' });
         return json(res, 200, { files: walk(project.root, { maxFiles: 800 }) });
       }
+      if (method === 'GET' && parts[2] && parts[3] === 'artifacts') {
+        const project = db.getProject(parts[2]);
+        if (!project) return json(res, 404, { error: 'no such project' });
+        // walk() skips out/ on purpose (build output, not source): the deliverables need their own listing
+        const outDir = path.join(project.root, 'out');
+        const files = fs.existsSync(outDir)
+          ? walk(outDir, { maxFiles: 400, includeBinary: true, maxBytes: 300 * 1024 * 1024 })
+              .filter((rel) => /\.(mp4|jpg|jpeg|png|wav|json)$/i.test(rel))
+              .map((rel) => {
+                const st = fs.statSync(path.join(outDir, rel));
+                return { path: `out/${rel}`, name: path.basename(rel), size: st.size, mtime: st.mtimeMs };
+              })
+              .sort((a, b) => b.mtime - a.mtime)
+          : [];
+        return json(res, 200, { files });
+      }
       if (method === 'GET' && parts[2] && parts[3] === 'credits') {
         return json(res, 200, { credits: db.creditsSpent(parts[2]) });
       }
