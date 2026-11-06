@@ -130,7 +130,15 @@ export class Db {
   }
 
   pendingApprovals(threadId: string): ApprovalRow[] {
-    return this.raw.prepare("SELECT * FROM approvals WHERE thread_id = ? AND status = 'pending' ORDER BY created_at").all(threadId) as unknown as ApprovalRow[];
+    return this.raw
+      .prepare("SELECT * FROM approvals WHERE thread_id = ? AND status = 'pending' ORDER BY created_at")
+      .all(threadId) as unknown as ApprovalRow[];
+  }
+
+  pendingApprovalsAll(): ApprovalRow[] {
+    return this.raw
+      .prepare("SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at")
+      .all() as unknown as ApprovalRow[];
   }
 
   // ---------------------------------------------------------------- settings

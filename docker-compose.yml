@@ -21,6 +21,7 @@ services:
       WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-24}
       # the local app that owns the videos, the French narrations and the TTS takes
       WHATIF_NOUVEAU_URL: ${WHATIF_NOUVEAU_URL:-http://127.0.0.1:8005}
+      WHATIF_NARRATION_MODEL: ${WHATIF_NARRATION_MODEL:-}
       # renders: "modal" (default) or "local" (needs npm install in the project + a browser)
       WHATIF_RENDER: ${WHATIF_RENDER:-modal}
       MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}

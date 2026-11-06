@@ -109,6 +109,11 @@ de l'épisode, `git restore` revient en arrière.
 
 ## Le cycle d'un épisode
 
+0. **Créer** : le bouton `+` de la colonne Projets demande le nom, le slug de l'épisode et un
+   `video_id` `nouveau`. Si la case « Lancer l'agent » est cochée, l'app crée le fil, y poste la
+   consigne et l'agent enchaîne import de la source puis écriture du script — chaque étape sensible
+   passe par ta validation. `/#nouveau` ouvre directement ce formulaire.
+
 1. **Source** : la plupart du temps tu ne donnes qu'un `video_id` (YouTube ou TikTok, déjà dans
    `nouveau`). `whatif_new { video }` crée le projet avec cette source, `whatif_run source`
    transcrit (anglais, Deepgram), demande deux propositions de **narration française**, garde celle que
@@ -117,7 +122,9 @@ de l'épisode, `git restore` revient en arrière.
 2. **Script** : l'agent remplit `episode.json` (cold open en 3 démos, prémisse, coût avec un fait sourcé).
 3. **`voice`** → Fish Audio via `nouveau`, même `video_id` : `public/<slug>/voice.wav` + `words.json`.
    Fish ne rend pas d'horodatage, donc la prise est retranscrite (Deepgram) puis réalignée sur
-   l'orthographe du script. **`plan`** → `timeline.json` (segments, shots, fx, audio).
+   l'orthographe du script. Débit mesuré : **~3,4 mots/s** (`speakingRate` 1), donc 15–25 s = **50 à
+   60 mots**. `--model` / `WHATIF_NARRATION_MODEL` choisit le modèle qui écrit les propositions de
+   `nouveau` : son défaut peut être un nom absent du compte (« Aucune proposition générée »). **`plan`** → `timeline.json` (segments, shots, fx, audio).
 4. **`stills`** (sur Modal) puis **`board`** : l'agent regarde la planche (`view_image`) et te demande l'accord.
 5. **Après accord seulement** : `sfx` (ElevenLabs), `mixcheck`, `render` (Modal, sans audio ajouté : le
    son vient des `<Audio>` de la composition), `master` → `master.py --skip-render`

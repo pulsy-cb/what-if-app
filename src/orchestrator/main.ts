@@ -159,7 +159,7 @@ export function createApp(config: Config = loadConfig()): App {
           fs.mkdirSync(root, { recursive: true });
           toolResult = await registry.run(
             'whatif_new',
-            { episode: String(body.episode), force: true },
+            { episode: String(body.episode), force: true, ...(body.video ? { video: String(body.video) } : {}) },
             { projectId: id, projectRoot: root, dataRoot: config.dataRoot, skillDir: config.skillDir, log: () => {} },
           );
         } else {
@@ -273,6 +273,17 @@ export function createApp(config: Config = loadConfig()): App {
       if (!row) return json(res, 404, { error: 'no such approval' });
       const accepted = approvals.decide(parts[2], body.approve === true);
       return json(res, 200, { ok: accepted, decision: body.approve === true ? 'approved' : 'denied' });
+    }
+
+    // ---- pending approvals (a reload used to lose the buttons while the run stayed blocked)
+    if (parts[1] === 'approvals' && method === 'GET') {
+      const threadId = url.searchParams.get('thread') ?? '';
+      const rows = threadId ? db.pendingApprovals(threadId) : db.pendingApprovalsAll();
+      return json(
+        res,
+        200,
+        rows.map((a) => ({ id: a.id, threadId: a.thread_id, tool: a.tool, input: JSON.parse(a.input) })),
+      );
     }
 
     // ---- files (artifacts) with Range support for video

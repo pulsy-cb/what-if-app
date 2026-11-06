@@ -280,6 +280,14 @@ function detach() {
 async function selectThread(thread) {
   S.thread = thread;
   renderSidebar();
+  // the run may be blocked on an approval that this page never saw (reload, other tab)
+  try {
+    const pending = await api(`/api/approvals?thread=${encodeURIComponent(thread.id)}`);
+    $('#approvals').replaceChildren();
+    for (const a of pending) showApproval(a);
+  } catch {
+    /* older server: no route */
+  }
   detach();
   messagesBox().replaceChildren();
   const data = await api(`/api/threads/${thread.id}/messages`);
@@ -442,22 +450,87 @@ $('#stop').addEventListener('click', async () => {
   await api(`/api/threads/${S.thread.id}/stop`, { method: 'POST', body: '{}' }).catch(() => {});
 });
 
-$('#new-project').addEventListener('click', async () => {
-  const name = prompt('Nom du projet ?');
+const slugify = (s) =>
+  String(s)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+
+// A video id is the normal starting point, so the dialog asks for it and then hands the work to the agent
+// instead of running the pipeline from the browser.
+function kickoffMessage({ episode, video }) {
+  if (!video) return null;
+  return [
+    `Nouvel épisode « ${episode} » à partir de la vidéo nouveau ${video}.`,
+    `1. Lance whatif_run {step:"source"} (args ["--pick","hook","--apply"]) : il transcrit l'anglais, garde la proposition de narration française dans out/${episode}/source.fr.md et remplit episode.json.`,
+    `2. Lis out/${episode}/source.fr.md puis réécris le script de l'épisode en 15-25 s (3 blocs de 22 mots max), accroche d'abord.`,
+    `3. Enchaîne voice, plan, stills et board, montre-moi la planche et attends mon accord avant sfx, render et master.`,
+  ].join('\n');
+}
+
+function openNewProject() {
+  if (location.hash === '#nouveau') location.hash = '';
+  $('#np-name').value = '';
+  $('#np-episode').value = '';
+  $('#np-episode').dataset.touched = '';
+  $('#np-video').value = '';
+  $('#np-kick').checked = true;
+  $('#new-project-dialog').showModal();
+}
+
+// deep link: /#nouveau opens the dialog (also how the headless screenshot test reaches it)
+if (location.hash === '#nouveau') setTimeout(openNewProject, 300);
+
+$('#new-project').addEventListener('click', openNewProject);
+
+// keep the episode slug in sync with the project name until it is typed by hand
+$('#np-name').addEventListener('input', (e) => {
+  const ep = $('#np-episode');
+  if (!ep.dataset.touched) ep.value = slugify(e.target.value);
+});
+$('#np-episode').addEventListener('input', (e) => {
+  e.target.dataset.touched = '1';
+});
+
+$('#np-create').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const name = $('#np-name').value.trim();
+  const episode = slugify($('#np-episode').value.trim() || name);
+  const video = $('#np-video').value.trim();
   if (!name) return;
-  const episode = prompt('Slug de l’épisode à créer (kebab-case, vide = projet vide) ?', 'pause-everyone');
+  const dialog = $('#new-project-dialog');
+  const button = $('#np-create');
+  button.disabled = true;
+  button.textContent = 'Création…';
   try {
-    const body = { name, id: name, ...(episode ? { episode } : {}) };
+    const body = { name, id: slugify(name), ...(episode ? { episode } : {}), ...(video ? { video } : {}) };
     const { project, tool } = await api('/api/projects', { method: 'POST', body: JSON.stringify(body) });
+    dialog.close();
     await loadProjects();
     await selectProject(project);
-    const thread = await api('/api/threads', { method: 'POST', body: JSON.stringify({ projectId: project.id, title: 'Premier fil' }) });
+    const thread = await api('/api/threads', { method: 'POST', body: JSON.stringify({ projectId: project.id, title: episode || 'Premier fil' }) });
     S.threads = [thread, ...S.threads];
-    if (!tool?.ok && tool) messagesBox().append(el('div', { class: 'think', text: `Scaffold : ${tool.summary}` }));
     await selectThread(thread);
+    if (tool && !tool.ok) messagesBox().append(el('div', { class: 'think', text: `Scaffold : ${tool.summary}` }));
+    const kick = $('#np-kick').checked ? kickoffMessage({ episode, video }) : null;
+    if (kick) {
+      await api(`/api/threads/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text: kick }) });
+      S.running = true;
+      updateRunningUI();
+    }
   } catch (err) {
     alert(String(err));
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Créer';
   }
+});
+
+$('#new-project-dialog').addEventListener('click', (e) => {
+  if (e.target.id === 'new-project-dialog') e.target.close(); // click on the backdrop
 });
 
 $('#new-thread').addEventListener('click', async () => {

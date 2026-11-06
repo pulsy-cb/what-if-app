@@ -43,6 +43,31 @@
       </main>
     </div>
 
+    <dialog id="new-project-dialog">
+      <form method="dialog" class="settings-form">
+        <h2>Nouveau projet</h2>
+        <label>Nom du projet
+          <input id="np-name" placeholder="math-teacher" required />
+        </label>
+        <label>Slug de l'épisode
+          <input id="np-episode" placeholder="math-teacher" />
+        </label>
+        <label>Vidéo source (id nouveau, facultatif)
+          <input id="np-video" placeholder="zeTS1DyW1ys" autocomplete="off" />
+        </label>
+        <p class="muted small">Un id vidéo transcrit la source en anglais, garde la proposition de narration
+          française dans <code>out/&lt;slug&gt;/source.fr.md</code> et attache la voix Fish à cette vidéo.</p>
+        <label class="row-inline">
+          <input id="np-kick" type="checkbox" checked />
+          <span>Lancer l'agent : import de la source, puis écriture du script</span>
+        </label>
+        <menu>
+          <button value="cancel" class="ghost">Annuler</button>
+          <button id="np-create" value="create" class="primary">Créer</button>
+        </menu>
+      </form>
+    </dialog>
+
     <dialog id="settings">
       <form method="dialog" class="settings-form">
         <h2>Modèle</h2>

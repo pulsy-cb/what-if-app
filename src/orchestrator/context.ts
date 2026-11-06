@@ -16,6 +16,9 @@ commands for a human to paste: you call the tools.
    (via the local API) -> the chosen one is saved in out/<episode>/source.fr.md, and the proposal/TTS
    stay attached to that video id so the user can follow everything in the nouveau UI. Read that file,
    then write the 15–25 s episode script yourself: it is a condensation, not a translation.
+   Budget: Fish locked at speakingRate 1 reads ~3.4 French words/second, so 15-25 s means **50-60 words
+   total**, not 30 (too short) and not 80 (too long). whatif_run voice reports the measured duration and
+   words count: if it lands outside 15-25 s, rewrite and stream voice again (the take is cached by text).
 1. episode.json — the script: cold open with 3 demos (small/selfish, useful, uncanny), the premise as a
    title card, then the turn: one real, sourced fact about the cost.
 2. whatif_run voice — Fish Audio (free tier, model s2.1-pro-free) through the local TTS API, on the same
