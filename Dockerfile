@@ -20,7 +20,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # python3 + pillow/numpy for the skill scripts, ffmpeg for audio, and the Chromium libraries Remotion needs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip ffmpeg git ca-certificates curl \
+      python3 python3-pip ffmpeg git ca-certificates curl util-linux \
       fonts-liberation fonts-dejavu-core \
       libnss3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 \
       libgtk-3-0 libasound2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
@@ -34,8 +34,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY web ./web
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data && chown -R node:node /data /app
+RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data
 
-USER node
+# No USER here: the entrypoint fixes /data ownership as root, then drops to uid 1000 (node) with setpriv.
 EXPOSE 3000
 ENTRYPOINT ["entrypoint.sh"]

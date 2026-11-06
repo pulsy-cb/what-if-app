@@ -128,6 +128,42 @@ npm test        # build + 3 tests : outils, allowlist shell, boucle agent compl�
 bash scripts/demo.sh "fais un tour du projet"   # contre un serveur déjà lancé
 ```
 
+## Dépannage
+
+**La page ne s'affiche pas / le conteneur redémarre en boucle**
+
+```bash
+docker compose ps            # STATUS: Restarting → il crashe
+docker compose logs --tail=30
+```
+
+Si tu vois `Error: unable to open database file`, c'est `/data` : quand Docker crée le dossier
+`./data` du bind mount, il le possède en `root:root` et l'app (uid 1000) ne peut pas y écrire SQLite.
+L'entrypoint corrige maintenant le propriétaire puis abandonne les privilèges (`setpriv`), donc un
+`docker compose up -d --build` suffit. Si ton dossier est sur un montage réseau ou en lecture seule,
+utilise plutôt un volume nommé :
+
+```yaml
+    volumes:
+      - whatif-data:/data
+volumes:
+  whatif-data:
+```
+
+**`warning: no studio/ in /skill`**
+
+Le skill n'est pas monté : vérifie `WHATIF_SKILL_DIR` et le volume `../what-if-animation:/skill:ro`.
+
+**Le modèle répond mais n'appelle jamais d'outil**
+
+Certaines passerelles « openai-compatible » ignorent `tools`. Teste avec un modèle qui sait faire du
+tool calling ; sinon l'agent discute mais ne touche pas au projet.
+
+**`npx remotion render` échoue dans le conteneur**
+
+Pas de GPU et pas de sandbox dans Docker : il faut `--gl=swangle` et `--no-sandbox` (Chromium headless),
+et `shm_size: "1gb"` côté compose.
+
 ## Sécurité — à lire
 
 - Le shell est une **RCE par conception** : l'agent écrit et exécute du code dans le projet. L'allowlist
