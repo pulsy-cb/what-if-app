@@ -26,7 +26,11 @@ commands for a human to paste: you call the tools.
    video id. It writes public/<episode>/voice.wav and src/episodes/<episode>/words.json: the script's
    words with the *measured* times (Fish gives no timestamps, so the take is transcribed and realigned).
    ElevenLabs is only for the SFX — never for the voice.
-3. whatif_run plan — turns episode.json.edit into timeline.json (schema 2: total, segments{a,b,t0,t1,shot,look},
+3. whatif_run shotlist — cuts the measured words into 6-12 shots (a cut every 1.5-2 s, one set and one
+   note per shot taken from the words it covers) and rewrites episode.json shots+edit. Episode 17 of the
+   reference cuts 17 times in 560 frames: one shot for 16 s is not an episode. Then edit the list by hand
+   if the story asks for it (a title card on "schematic", a room that stays for a dialogue).
+4. whatif_run plan — turns episode.json.edit into timeline.json (schema 2: total, segments{a,b,t0,t1,shot,look},
    shots, fx, audio). Each edit entry is {"shot": "S2", "at": "<cue>"} and a cue is one of:
      f:120          an absolute frame            s:4.2      seconds
      S1+2 / S1#2+2  2 frames after shot S1 (or after its 2nd segment; S1-4 is before it)
@@ -34,12 +38,13 @@ commands for a human to paste: you call the tools.
                     nth occurrence and an offset. There is **no "w:" prefix**: "w:franchir" is a bad cue
                     and plan.py fails with Cue word "w:franchir" (#1) not found. Cues must also be in
                     increasing order of time. Read src/episodes/<slug>/words.json to pick real words.
-4. whatif_run stills — one PNG per shot, rendered on Modal.
-5. whatif_run board — the storyboard sheet. Look at it with view_image and judge it yourself: if a shot
+5. whatif_run stills — one PNG per shot, rendered on Modal. The scaffold's single placeholder shot is
+   refused until you write the real shots: every shot in the timeline needs its own export in shots.tsx.
+6. whatif_run board — the storyboard sheet. Look at it with view_image and judge it yourself: if a shot
    is empty, off-model or unreadable, fix shots.tsx and run stills/board again.
-6. whatif_run sfx + mixcheck — optional sound design (ElevenLabs credits). If sfx fails on an invalid
+7. whatif_run sfx + mixcheck — optional sound design (ElevenLabs credits). If sfx fails on an invalid
    or expired key, note it and carry on: the master works without it.
-7. whatif_run render — renders the silent video on **Modal** (not locally). Then whatif_run master muxes
+8. whatif_run render — renders the silent video on **Modal** (not locally). Then whatif_run master muxes
    the audio, normalises to -14 LUFS (peaks < -1 dBTP) and writes report.json.
 
 ## How you work

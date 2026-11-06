@@ -131,6 +131,24 @@ Toute mutation prend de toute façon un **checkpoint git** avant de s'exécuter 
 l'histoire de l'épisode, `git restore` revient en arrière. Le bouton **Stop** interrompt un tour en
 cours.
 
+## Les plans
+
+Le squelette d'un épisode n'a **qu'un seul plan**, celui du gabarit : c'est ce qui donnait une planche
+d'un personnage dans une cuisine sans rapport avec le script. Deux garde-fous :
+
+- `whatif_run shotlist` découpe les mots mesurés en **6 à 12 plans** (une coupe toutes les 1,9 s, comme
+  les épisodes de référence : 17 segments pour 560 frames). Chaque plan reçoit un décor déduit du vocabulaire
+  de son passage (`prof`, `classe` → classroom ; `face`, `bord`, `surface` → schematic), une taille, un
+  nombre de keyframes, et une note faite des mots qu'il couvre. `plan` le lance tout seul si la liste est
+  encore celle du gabarit.
+- `stills` refuse de rendre un plan encore marqué `placeholder`, et mesure chaque image (zone d'encre,
+  `src/orchestrator/layout.ts`) : un plan vide ou écrasé dans un tiers de la frame fait échouer l'étape
+  avec le nom du plan, au lieu de partir dans la vidéo.
+
+Les décors sont fixes (study, kitchen, classroom, stairwell, rooftop, bedroom, schematic) comme le
+casting : l'agent écrit `S1..Sn` dans `shots.tsx`, un composant par plan, chacun fonction pure de son
+propre temps.
+
 ## Le cycle d'un épisode
 
 0. **Créer** : le bouton `+` de la colonne Projets demande le nom, le slug de l'épisode et un

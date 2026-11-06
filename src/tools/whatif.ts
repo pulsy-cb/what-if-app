@@ -27,35 +27,28 @@ const EPISODE_STUB = (slug: string) => ({
   ],
   science: [{ claim: 'TODO', working: 'TODO — the arithmetic.', source: 'TODO' }],
   cast: ['pipHood'],
-  shots: [{ id: 'S1', size: 'medium', set: 'kitchen', key: 12, note: 'placeholder: replace with the real shot' }],
+  // one placeholder shot, so plan.py can run before the voice exists; stills refuses to render it
+  shots: [{ id: 'S1', size: 'medium', set: 'study', key: 12, note: 'placeholder: replace with the real shot' }],
   edit: [{ shot: 'S1', at: 'f:0' }],
   fx: [],
 });
 
 const SHOT_STUB = `import React from 'react';
-import {
-  Hero, LOOKS, basePose, poseAt, faceAt, camT, kf, ShotProps,
-  Kitchen, KITCHEN, islandTop, stand, Cookie,
-} from '../../engine';
+import { ShotProps } from '../../engine';
 
-// A placeholder shot. Each shot is a pure function of its own clock t: no state, no Math.random().
-const PIP = LOOKS.pipHood;
-const STAND = stand(KITCHEN, 0.42, 0.4);
-const COOKIE = islandTop(0.6, 0.45);
-
-export const S1: React.FC<ShotProps> = ({ t, len }) => {
-  const pose = poseAt(t, [
-    { f: 0, p: { x: STAND.x, y: STAND.y, scale: STAND.scale, yaw: 0.4, look: 0.6 } },
-  ]);
-  const face = faceAt(t, [[0, 'neutral']]);
-  return (
-    <g transform={camT(kf(t, [[0, 990], [len, 1000]]), 600, 1.9)}>
-      <Kitchen t={t} id="k1" />
-      <Cookie x={COOKIE.x} y={COOKIE.y} />
-      <Hero look={PIP} pose={{ ...basePose, ...pose, ...face }} rimId="rim1" shadow={0} />
-    </g>
-  );
-};
+// PLACEHOLDER. One component per shot id in timeline.json, each a pure function of its own clock t.
+// This one draws a label, not a scene: write the real shot before anything is rendered.
+export const S1: React.FC<ShotProps> = ({ len }) => (
+  <g>
+    <rect x={0} y={0} width={1920} height={1080} fill="#0B0816" />
+    <text x={960} y={520} fill="#8B86A0" fontSize={38} fontFamily="monospace" textAnchor="middle">
+      SHOT S1 — PLACEHOLDER
+    </text>
+    <text x={960} y={578} fill="#F6EFE3" fontSize={30} fontFamily="monospace" textAnchor="middle">
+      write the real shots in shots.tsx ({Math.round(len / 30)}s)
+    </text>
+  </g>
+);
 `;
 
 const INDEX_STUB = `import { defineEpisode, Timeline } from '../../engine';
@@ -172,6 +165,9 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     if (!voiced) return `public/${slug}/voice.wav is missing: run whatif_run { step: "voice" } first`;
   }
   if (step === 'stills' || step === 'board' || step === 'motiongrid' || step === 'render') {
+    const shots = (episode?.shots ?? []) as any[];
+    if (shots.length && shots.every((sh) => /placeholder/i.test(String(sh.note ?? ''))))
+      return `${shots.length} placeholder shot(s) only: the scaffold's generic single shot has nothing to do with the script. Run whatif_run { step: "shotlist" } to cut the words into 6-12 shots, write one component per shot in shots.tsx, then stills`;
     if (staleTimeline)
       return `timeline.json is still the placeholder (${timeline?.segments?.length ?? 1} segment): run whatif_run { step: "voice" } then { step: "plan" } first, or every shot renders at 0.0 s`;
     // the timeline names the shots: every one of them must exist in shots.tsx before a render spends
@@ -232,6 +228,11 @@ const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeout
     desc: 'nouveau video id -> English transcript -> French narration proposals (needs a video id)',
   },
   voice: { py: 'voice_fish.py', own: true, timeoutMs: 900_000, desc: 'Fish Audio TTS through :8005 + word timings (free tier)' },
+  shotlist: {
+    py: 'shotlist.py',
+    own: true,
+    desc: 'cut the measured words into 6-12 shots (size, set, note from the words) and rewrite episode.json shots+edit',
+  },
   plan: { py: 'plan.py', desc: 'resolve cues into timeline.json' },
   stills: { py: 'modal_render.py', own: true, timeoutMs: 1_200_000, desc: 'storyboard stills on Modal' },
   board: { py: 'board.py', desc: 'build the storyboard sheet' },
@@ -344,7 +345,7 @@ const newProject: Tool = {
 const runStep: Tool = {
   name: 'whatif_run',
   description:
-    'Run one pipeline step on an episode: source (import a nouveau video id), voice (Fish Audio through the local TTS API), plan, stills (Modal), board, sfx (ElevenLabs, costs credits), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
+    'Run one pipeline step on an episode: source (import a nouveau video id), voice (Fish Audio through the local TTS API), shotlist (auto shot list from the measured words), plan, stills (Modal), board, sfx (ElevenLabs, costs credits), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
   policy: 'ask',
   schema: {
     type: 'object',
@@ -352,7 +353,7 @@ const runStep: Tool = {
       episode: { type: 'string' },
       step: {
         type: 'string',
-        enum: ['install', 'source', 'voice', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'],
+        enum: ['install', 'source', 'voice', 'shotlist', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'],
       },
       args: { type: 'array', items: { type: 'string' }, description: 'Extra argv, e.g. ["--pick","hook"] or ["S2","S5"].' },
     },
@@ -435,9 +436,45 @@ const runStep: Tool = {
     const artifacts = diffArtifacts(ctx.projectRoot, before);
     const credits = /credits?[^0-9]{0,12}(\d+)/i.exec(res.stdout);
     let failed = payload ? payload.ok === false : res.code !== 0;
+    const extraNotes: string[] = [];
+    /** Run one more step in the same cwd (used to rebuild a shot list before planning). */
+    const stepOnce = async (name: string): Promise<{ code: number; text: string; result?: Record<string, unknown> }> => {
+      const def = STEPS[name]!;
+      const dir = def.own ? PIPELINE : scripts;
+      const argv2 = def.py ? [PY, path.join(dir, def.py!), slug] : ['node', path.join(dir, def.node!), slug];
+      const r = await exec(argv2, { cwd: ctx.projectRoot, timeoutMs: def.timeoutMs ?? 600_000, signal: ctx.signal });
+      const raw = r.stdout.split('\n').filter(Boolean);
+      const line = raw.filter((l) => l.startsWith('RESULT_JSON:')).pop();
+      let result: Record<string, unknown> | undefined;
+      try {
+        result = line ? (JSON.parse(line.slice('RESULT_JSON:'.length)) as Record<string, unknown>) : undefined;
+      } catch {
+        result = undefined;
+      }
+      return { code: r.code, text: raw.filter((l) => !l.startsWith('RESULT_JSON:')).slice(-18).join('\n'), result };
+    };
+
+    // A 16 s episode cut into one shot is not a film: rebuild the list from the words, then plan on it.
+    if (input.step === 'plan' && !failed) {
+      const shots = ((readJsonFile(path.join(ctx.projectRoot, 'src', 'episodes', slug, 'episode.json'))?.shots ?? []) as any[]);
+      const coarse = shots.length < 4 || (shots.length > 0 && shots.every((sh) => /placeholder/i.test(String(sh.note ?? ''))));
+      if (coarse && fs.existsSync(path.join(ctx.projectRoot, 'src', 'episodes', slug, 'words.json'))) {
+        const cut = await stepOnce('shotlist');
+        const planned = await stepOnce('plan');
+        extraNotes.push(
+          `shot list rebuilt before planning (${shots.length || 1} -> ${String(cut.result?.shots ?? '?')} shots)\n${cut.text}\nthen plan:\n${planned.text}`,
+        );
+        failed = planned.code !== 0;
+      }
+    }
     // plan.py merges every segment it cannot anchor, silently: one 651-frame segment for six shots.
     // Say so, and hand back the words it can actually anchor on.
     const layout = input.step === 'stills' || input.step === 'board' ? await layoutReport(path.join(ctx.projectRoot, 'out', slug, 'board')).catch(() => '') : '';
+    let layoutFailure = '';
+    if (layout.includes('\nEMPTY:')) {
+      failed = true;
+      layoutFailure = 'Some shots render nothing (see EMPTY above): write them in shots.tsx, then run stills again.';
+    }
     let planWarning = '';
     if (input.step === 'plan' && !failed) {
       const tl = readJsonFile(path.join(ctx.projectRoot, 'src', 'episodes', slug, 'timeline.json'));
@@ -457,7 +494,7 @@ const runStep: Tool = {
         payload ? `\n\nresult: ${JSON.stringify(payload).slice(0, 1200)}` : ''
       }${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}${
         layout ? `\n\n${layout}` : ''
-      }${planWarning ? `\n\n${planWarning}` : ''}`,
+      }${layoutFailure ? `\n\n${layoutFailure}` : ''}${extraNotes.length ? `\n\n${extraNotes.join('\n\n')}` : ''}${planWarning ? `\n\n${planWarning}` : ''}`,
       artifacts,
       credits: credits ? Number(credits[1]) : undefined,
       data: { step: input.step, code: res.code, result: payload },
