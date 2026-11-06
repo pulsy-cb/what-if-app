@@ -4,7 +4,7 @@ import type { Db } from './db.js';
 import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
-import { buildMessages, toolMessageContent } from './context.js';
+import { buildMessages, pipelineTodo, toolMessageContent } from './context.js';
 
 export type AgentDeps = {
   db: Db;
@@ -52,6 +52,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
   bus.emit(threadId, 'turn_start', { provider: provider.label, model: provider.model, project: project.id });
 
   try {
+    let ranPipeline = false;
+    let nudges = 0;
+    let emptyTurns = 0;
     for (let step = 0; step < config.maxSteps; step++) {
       if (signal.aborted) {
         bus.emit(threadId, 'turn_end', { steps: step, aborted: true });
@@ -74,7 +77,32 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       );
       bus.emit(threadId, 'assistant_message', { id: assistantId, text: res.text, toolCalls: res.toolCalls });
 
+      if (!res.toolCalls.length && !res.text.trim()) {
+        // An empty reply with no tool call is a provider problem, not an answer: reasoning models spend a
+        // small max_tokens budget thinking and return finish_reason "length" with nothing to show.
+        emptyTurns++;
+        const note =
+          `Réponse vide du modèle (${provider.model}) : aucun texte, aucun outil. ` +
+          `C'est typique d'un modèle de raisonnement dont le budget de tokens est épuisé en réflexion ` +
+          `(WHATIF_MAX_TOKENS=${config.maxTokens}). Nouvel essai.`;
+        bus.emit(threadId, 'notice', { text: note });
+        if (emptyTurns <= 4) continue;
+        db.addMessage(threadId, 'system', note);
+        bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
+        return;
+      }
+
       if (!res.toolCalls.length) {
+        // A run that has already touched the pipeline does not stop halfway: models answer with a
+        // plan ("I'll fix the plan first") and end the turn. Nudge it back to work, a few times.
+        const todo = pipelineTodo(project.root);
+        if (ranPipeline && todo.length && nudges < 3) {
+          nudges++;
+          const nudge = `Tu as encore arrêté le tour alors que la chaîne n'est pas finie. Étapes restantes pour cet épisode : ${todo.join(', ')}. Continue maintenant, sans redemander d'accord.`;
+          db.addMessage(threadId, 'system', nudge);
+          bus.emit(threadId, 'notice', { text: nudge });
+          continue;
+        }
         bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
         return;
       }
@@ -88,7 +116,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           name: call.name,
           input: call.args,
           policy: tool?.policy ?? 'deny',
-          mustAsk: tool?.policy === 'ask',
+          mustAsk: tool?.policy === 'ask' && config.approvalsMode !== 'off',
         });
 
         let result: ToolResult;
@@ -98,7 +126,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           result = { ok: false, summary: `tool "${call.name}" is disabled by policy` };
         } else {
           let decision: string = 'approved';
-          if (tool.policy === 'ask') {
+          const gated =
+            config.approvalsMode === 'all' || (config.approvalsMode === 'pipeline' && tool.policy === 'ask');
+          if (tool.policy === 'ask' && gated) {
             decision = await deps.approvals.request(threadId, call.name, call.args, config.approvalTimeoutMs, signal);
           }
           if (decision !== 'approved') {
@@ -114,6 +144,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               const checkpoint = await registry.run('git', { action: 'checkpoint', message: `agent: before ${call.name}` }, ctx);
               bus.emit(threadId, 'checkpoint', { tool: call.name, ok: checkpoint.ok, summary: checkpoint.summary });
             }
+            if (call.name === 'whatif_run') ranPipeline = true;
             result = await registry.run(call.name, call.args, ctx);
           }
         }

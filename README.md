@@ -96,16 +96,40 @@ Zéro dépendance runtime : `node:http`, `node:sqlite`, `fetch` natif. Seul Type
 | `read_file` / `edit_file` / `write_file` | auto | lecture avec numéros de ligne ; remplacement ciblé (oldText unique, échec explicite) |
 | `glob` / `grep` | auto | chercher un fichier, chercher du texte |
 | `view_image` | auto | rattache une still / planche / grille pour que le modèle la voie |
-| `shell` | **ask** | une seule commande, dans une allowlist (`npx tsc`, `npx remotion`, `python scripts/…`, `ffmpeg`, `git`…) |
+| `shell` | ask (non bloquant par défaut) | une seule commande, dans une allowlist (`npx tsc`, `npx remotion`, `python scripts/…`, `ffmpeg`, `git`…) |
 | `git` | auto | statut, diff, checkpoint, log, restore |
-| `whatif_new` | **ask** | copie le studio du skill + squelette d'épisode (`episode.json`, `timeline.json`, `shots.tsx`, `index.tsx`), enregistré dans `src/episodes/index.ts` |
-| `whatif_run` | **ask** | une étape du pipeline : `install, source, voice, plan, stills, board, sfx, mixcheck, motiongrid, render, master` |
+| `whatif_new` | ask (non bloquant par défaut) | copie le studio du skill + squelette d'épisode (`episode.json`, `timeline.json`, `shots.tsx`, `index.tsx`), enregistré dans `src/episodes/index.ts` |
+| `whatif_run` | ask (non bloquant par défaut) | une étape du pipeline : `install, source, voice, plan, stills, board, sfx, mixcheck, motiongrid, render, master` |
 | `whatif_status` | auto | où en est l'épisode (script, words, timeline, stills, board, sfx, render, report) |
-| `whatif_sync_engine` | **ask** | compare `src/engine` au skill, liste les fichiers modifiés localement, n'écrase que sur `apply` |
+| `whatif_sync_engine` | ask (non bloquant par défaut) | compare `src/engine` au skill, liste les fichiers modifiés localement, n'écrase que sur `apply` |
 
-Trois politiques : `auto` (l'agent agit), `ask` (le run attend ton clic), `deny` (l'outil disparaît du
-contexte). Toute mutation prend un **checkpoint git** avant de s'exécuter : `git log` rejoue l'histoire
-de l'épisode, `git restore` revient en arrière.
+Trois politiques par outil : `auto` (l'agent agit), `ask` (soumis à la porte d'approbation), `deny`
+(l'outil disparaît du contexte).
+
+**Par défaut l'agent ne demande rien** (`WHATIF_APPROVALS=off`) : il enchaîne source → script → voice →
+plan → stills → board → render → master dans le même tour et te rend le mp4 final (`sfx`, `mixcheck` et
+`motiongrid` sont optionnels : une clé ElevenLabs invalide ne doit pas arrêter la chaîne). `pipeline`
+rétablit une validation avant chaque outil qui modifie un projet, `all` avant tout outil `ask`.
+
+Ce qui rend un tour non surveillé tenable, et qui se règle :
+
+| variable | défaut | rôle |
+| --- | --- | --- |
+| `WHATIF_APPROVALS` | `off` | `off`, `pipeline` ou `all` |
+| `WHATIF_MAX_STEPS` | `48` | appels modèle par tour ; 150 pour un épisode complet |
+| `WHATIF_MAX_TOKENS` | `8000` | budget de sortie ; les modèles de raisonnement (Kimi, GLM) y pensent d'abord, trop bas = réponse vide |
+| `WHATIF_CONTEXT_CHARS` | `90000` | au-delà, les vieux résultats d'outils sont compactés |
+
+Le prompt système porte l'ordre du pipeline, le budget de mots (50-60 pour 15-25 s), la grammaire des
+cues `episode.json` (`f:120`, `s:4.2`, `S1+2`, `franchir+3` — **pas** de `w:`), et la liste générée de
+tous les exports de `src/engine` avec leurs props : l'agent n'a pas à lire 4 500 lignes de TSX pour
+écrire un shot. Les outils vérifient les pré-requis (un `stills` sans `words.json` est refusé), le plan
+qui s'effondre en un seul segment est signalé avec des ancres valides, et chaque still est mesuré
+(zone d'encre) pour dire « la moitié droite est vide » plutôt que de laisser passer une image vide.
+
+Toute mutation prend de toute façon un **checkpoint git** avant de s'exécuter : `git log` rejoue
+l'histoire de l'épisode, `git restore` revient en arrière. Le bouton **Stop** interrompt un tour en
+cours.
 
 ## Le cycle d'un épisode
 

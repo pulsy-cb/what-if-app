@@ -54,7 +54,9 @@ const repoMap: Tool = {
 
 const readFile: Tool = {
   name: 'read_file',
-  description: 'Read a text file with line numbers. Use start/end (1-based) for large files.',
+  description:
+    'Read a text file with line numbers. It returns the WHOLE file (up to 6000 lines): do not paginate it ' +
+    'into windows, call it once. start/end exist only for files above that limit.',
   policy: 'auto',
   schema: {
     type: 'object',
@@ -71,7 +73,7 @@ const readFile: Tool = {
     if (src === null) throw new Error(`cannot read ${input.path} (missing, binary or > 2MB)`);
     const all = src.split('\n');
     const start = Math.max(1, input.start ?? 1);
-    const end = Math.min(all.length, input.end ?? all.length);
+    const end = Math.min(all.length, input.end ?? start + 5_999);
     const slice = all.slice(start - 1, end);
     let body = '';
     for (let i = 0; i < slice.length; i++) body += `${String(start + i).padStart(5)}| ${slice[i]}\n`;
@@ -113,6 +115,106 @@ const writeFile: Tool = {
   },
 };
 
+
+/** A whitespace-tolerant match: same text once leading indentation and blank lines are ignored. */
+function looseMatch(
+  haystack: string,
+  needle: string,
+): { start: number; end: number; replace: (text: string) => string } | null {
+  const want = needle
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (!want.length) return null;
+  const lines = haystack.split('\n');
+  const offsets: number[] = [];
+  let pos = 0;
+  for (const line of lines) {
+    offsets.push(pos);
+    pos += line.length + 1;
+  }
+
+  // One-line needle: the model usually misses the indentation, or quotes a fragment of a longer line.
+  if (want.length === 1) {
+    const hits: { at: number; end: number }[] = [];
+    lines.forEach((line, i) => {
+      const at = line.indexOf(want[0]!);
+      if (at >= 0) hits.push({ at: offsets[i]! + at, end: offsets[i]! + at + want[0]!.length });
+    });
+    if (hits.length !== 1) return null;
+    return {
+      start: hits[0]!.at,
+      end: hits[0]!.end,
+      replace: (text: string) => text.split('\n').map((l) => l.trim()).join('\n'),
+    };
+  }
+
+  let found: { start: number; end: number; indent: string } | null = null;
+  let hits = 0;
+  for (let i = 0; i + want.length <= lines.length; i++) {
+    let ok = true;
+    for (let k = 0; k < want.length; k++) {
+      if (lines[i + k]!.trim() !== want[k]) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    hits++;
+    const indent = /^\s*/.exec(lines[i]!)?.[0] ?? '';
+    const last = lines[i + want.length - 1]!;
+    found = { start: offsets[i]!, end: offsets[i + want.length - 1]! + last.length, indent };
+  }
+  if (hits !== 1 || !found) return null;
+  const { start, end, indent } = found;
+  return {
+    start,
+    end,
+    // keep the new text at the block's indentation so the patch looks like the file around it
+    replace: (text: string) =>
+      text
+        .split('\n')
+        .map((l, idx) => (idx === 0 || l.trim() === '' ? l : indent + l.replace(/^\s+/, '')))
+        .join('\n'),
+  };
+}
+
+/** The block of the file that most resembles the requested oldText, to hand back as a hint. */
+function nearestBlock(haystack: string, needle: string): { line: number; endLine: number; text: string } | null {
+  const want = needle.trim().split('\n')[0]!.trim();
+  if (want.length < 4) return null;
+  const lines = haystack.split('\n');
+  let best = { index: -1, score: 0 };
+  lines.forEach((line, i) => {
+    const t = line.trim();
+    if (!t) return;
+    const score = commonRun(t, want);
+    if (score > best.score) best = { index: i, score };
+  });
+  if (best.index < 0 || best.score < Math.min(6, Math.ceil(want.length / 2))) return null;
+  const count = Math.max(1, needle.split('\n').length);
+  const slice = lines.slice(best.index, best.index + count);
+  return { line: best.index + 1, endLine: best.index + slice.length, text: slice.join('\n') };
+}
+
+/** Length of the longest common substring. */
+function commonRun(a: string, b: string): number {
+  let best = 0;
+  const prev = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = 0;
+    for (let j = 1; j <= b.length; j++) {
+      const keep = prev[j]!;
+      if (a[i - 1] === b[j - 1]) {
+        prev[j] = diag + 1;
+        if (prev[j]! > best) best = prev[j]!;
+      } else prev[j] = 0;
+      diag = keep;
+    }
+  }
+  return best;
+}
+
 const editFile: Tool = {
   name: 'edit_file',
   description:
@@ -147,10 +249,24 @@ const editFile: Tool = {
     for (let i = 0; i < input.edits.length; i++) {
       const { oldText, newText } = input.edits[i]!;
       const first = out.indexOf(oldText);
-      if (first < 0) throw new Error(`edit ${i}: oldText not found in ${input.path}`);
-      if (out.indexOf(oldText, first + 1) >= 0) throw new Error(`edit ${i}: oldText is not unique in ${input.path}`);
-      out = out.slice(0, first) + newText + out.slice(first + oldText.length);
-      applied.push(first);
+      if (first >= 0) {
+        if (out.indexOf(oldText, first + 1) >= 0) throw new Error(`edit ${i}: oldText is not unique in ${input.path}`);
+        out = out.slice(0, first) + newText + out.slice(first + oldText.length);
+        applied.push(first);
+        continue;
+      }
+      // Indentation and blank lines are what models get wrong; match on trimmed text instead of failing.
+      const loose = looseMatch(out, oldText);
+      if (loose) {
+        out = out.slice(0, loose.start) + loose.replace(newText) + out.slice(loose.end);
+        applied.push(loose.start);
+        continue;
+      }
+      const near = nearestBlock(out, oldText);
+      throw new Error(
+        `edit ${i}: oldText not found in ${input.path}.` +
+          (near ? ` The closest text is lines ${near.line}-${near.endLine}:\n---\n${near.text}\n---\nCopy it exactly (indentation included).` : ' Read the file and copy the text exactly.'),
+      );
     }
     const abs = safeJoin(ctx.projectRoot, input.path);
     fs.writeFileSync(abs, out, 'utf8');

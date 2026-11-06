@@ -175,7 +175,7 @@ function renderEmpty() {
       { class: 'empty' },
       head,
       el('p', { html: S.project ? 'Crée un fil avec <code>+</code> dans la colonne « Fils », puis demande par exemple&nbsp;:' : 'Crée un projet avec <code>+</code> dans la colonne « Projets », puis demande par exemple&nbsp;:' }),
-      el('p', { html: '<em>« Nouvel épisode “pause-everyone” : le monde se met en pause quand tu appuies sur espace. Écris le script, puis lance voice et plan. »</em>' }),
+      el('p', { html: '<em>« Nouvel épisode “pause-everyone” : le monde se met en pause quand tu appuies sur espace. Va jusqu’à la fin (mp4 final). »</em>' }),
     ),
   );
 }
@@ -464,10 +464,11 @@ const slugify = (s) =>
 function kickoffMessage({ episode, video }) {
   if (!video) return null;
   return [
-    `Nouvel épisode « ${episode} » à partir de la vidéo nouveau ${video}.`,
-    `1. Lance whatif_run {step:"source"} (args ["--pick","hook","--apply"]) : il transcrit l'anglais, garde la proposition de narration française dans out/${episode}/source.fr.md et remplit episode.json.`,
-    `2. Lis out/${episode}/source.fr.md puis réécris le script de l'épisode en 15-25 s (3 blocs de 22 mots max), accroche d'abord.`,
-    `3. Enchaîne voice, plan, stills et board, montre-moi la planche et attends mon accord avant sfx, render et master.`,
+    `Nouvel épisode « ${episode} » à partir de la vidéo nouveau ${video}. Fais tout, du début à la fin, sans me demander de validation.`,
+    `1. whatif_run {step:"source"} (args ["--pick","hook","--apply"]) : transcription anglaise, proposition de narration française dans ${episode ? `out/${episode}/source.fr.md` : 'out/<slug>/source.fr.md'}, episode.json rempli.`,
+    `2. Lis ce fichier, puis réécris le script en 15-25 s : 50 à 60 mots français, trois blocs, l'accroche d'abord.`,
+    `3. Enchaîne voice, plan, stills, board ; regarde la planche toi-même et corrige les shots si besoin.`,
+    `4. Puis sfx, render et master jusqu'au mp4 final, et résume-moi le résultat (durée, LUFS, fichiers).`,
   ].join('\n');
 }
 

@@ -1,8 +1,9 @@
 import type { ChatMessage, ChatRequest, ChatResult, Provider, ToolCall } from './types.js';
+import { fetchWithRetry } from './retry.js';
 import { safeJson, sseData } from './types.js';
 
 /** Anthropic Messages API with tool use and vision. */
-export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model: string }): Provider {
+export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model: string; maxTokens?: number }): Provider {
   const base = (cfg.baseURL || 'https://api.anthropic.com').replace(/\/+$/, '');
   return {
     id: 'anthropic',
@@ -12,7 +13,7 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
       const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
       const body: Record<string, unknown> = {
         model: cfg.model,
-        max_tokens: 8192,
+        max_tokens: cfg.maxTokens ?? 8192,
         stream: true,
         system,
         messages: toAnthropic(req.messages.filter((m) => m.role !== 'system')),
@@ -20,7 +21,7 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
       if (req.tools.length) {
         body.tools = req.tools.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }));
       }
-      const res = await fetch(`${base}/v1/messages`, {
+      const res = await fetchWithRetry(`${base}/v1/messages`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

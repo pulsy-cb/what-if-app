@@ -26,6 +26,7 @@ export function providerConfig(db: Db): ProviderConfig {
     baseURL: s.baseURL || env.WHATIF_BASE_URL || preset.baseURL,
     apiKey: s.apiKey || env.WHATIF_API_KEY || '',
     model: s.model || env.WHATIF_MODEL || preset.model,
+    maxTokens: Number(s.maxTokens || env.WHATIF_MAX_TOKENS || 8_000),
   };
 }
 
@@ -36,12 +37,12 @@ export function resolveProvider(db: Db): Provider {
       return mockProvider(cfg.model);
     case 'anthropic':
       if (!cfg.apiKey) throw new Error('no API key for anthropic: set it in the settings panel');
-      return anthropicProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model });
+      return anthropicProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
     default:
       if (!cfg.apiKey && !/127\.0\.0\.1|localhost/.test(cfg.baseURL)) {
         throw new Error(`no API key for ${cfg.provider}: set it in the settings panel`);
       }
-      return openAIProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model });
+      return openAIProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
   }
 }
 

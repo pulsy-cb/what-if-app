@@ -1,8 +1,15 @@
 import type { ChatMessage, ChatRequest, ChatResult, Provider, ToolCall, ToolSchema } from './types.js';
+import { fetchWithRetry } from './retry.js';
 import { safeJson, sseData } from './types.js';
 
 /** Any /chat/completions endpoint: OpenAI, OpenRouter, Groq, Mistral, DeepSeek, vLLM, LM Studio, llama.cpp, Ollama (/v1). */
-export function openAIProvider(cfg: { baseURL: string; apiKey: string; model: string; label?: string }): Provider {
+export function openAIProvider(cfg: {
+  baseURL: string;
+  apiKey: string;
+  model: string;
+  label?: string;
+  maxTokens?: number;
+}): Provider {
   const base = cfg.baseURL.replace(/\/+$/, '');
   return {
     id: 'openai',
@@ -13,12 +20,15 @@ export function openAIProvider(cfg: { baseURL: string; apiKey: string; model: st
         model: cfg.model,
         stream: true,
         messages: req.messages.map(toOpenAI),
+        // Reasoning models (Kimi-K3, GLM, o-series) spend this budget thinking first: leave it out and the
+        // gateway's small default gives an empty message with finish_reason "length".
+        max_tokens: cfg.maxTokens ?? 8_000,
       };
       if (req.tools.length) {
         body.tools = req.tools.map((t: ToolSchema) => t);
         body.tool_choice = 'auto';
       }
-      const res = await fetch(`${base}/chat/completions`, {
+      const res = await fetchWithRetry(`${base}/chat/completions`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

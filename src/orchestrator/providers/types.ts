@@ -27,6 +27,7 @@ export type Provider = {
 };
 
 export type ProviderConfig = {
+  maxTokens?: number;
   provider: 'mock' | 'openai' | 'anthropic';
   baseURL: string;
   apiKey: string;

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { layoutReport } from '../orchestrator/layout.js';
 import { fileURLToPath } from 'node:url';
 import { exec } from './exec.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
@@ -131,8 +132,99 @@ function diffArtifacts(root: string, before: Map<string, number>): Artifact[] {
  * scripts/, both with cwd = the project root: the nouvelle chain (import + voice through :8005) and
  * the Modal renderer live here, everything else stays the skill's, untouched.
  */
+
+/**
+ * The pipeline has one legal order, and an unattended agent drifts out of it: it will happily render
+ * stills from the placeholder timeline before the voice exists, then spend a turn "diagnosing" a board
+ * with one panel. So each step refuses to run until what it consumes exists, and says what to run next.
+ */
+function prerequisite(projectRoot: string, slug: string, step: string): string | null {
+  const src = path.join(projectRoot, 'src', 'episodes', slug);
+  const out = path.join(projectRoot, 'out', slug);
+  let broken = '';
+  const readJson = (file: string): any => {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (err) {
+      broken = (err as Error).message;
+      return null;
+    }
+  };
+  const episodePath = path.join(src, 'episode.json');
+  const episode = readJson(episodePath);
+  if (!fs.existsSync(episodePath)) return `no src/episodes/${slug}/episode.json: scaffold the episode with whatif_new first`;
+  if (!episode) return `src/episodes/${slug}/episode.json is not valid JSON (${broken}): repair it before running ${step}`;
+  const scriptWords = (episode.script ?? []).reduce(
+    (n: number, b: any) => n + String(b.text ?? '').split(/\s+/).filter(Boolean).length,
+    0,
+  );
+  const wordsFile = path.join(src, 'words.json');
+  const words = readJson(wordsFile);
+  const timeline = readJson(path.join(src, 'timeline.json'));
+  const voiced = fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'));
+  const staleTimeline = !timeline || Number(timeline.total ?? 0) <= 300 || String(timeline.title ?? '') === 'PLACEHOLDER';
+
+  if (step === 'voice') {
+    if (!scriptWords) return `episode.json has no script yet: write the script first (${slug})`;
+  }
+  if (step === 'plan') {
+    if (!words?.length) return `src/episodes/${slug}/words.json is missing: run whatif_run { step: "voice" } first, it is what the plan times itself on`;
+    if (!voiced) return `public/${slug}/voice.wav is missing: run whatif_run { step: "voice" } first`;
+  }
+  if (step === 'stills' || step === 'board' || step === 'motiongrid' || step === 'render') {
+    if (staleTimeline)
+      return `timeline.json is still the placeholder (${timeline?.segments?.length ?? 1} segment): run whatif_run { step: "voice" } then { step: "plan" } first, or every shot renders at 0.0 s`;
+    // the timeline names the shots: every one of them must exist in shots.tsx before a render spends
+    // a Modal run (40 s) on a bundle that cannot import them
+    const wanted: string[] = [...new Set<string>(((timeline?.shots ?? []) as any[]).map((sh) => String(sh.id ?? '')))];
+    let shotsSource = '';
+    try {
+      shotsSource = fs.readFileSync(path.join(src, 'shots.tsx'), 'utf8');
+    } catch {
+      return `src/episodes/${slug}/shots.tsx is missing: write one component per shot (${wanted.join(', ') || 'S1'})`;
+    }
+    const missing = wanted.filter((id) => id && !new RegExp(`export\\s+(const|function)\\s+${id}\\b`).test(shotsSource));
+    if (missing.length) return `shots.tsx does not export ${missing.join(', ')} yet (the timeline renders ${wanted.join(', ')}): write them, then run stills`;
+  }
+  if (step === 'sfx' || step === 'mixcheck' || step === 'render') {
+    if (staleTimeline) return `timeline.json is still the placeholder: run voice then plan before ${step}`;
+    if (!words?.length) return `words.json is missing: run whatif_run { step: "voice" } first`;
+  }
+  if (step === 'master' && !fs.existsSync(path.join(projectRoot, 'out', slug, `${slug}-raw.mp4`))) {
+    return `out/${slug}/${slug}-raw.mp4 does not exist: run whatif_run { step: "render" } first`;
+  }
+  return null;
+}
+
+
+const readJsonFile = (file: string): any => {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+/** The edit anchors an episode declares (shot -> at). */
+function episodeEdit(projectRoot: string, slug: string): any[] | null {
+  return readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'episode.json'))?.edit ?? null;
+}
+
+/** A spread of the measured words, so the agent can pick anchors that actually resolve. */
+function anchorHints(projectRoot: string, slug: string): string {
+  const words = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'words.json'));
+  if (!Array.isArray(words) || !words.length) return '(no words.json: run voice first)';
+  const step = Math.max(1, Math.floor(words.length / 14));
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i += step) {
+    const w = String(words[i]?.w ?? '');
+    if (w) out.push(`"at": "w:${w.replace(/[^\p{L}\p{N}'-]/gu, '')}" (${Number(words[i]?.s ?? 0).toFixed(2)}s)`);
+  }
+  return out.join(', ');
+}
+
 const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeoutMs?: number; desc: string }> = {
-  install: { desc: 'npm install in the project studio', timeoutMs: 900_000 },
+  install: { desc: 'npm install in the project studio (with its devDependencies, needed by tsc)', timeoutMs: 900_000 },
   source: {
     py: 'source_import.py',
     own: true,
@@ -238,7 +330,7 @@ const newProject: Tool = {
     if (!fs.existsSync(memory)) {
       fs.writeFileSync(
         memory,
-        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n${input.video ? `- source video (nouveau): ${input.video}\n` : ''}- pipeline: source -> voice -> plan -> stills -> board -> (approval) -> sfx -> master -> render\n- voice: Fish Audio (free tier) through the local TTS API; ElevenLabs is only used for the SFX\n- render: Modal (out/<slug>/<slug>-raw.mp4), then master.py --skip-render\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
+        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n${input.video ? `- source video (nouveau): ${input.video}\n` : ''}- pipeline: source -> script -> voice -> plan -> stills -> board -> sfx -> render -> master (unattended)\n- voice: Fish Audio (free tier) through the local TTS API; ElevenLabs is only used for the SFX\n- render: Modal (out/<slug>/<slug>-raw.mp4), then master.py --skip-render\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
       );
     }
     return {
@@ -278,6 +370,8 @@ const runStep: Tool = {
     const scripts = path.join(ctx.skillDir, 'scripts');
     const extra = input.args ?? [];
     const slug = input.episode;
+    const blocked = prerequisite(ctx.projectRoot, slug, input.step);
+    if (blocked) throw new Error(`cannot run ${input.step} yet — ${blocked}`);
     const before = snapshot(ctx.projectRoot);
     const renderMode = (process.env.WHATIF_RENDER ?? 'modal').toLowerCase();
     const rawMp4 = `out/${slug}/${slug}-raw.mp4`;
@@ -285,7 +379,9 @@ const runStep: Tool = {
     let argv: string[];
     let timeoutMs = 600_000;
     if (input.step === 'install') {
-      argv = ['npm', 'install'];
+      // --include=dev: the image runs with NODE_ENV=production, so a plain install skips @types/react
+      // and every later `npx tsc --noEmit` fails with TS7026 (no JSX.IntrinsicElements).
+      argv = ['npm', 'install', '--include=dev'];
       timeoutMs = 900_000;
     } else if (input.step === 'render') {
       const epJson = safeJoin(ctx.projectRoot, `src/episodes/${slug}/episode.json`);
@@ -338,12 +434,30 @@ const runStep: Tool = {
     const tail = (s: string[]) => s.slice(-25).join('\n');
     const artifacts = diffArtifacts(ctx.projectRoot, before);
     const credits = /credits?[^0-9]{0,12}(\d+)/i.exec(res.stdout);
-    const failed = payload ? payload.ok === false : res.code !== 0;
+    let failed = payload ? payload.ok === false : res.code !== 0;
+    // plan.py merges every segment it cannot anchor, silently: one 651-frame segment for six shots.
+    // Say so, and hand back the words it can actually anchor on.
+    const layout = input.step === 'stills' || input.step === 'board' ? await layoutReport(path.join(ctx.projectRoot, 'out', slug, 'board')).catch(() => '') : '';
+    let planWarning = '';
+    if (input.step === 'plan' && !failed) {
+      const tl = readJsonFile(path.join(ctx.projectRoot, 'src', 'episodes', slug, 'timeline.json'));
+      const wanted = new Set<string>(((episodeEdit(ctx.projectRoot, slug) ?? []) as any[]).map((e) => String(e.shot ?? '')));
+      const got = (tl?.segments ?? []).length;
+      if (wanted.size > 1 && got < wanted.size) {
+        failed = true;
+        planWarning =
+          `PLAN COLLAPSED: ${got} segment(s) for ${wanted.size} shots. plan.py times each shot from an anchor in ` +
+          `episode.json.edit, matched against the words it measured in words.json; anchors it cannot find are merged ` +
+          `into the previous shot.\nAnchor candidates (substitute for the "at" values, one per shot):\n${anchorHints(ctx.projectRoot, slug)}`;
+      }
+    }
     return {
       ok: !failed,
       summary: `$ ${argv.join(' ')}\nexit ${res.code}${res.timedOut ? ' (timeout)' : ''}\n${tail(visible)}${res.stderr ? `\n[stderr]\n${tail(res.stderr.split('\n').filter(Boolean))}` : ''}${
         payload ? `\n\nresult: ${JSON.stringify(payload).slice(0, 1200)}` : ''
-      }${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}`,
+      }${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}${
+        layout ? `\n\n${layout}` : ''
+      }${planWarning ? `\n\n${planWarning}` : ''}`,
       artifacts,
       credits: credits ? Number(credits[1]) : undefined,
       data: { step: input.step, code: res.code, result: payload },

@@ -13,6 +13,10 @@ export type Config = {
   maxSteps: number;
   contextChars: number;
   approvalTimeoutMs: number;
+  /** 'off' = the agent runs the whole pipeline unattended (default), 'pipeline' = ask before the
+   *  tools that mutate a project, 'all' = ask for every 'ask' policy tool. */
+  maxTokens: number;
+  approvalsMode: 'off' | 'pipeline' | 'all';
   /** Local TTS/translation API (the "nouveau" app), the one the videos and their takes live in. */
   nouveauUrl: string;
   /** "modal" (default) renders on Modal, "local" falls back to npx remotion inside this container. */
@@ -49,9 +53,14 @@ export function loadConfig(): Config {
     skillDir: detectSkillDir(),
     webDir: path.join(packageRoot, 'web', 'public'),
     authToken: process.env.WHATIF_AUTH_TOKEN ?? null,
-    maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 24),
+    maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 48),
     contextChars: Number(process.env.WHATIF_CONTEXT_CHARS ?? 90_000),
     approvalTimeoutMs: Number(process.env.WHATIF_APPROVAL_TIMEOUT_MS ?? 30 * 60_000),
+    maxTokens: Number(process.env.WHATIF_MAX_TOKENS ?? 8_000),
+    approvalsMode: ((): 'off' | 'pipeline' | 'all' => {
+      const raw = (process.env.WHATIF_APPROVALS ?? 'off').toLowerCase();
+      return raw === 'all' ? 'all' : raw === 'pipeline' || raw === 'on' ? 'pipeline' : 'off';
+    })(),
     nouveauUrl: (process.env.WHATIF_NOUVEAU_URL ?? 'http://127.0.0.1:8005').replace(/\/$/, ''),
     renderMode: process.env.WHATIF_RENDER === 'local' ? 'local' : 'modal',
   };
