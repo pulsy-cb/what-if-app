@@ -1,0 +1,24 @@
+services:
+  studio:
+    build: .
+    image: what-if-app
+    init: true
+    ports:
+      # bound to localhost: never expose the agent (it can edit files) on a public interface
+      - "127.0.0.1:3000:3000"
+    environment:
+      WHATIF_SKILL_DIR: /skill
+      WHATIF_DATA: /data
+      WHATIF_AUTH_TOKEN: ${WHATIF_AUTH_TOKEN:-}
+      WHATIF_PROVIDER: ${WHATIF_PROVIDER:-mock}
+      WHATIF_BASE_URL: ${WHATIF_BASE_URL:-}
+      WHATIF_MODEL: ${WHATIF_MODEL:-}
+      WHATIF_API_KEY: ${WHATIF_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      WHATIF_CONTEXT_CHARS: ${WHATIF_CONTEXT_CHARS:-90000}
+      WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-24}
+    volumes:
+      - ./data:/data                     # projects, sqlite, git checkpoints
+      - ../what-if-animation:/skill:ro   # the skill: engine, scripts, references (read-only)
+    shm_size: "1gb"                      # Chromium headless
+    restart: unless-stopped

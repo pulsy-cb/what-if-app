@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What If — studio</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="dot"></span> what&nbsp;if <em>studio</em></div>
+      <div class="grow"></div>
+      <span id="model" class="chip muted">modèle…</span>
+      <span id="credits" class="chip muted">0 cr</span>
+      <button id="settings-btn" class="ghost" title="Réglages">⚙</button>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="side-head">
+          <span>Projets</span>
+          <button id="new-project" class="ghost" title="Nouveau projet">+</button>
+        </div>
+        <ul id="projects" class="list"></ul>
+        <div class="side-head">
+          <span>Fils</span>
+          <button id="new-thread" class="ghost" title="Nouveau fil">+</button>
+        </div>
+        <ul id="threads" class="list"></ul>
+      </aside>
+
+      <main class="chat">
+        <div id="messages" class="messages"></div>
+        <div id="approvals" class="approvals"></div>
+        <form id="composer" class="composer">
+          <textarea id="input" rows="2" placeholder="Dis-moi quoi faire… (Entrée pour envoyer, Maj+Entrée pour une ligne)"></textarea>
+          <div class="composer-actions">
+            <button id="stop" type="button" class="ghost danger" hidden>Stop</button>
+            <button id="send" type="submit" class="primary">Envoyer</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <dialog id="settings">
+      <form method="dialog" class="settings-form">
+        <h2>Modèle</h2>
+        <label>Fournisseur
+          <select id="s-provider"></select>
+        </label>
+        <label>Base URL
+          <input id="s-baseurl" placeholder="https://api.openai.com/v1" />
+        </label>
+        <label>Modèle
+          <input id="s-model" placeholder="gpt-4.1" />
+        </label>
+        <label>Clé API
+          <input id="s-key" type="password" placeholder="(inchangée)" autocomplete="off" />
+        </label>
+        <label>Token d'accès (si le serveur en exige un)
+          <input id="s-token" type="password" placeholder="(facultatif)" autocomplete="off" />
+        </label>
+        <p id="s-skill" class="muted small"></p>
+        <menu>
+          <button value="cancel" class="ghost">Annuler</button>
+          <button id="s-save" value="save" class="primary">Enregistrer</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "what-if-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chat-driven studio for the What If animation pipeline: an agent in a web app, powered by any multimodal LLM.",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/orchestrator/main.js",
+    "dev": "node --watch dist/orchestrator/main.js",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "demo": "bash scripts/demo.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.2"
+  }
+}
