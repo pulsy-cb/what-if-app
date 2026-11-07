@@ -159,7 +159,12 @@ export function createApp(config: Config = loadConfig()): App {
           fs.mkdirSync(root, { recursive: true });
           toolResult = await registry.run(
             'whatif_new',
-            { episode: String(body.episode), force: true, ...(body.video ? { video: String(body.video) } : {}) },
+            {
+              episode: String(body.episode),
+              force: true,
+              ...(body.video ? { video: String(body.video) } : {}),
+              ...(body.aspect ? { aspect: String(body.aspect) } : {}),
+            },
             { projectId: id, projectRoot: root, dataRoot: config.dataRoot, skillDir: config.skillDir, log: () => {} },
           );
         } else {

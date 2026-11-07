@@ -24,7 +24,7 @@ services:
       WHATIF_MAX_TOKENS: ${WHATIF_MAX_TOKENS:-8000}
       # the local app that owns the videos, the French narrations and the TTS takes
       WHATIF_NOUVEAU_URL: ${WHATIF_NOUVEAU_URL:-http://127.0.0.1:8005}
-      WHATIF_NARRATION_MODEL: ${WHATIF_NARRATION_MODEL:-}
+      WHATIF_NARRATION_MODEL: ${WHATIF_NARRATION_MODEL:-agy/gemini-3.8-flash-medium}
       # renders: "modal" (default) or "local" (needs npm install in the project + a browser)
       WHATIF_RENDER: ${WHATIF_RENDER:-modal}
       MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}

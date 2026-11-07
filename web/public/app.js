@@ -461,13 +461,14 @@ const slugify = (s) =>
 
 // A video id is the normal starting point, so the dialog asks for it and then hands the work to the agent
 // instead of running the pipeline from the browser.
-function kickoffMessage({ episode, video }) {
+function kickoffMessage({ episode, video, aspect }) {
   if (!video) return null;
+  const fmt = aspect === '9:16' ? '9:16 vertical (1080×1920)' : '16:9 paysage (1920×1080)';
   return [
-    `Nouvel épisode « ${episode} » à partir de la vidéo nouveau ${video}. Fais tout, du début à la fin, sans me demander de validation.`,
+    `Nouvel épisode « ${episode} » (format ${fmt}) à partir de la vidéo nouveau ${video}. Fais tout, du début à la fin, sans me demander de validation.`,
     `1. whatif_run {step:"source"} (args ["--pick","hook","--apply"]) : transcription anglaise, proposition de narration française dans ${episode ? `out/${episode}/source.fr.md` : 'out/<slug>/source.fr.md'}, episode.json rempli.`,
-    `2. Lis ce fichier, puis réécris le script en 15-25 s : 50 à 60 mots français, trois blocs, l'accroche d'abord.`,
-    `3. Enchaîne voice, plan, stills, board ; regarde la planche toi-même et corrige les shots si besoin.`,
+    `2. Lis ce fichier, puis réécris episode.json en 15-25 s (50 à 60 mots français) sur la formule What If (6 entrées dans script : 3 démos cold open, la prémisse en français "Et si tu pouvais … ?", le turn avec un fait réel sourcé dans science, et la question finale ; title en français ["ET SI TU POUVAIS", "… ?"] ; conserve "aspect": "${aspect || '16:9'}").`,
+    `3. Enchaîne voice, shotlist, plan, écris tous les plans animés dans shots.tsx (avec <Hero>, poseAt ou actPose, faceAt, kf en frames 0..len, centrés autour de x=960) et index.tsx, puis stills et board ; regarde la planche toi-même et corrige les shots si besoin.`,
     `4. Puis sfx, render et master jusqu'au mp4 final, et résume-moi le résultat (durée, LUFS, fichiers).`,
   ].join('\n');
 }
@@ -478,6 +479,7 @@ function openNewProject() {
   $('#np-episode').value = '';
   $('#np-episode').dataset.touched = '';
   $('#np-video').value = '';
+  if ($('#np-aspect')) $('#np-aspect').value = '16:9';
   $('#np-kick').checked = true;
   $('#new-project-dialog').showModal();
 }
@@ -501,13 +503,14 @@ $('#np-create').addEventListener('click', async (e) => {
   const name = $('#np-name').value.trim();
   const episode = slugify($('#np-episode').value.trim() || name);
   const video = $('#np-video').value.trim();
+  const aspect = ($('#np-aspect')?.value || '16:9').trim();
   if (!name) return;
   const dialog = $('#new-project-dialog');
   const button = $('#np-create');
   button.disabled = true;
   button.textContent = 'Création…';
   try {
-    const body = { name, id: slugify(name), ...(episode ? { episode } : {}), ...(video ? { video } : {}) };
+    const body = { name, id: slugify(name), ...(episode ? { episode } : {}), ...(video ? { video } : {}), aspect };
     const { project, tool } = await api('/api/projects', { method: 'POST', body: JSON.stringify(body) });
     dialog.close();
     await loadProjects();
@@ -516,7 +519,7 @@ $('#np-create').addEventListener('click', async (e) => {
     S.threads = [thread, ...S.threads];
     await selectThread(thread);
     if (tool && !tool.ok) messagesBox().append(el('div', { class: 'think', text: `Scaffold : ${tool.summary}` }));
-    const kick = $('#np-kick').checked ? kickoffMessage({ episode, video }) : null;
+    const kick = $('#np-kick').checked ? kickoffMessage({ episode, video, aspect }) : null;
     if (kick) {
       await api(`/api/threads/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text: kick }) });
       S.running = true;

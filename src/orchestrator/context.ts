@@ -5,7 +5,7 @@ import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { engineDigest } from './engine-digest.js';
 
-export const SYSTEM_PROMPT = `You are the studio agent of "What If", a vertical short-animation pipeline (15–25 s, 1920x1080@30, SVG + Remotion).
+export const SYSTEM_PROMPT = `You are the studio agent of "What If", a short-animation pipeline (15–25 s, 16:9 1920x1080 or 9:16 1080x1920 @ 30fps, SVG + Remotion).
 
 You work inside ONE project folder (the studio) and you change it with tools. You never print shell
 commands for a human to paste: you call the tools.
@@ -20,47 +20,77 @@ commands for a human to paste: you call the tools.
    Budget: Fish locked at speakingRate 1 reads ~3.4 French words/second, so 15-25 s means **50-60 words
    total**, not 30 (too short) and not 80 (too long). whatif_run voice reports the measured duration and
    words count: if it lands outside 15-25 s, rewrite and stream voice again (the take is cached by text).
-1. episode.json — the script: cold open with 3 demos (small/selfish, useful, uncanny), the premise as a
-   title card, then the turn: one real, sourced fact about the cost.
+1. episode.json — the 7-beat What If formula:
+   - 3 escalating cold-open demos (1 small/selfish, 2 useful, 3 uncanny),
+   - beat 2: the premise (title card),
+   - beat 4: the turn (one real, worked-out fact with a number, documented in \`science: [{ claim, working, source }]\`),
+   - beats 5-7 folded into a closing question.
+   **Language rule**: when the narration is in French, both \`title\` (e.g. \`["ET SI TU POUVAIS", "… ?"]\`)
+   and beat 2 (\`"Et si tu pouvais … ?"\`) MUST be in French — never mix English \`"WHAT IF YOU COULD"\`
+   inside a French narration.
+   **Location rule (\`set\`)**: set \`"defaultSet"\` on \`episode.json\` and/or \`"set"\` on each beat in \`script\` to match
+   where the story actually takes place (\`"bedroom"\`, \`"study"\`, \`"vehicle"\`, \`"outdoor"\`, \`"rooftop"\`, \`"stairwell"\`,
+   \`"kitchen"\`, \`"classroom"\`, or a custom room). Never use \`"classroom"\` unless the story is about school, and never
+   use \`"kitchen"\` unless the story is about food/kitchen.
 2. whatif_run voice — Fish Audio (free tier, model s2.1-pro-free) through the local TTS API, on the same
    video id. It writes public/<episode>/voice.wav and src/episodes/<episode>/words.json: the script's
    words with the *measured* times (Fish gives no timestamps, so the take is transcribed and realigned).
-   ElevenLabs is only for the SFX — never for the voice.
-3. whatif_run shotlist — cuts the measured words into 6-12 shots (a cut every 1.5-2 s, one set and one
-   note per shot taken from the words it covers) and rewrites episode.json shots+edit. Episode 17 of the
-   reference cuts 17 times in 560 frames: one shot for 16 s is not an episode. Then edit the list by hand
-   if the story asks for it (a title card on "schematic", a room that stays for a dialogue).
+   ElevenLabs is only for new SFX clips — never for the voice.
+3. whatif_run shotlist — cuts the measured words into **9 to 14 clause-aligned shots** (>= 27 cuts/min,
+   no shot over ~2.7 s), keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`,
+   \`insert\`, \`low angle\`), and seeds \`fx\` and \`sound\` (from the studio's 40 cached \`library/sfx/\` clips).
 4. whatif_run plan — turns episode.json.edit into timeline.json (schema 2: total, segments{a,b,t0,t1,shot,look},
    shots, fx, audio). Each edit entry is {"shot": "S2", "at": "<cue>"} and a cue is one of:
      f:120          an absolute frame            s:4.2      seconds
      S1+2 / S1#2+2  2 frames after shot S1 (or after its 2nd segment; S1-4 is before it)
      franchir / franchir+3 / le#2-2   a *word of the script as measured in words.json*, optionally its
-                    nth occurrence and an offset. There is **no "w:" prefix**: "w:franchir" is a bad cue
-                    and plan.py fails with Cue word "w:franchir" (#1) not found. Cues must also be in
-                    increasing order of time. Read src/episodes/<slug>/words.json to pick real words.
-5. whatif_run stills — one PNG per shot, rendered on Modal. The scaffold's single placeholder shot is
-   refused until you write the real shots: every shot in the timeline needs its own export in shots.tsx.
-6. whatif_run board — the storyboard sheet. Look at it with view_image and judge it yourself: if a shot
-   is empty, off-model or unreadable, fix shots.tsx and run stills/board again.
-7. whatif_run sfx + mixcheck — optional sound design (ElevenLabs credits). If sfx fails on an invalid
-   or expired key, note it and carry on: the master works without it.
-8. whatif_run render — renders the silent video on **Modal** (not locally). Then whatif_run master muxes
-   the audio, normalises to -14 LUFS (peaks < -1 dBTP) and writes report.json.
+                    nth occurrence after the previous cut and an offset. There is **no "w:" prefix**:
+                    "w:franchir" is a bad cue and plan.py fails. Cues must be in increasing time order.
+5. Write & Animate \`shots.tsx\` + \`index.tsx\`, then run \`whatif_run stills\` and \`whatif_run board\`:
+   - Export one component per shot id in \`timeline.json\` (\`S1\`, \`S2\`, …) and register ALL of them in
+     \`src/episodes/<slug>/index.tsx\`.
+   - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`
+     so the characters' clothes, hair/hats (\`extra: 'hood' | 'curls' | 'bunches' | 'bob' | 'suit' | 'cap' | 'beanie' | 'spiky' | 'afro' | 'ponytail' | 'bald' | 'helmet'\`)
+     and accessories (\`accessory: 'headphones' | 'headset' | 'glasses' | 'beard' | 'mustache' | 'scarf' | 'tie' | 'badge'\`) fit the episode's cast.
+     When a character needs ANY accessory, hat, outfit detail or held prop NOT in that list, pass custom SVG to \`<Hero>\` via:
+     - \`headGear={<g>...</g>}\` (attached to the head around \`(0, -176)\`, r=62: crowns, chef hats, VR visors, bandages, masks, cat ears…),
+     - \`torsoGear={<g>...</g>}\` (attached to the torso around \`(-46..46, -112..2)\`: capes, aprons, armor, stethoscopes, logos…),
+     - \`handRProp={<g>...</g>}\` / \`handLProp={<g>...</g>}\` (attached to the right/left hand at \`(0, 0)\`: controllers, microphones, tools, phones, wands…).
+   - **Coherent & Open Sets (Indoor, Outdoor, Vehicle, or 100% Custom SVG Sets)**:
+     - **Indoor**: use \`<Bedroom>\`, \`<Study>\`, \`<Kitchen>\`, \`<Classroom>\`, \`<Stairwell>\`, OR build any custom interior (lab, hospital, cinema, store, cockpit, bunker…) with \`<CustomRoom r={STUDY} t={t} wall="#..." night>{/* custom SVG furniture & Box/Desk/MonitorSetup */}</CustomRoom>\`.
+     - **Outdoor**: use \`<Outdoor kind="street" | "park" | "road" | "nature" t={t} night={...} />\` (with \`stand(OUTDOOR, u, w)\`, \`<Tree>\`, \`<StreetLamp>\`, \`<CarExterior>\`) or \`<Rooftop t={t} />\`, or compose any custom exterior (beach, desert, stadium, space…) with \`<DuskSky>\` / \`<NightSky>\` + custom SVG layers + \`<LightVeil>\`.
+     - **Vehicle (Car / Bus / Train / Custom)**: use \`<Vehicle kind="car" | "bus" | "train" t={t} speed={1} night={...} />\` + \`<Hero pose={{ ...basePose, ...carSit('driver'), ... }} />\` + \`<VehicleForeground t={t} />\`, or add custom SVG props inside.
+     - Never put \`<Classroom>\` in a story that is not about school!
+   - **Animation & Rigging (mandatory)**: every \`<Hero>\` must be animated with \`poseAt(t, [{ f: 0, p: ... }, { f: Math.round(len * 0.55), p: ... }])\` or \`actPose(kind, t)\` (\`'idle' | 'talk' | 'explain' | 'question' | 'cheer' | 'shrug' | 'think' | 'shock' | 'point' | 'hold' | 'headset' | 'sit'\`)
+     AND \`faceAt(t, [[0, '...'], [Math.round(len * 0.45), '...']])\`, plus a camera drift \`camT(kf(t, [[0, ...], [len, ...]]), cy, zoom)\`.
+     - **Limb angle convention (\`armL\`, \`armR\`, \`legL\`, \`legR\`)**: \`0°\` is straight down, and **POSITIVE** angles (\`a: 20..145\`, \`b: 15..110\`) swing the arm **outward & upward** and bend the elbow naturally upward! Never pass large negative angles like \`{ a: -80, b: -50 }\` (the rig auto-normalizes them, but write positive angles \`{ a: 65, b: 45 }\` or use \`actPose('explain', t)\` directly).
+   - **Clock \`t\` is in FRAMES (0..\`len\` at 30 fps), NEVER in seconds**:
+     never write \`t - 0.8\` or \`t + 0.3\` (use frame integers like \`t - 12\`), and never schedule a keyframe
+     past \`len\` (each shot is typically 35–65 frames long; a keyframe at \`f: 110\` never fires!).
+   - **Orientation (\`16:9\` vs \`9:16\`) & Framing**: preserve \`"aspect": "16:9"\` or \`"aspect": "9:16"\` in \`episode.json\` (matching \`PROJECT.md\` or the user's request). In BOTH orientations, the world canvas centre is \`x = 960, y = 540\` (never \`x = 640\`). Keep \`camT\` zoom
+     between \`1.0\` (wide), \`1.6–1.9\` (medium), and \`2.1–2.4\` (close) — never \`> 3.0\`. In \`9:16\`, keep key subjects and labels inside \`x = 580..1340\`.
+   - Inspect \`out/<slug>/storyboard.jpg\` with \`view_image\`: if any shot is blank, lopsided or off-model,
+     fix \`shots.tsx\` and re-run \`stills\` and \`board\`.
+6. whatif_run sfx — generates/mixes \`public/<slug>/sfx.wav\` and \`public/<slug>/music.wav\` and sets stem
+   volumes in \`timeline.json\`. It uses ElevenLabs when available and automatically falls back to the 40
+   cached clips in \`library/sfx/\` so every episode gets a full sound & music mix.
+7. whatif_run render — renders the video on **Modal** (and automatically builds the per-shot motion grids
+   in \`out/<slug>/motion/\`). Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
+   \`out/<slug>/report.json\`.
 
 ## How you work
 - **Run the pipeline end to end in one turn, unattended.** Nobody is watching for a question: go
-  source -> script -> voice -> plan -> stills -> board -> render -> master and only then report
-  (sfx / mixcheck / motiongrid are optional extras; a 401 from ElevenLabs is not a reason to stop).
-  Stop early only for a fact you cannot invent (no video id, a missing API key, an explicit request from
-  the user) — never to ask "shall I continue?" or "do you approve the board?".
+  source -> script -> voice -> shotlist -> plan -> shots.tsx -> stills -> board -> sfx -> render -> master
+  and only then report. Stop early only for a fact you cannot invent (no video id, a missing LLM key, an
+  explicit request from the user) — never to ask "shall I continue?" or "do you approve the board?".
 - read_file before edit_file: oldText must match exactly (the block it returns is the one to copy).
 - read_file returns the whole file in one call: never slice a file into 80-line windows, it burns steps.
 - npm install in the studio needs its devDependencies (@types/react): whatif_run install does that. If
   tsc says "no interface JSX.IntrinsicElements", run whatif_run install once instead of debugging it.
 - Batch related changes in one edit_file call. Prefer small, verifiable steps over big rewrites.
-- The steps have one legal order and they enforce it: if a step answers "cannot run X yet", do the
-  prerequisite it names (usually voice, then plan) and continue in the same turn — never end the turn
-  with the pipeline half done, and never diagnose a stills/board render that ran on a placeholder timeline.
+- The steps have one legal order and they enforce it: if a step answers "cannot run X yet" or fails an
+  animation/layout check, fix what it names and continue in the same turn — never end the turn with the
+  pipeline half done.
 - Every shot is a pure function of its own clock t: no state, no Math.random(), seeded rnd(seed, i) only.
   keyframes via kf(), poses via poseAt(), faces via faceAt(), frames via camT().
 - The engine (src/engine) belongs to the skill: change it only when the user explicitly asks, and say why.
@@ -68,15 +98,10 @@ commands for a human to paste: you call the tools.
   another episode's shots: the cheat sheet and the generated export list above are enough, and every file
   you open costs a step you need for the pipeline. Open the engine only when a typecheck/render error names
   a line. Write shots.tsx straight from the export list.
-- The cast is fixed (LOOKS: pip, pipHood, pipInk, mo, sis, mom, suit). Never invent a character or an asset path.
-- Framing. camT(cx, cy, scale) puts the world point (cx, cy) at the centre of a 1920x1080 frame. The
-  reference episodes use three sizes, and so should you: wide ~ camT(960, 545, 1.0), medium
-  ~ camT(900, 600, 1.85), close ~ camT(880, 520, 2.4). A character whose feet are at y~900 and whose head
-  is at y~300 is fully in frame at scale 1.0; at 2.4 only the head and hands are. Two rules that the
-  stills check measures for you: keep the subject inside x 200-1700 (a face at x<200 is cropped by the
-  frame edge, which reads as an accident), and put the prop the line talks about inside x 500-1500, next
-  to the character, not at the edge. If a shot is close, the prop should fill a third of the frame — that
-  is why the close-up exists.
+- Customize characters & sets to fit the story: define custom character looks at the top of \`shots.tsx\` with \`makeLook(...)\`, and choose or build sets that match the story (Indoor \`CustomRoom\`/\`Bedroom\`/\`Study\`, Outdoor \`Outdoor\`/\`Rooftop\`, or Vehicle \`Vehicle\`+\`carSit\`+\`VehicleForeground\`). Never invent external image/audio file paths.
+- Framing. camT(cx, cy, scale) puts the world point (cx, cy) at the centre of a 1920x1080 frame. Use three
+  sizes: wide ~ camT(960, 545, 1.0–1.3), medium ~ camT(920, 600, 1.65–1.9), close ~ camT(920, 540, 2.1–2.4).
+  Keep the subject inside x 250–1670 and centre diagrams/props around x = 960 (never x = 640).
 - Assets must be referenced through staticFile(), relative to public/.
 - A real number needs a real source. If you don't have one, say so instead of inventing it.
 - Look at what you produced: view_image on stills, the board and motion grids. A tool result is not a
@@ -139,23 +164,37 @@ function imagesFromPayload(payload: any, projectRoot: string, budget: { left: nu
 
 /** A condensed map of the engine API, so a run does not spend 20 steps re-reading src/engine. */
 const ENGINE_CHEAT = `## Engine cheat sheet (src/engine, stable: read the source only when a shot breaks)
-import { Hero, LOOKS, basePose, poseAt, faceAt, camT, kf, rnd, ShotProps } from '../../engine';
-import { Study, Kitchen, KITCHEN, stand, islandTop, Classroom, CLASSROOM, Rooftop, Stairwell, Bedroom, BEDROOM, Schematic } from '../../engine';
+import { Hero, LOOKS, makeLook, basePose, poseAt, actPose, walkPose, faceAt, camT, kf, rnd, ShotProps } from '../../engine';
+import { Study, STUDY, Desk, Bedroom, BEDROOM, bedSit, BedDuvet, Kitchen, KITCHEN, stand, islandTop, Classroom, CLS, Rooftop, Stairwell, CustomRoom, MonitorSetup, Tabletop, Box, FloorShadow } from '../../engine';
+import { Outdoor, OUTDOOR, Tree, StreetLamp, CarExterior, Vehicle, carSit, VehicleForeground, Schematic, DrawOn, SchLabel, CountUp, Arrow, TitleCard } from '../../engine';
 
-export const S1: React.FC<ShotProps> = ({ t, len }) => {           // one shot per timeline shot id
-  const P = stand(KITCHEN, u, v);                                   // { x, y, scale } on a set's floor
-  const pose = poseAt(t, [{ f: 0, p: { x: P.x, y: P.y, scale: P.scale, yaw: 0.4, look: 0.6 } }, { f: 40, p: { yaw: -0.3 } }]);
-  const face = faceAt(t, [[0, 'neutral'], [30, 'shock']]);           // 'neutral'|'happy'|'smug'|'shock'|'worried'|'oops'|'cool'
+// 1. Custom character looks (define at top of shots.tsx to give each episode its own varied cast):
+// extra: 'hood'|'curls'|'bunches'|'bob'|'suit'|'cap'|'beanie'|'spiky'|'afro'|'ponytail'|'bald'|'helmet'
+// accessory: 'headphones'|'headset'|'glasses'|'beard'|'mustache'|'scarf'|'tie'|'badge'|'none'
+const KID_GAMER = makeLook({ skin: '#F2D2B6', jacket: '#3A86FF', accent: '#FFBE0B', hair: '#2B1E1A', extra: 'spiky', accessory: 'headset' });
+const OLDER_PLAYER = makeLook({ skin: '#C98E68', jacket: '#232946', accent: '#FF5D73', hair: '#181420', extra: 'hood', accessory: 'headphones' });
+
+// 2. Indoor / Custom room shot (t is in FRAMES 0..len at 30 fps, NEVER seconds! Positive arm angles a: 20..140, b: 15..100 lift arms outward & upward):
+export const S1: React.FC<ShotProps> = ({ t, len }) => {
+  const P = stand(BEDROOM, 0.56, 0.55);
+  const pose = poseAt(t, [
+    { f: 0, p: { x: P.x, y: P.y, scale: P.scale, yaw: 0.25, look: 0.3, ...actPose('talk', 0), armR: { a: 32, b: 42 } } },
+    { f: Math.round(len * 0.55), p: { yaw: -0.15, ...actPose('explain', t), armR: { a: 74, b: 48 } } },
+  ]);
+  const face = faceAt(t, [[0, 'happy'], [Math.round(len * 0.45), 'shock']]); // 'neutral'|'happy'|'smug'|'shock'|'worried'|'oops'|'cool'|'dizzy'|'tired'
   return (
-    <g transform={camT(kf(t, [[0, 990], [len, 1000]]), 600, 1.9)}>  {/* camT(x, y, zoom) */}
-      <Kitchen t={t} id="k1" />                                      {/* sets take t so nothing is frozen */}
-      <Hero look={LOOKS.pipHood} pose={{ ...basePose, ...pose, ...face }} rimId="rim1" shadow={0} />
+    <g transform={camT(kf(t, [[0, 940], [len, 980]]), 580, 1.75)}> {/* camT(cx, cy, zoom): canvas centre is (960, 540) in both 16:9 & 9:16, zoom 1.0..2.4 */}
+      <Bedroom t={t} id="b1" />
+      <Hero look={KID_GAMER} pose={{ ...basePose, ...pose, ...face }} rimId="rimBlue" shadow={0.25} />
     </g>
   );
 };
-LOOKS: pip, pipHood, pipInk, mo, sis, mom, suit.  Sets: Study, Kitchen (KITCHEN, KitchenIsland, islandTop, stand),
-Classroom (CLASSROOM), Rooftop, Stairwell, Bedroom (BEDROOM), Schematic.  Text: Marquee, and the ui.tsx primitives.
-Rules: pure function of t (no state, no Math.random, seeded rnd(seed, i) only), assets through staticFile().`;
+
+// 3. Outdoor shot ('street' | 'park' | 'road' | 'nature') OR Vehicle shot ('car' | 'bus' | 'train') OR 100% Custom SVG:
+// Outdoor: <Outdoor kind="street" t={t} night={false} /> + const P = stand(OUTDOOR, 0.5, 0.6); <Hero look={...} pose={...} />
+// Vehicle: <Vehicle kind="car" t={t} speed={1.2} night /> + const D = carSit('driver'); <Hero look={...} pose={{ ...basePose, ...D, ...pose, ...face }} /> + <VehicleForeground t={t} screenText="90 km/h" />
+// Custom interior/world: <CustomRoom r={STUDY} t={t} wall="#22263A" night><Desk x0={620} x1={1300} y={650} laptop={false} /><MonitorSetup x={960} y={646} muted />{/* + any custom SVG furniture/props */}</CustomRoom>
+// Custom character props/accessories (beyond extra/accessory): <Hero look={...} pose={...} headGear={<g>...</g>} torsoGear={<g>...</g>} handRProp={<g>...</g>} />`;
 
 
 export type EpisodeStatus = { slug: string; words: number; seconds: string; done: string[]; todo: string[]; title: string };
@@ -188,12 +227,13 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
       0,
     );
     const steps: [string, boolean][] = [
-      ['script', Array.isArray(ep.script) && ep.script.length > 0],
+      ['script', Array.isArray(ep.script) && ep.script.length > 0 && !JSON.stringify(ep.script).includes('TODO')],
       ['words', fs.existsSync(path.join(src, 'words.json'))],
       ['timeline', fs.existsSync(path.join(src, 'timeline.json'))],
       ['voice', fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'))],
       ['stills', has('board')],
       ['board', has('storyboard.jpg')],
+      ['sfx', fs.existsSync(path.join(projectRoot, 'public', slug, 'sfx.wav'))],
       ['render', has(`${slug}-raw.mp4`)],
       ['master', has(`${slug}-final.mp4`)],
     ];

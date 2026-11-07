@@ -9,8 +9,9 @@ sources (src/, public/, the manifests), send them to a Modal function whose imag
 Chromium and the studio's node_modules (`npm ci` baked once from package.json/package-lock.json), and
 write the bytes it returns into the project.
 
-Same shape as whatif-code-studio's bench worker, without the telemetry: `muted: true` (master.py muxes
-the audio), jpeg frames at quality 92, h264/yuv420p, crf 18, bounded concurrency.
+Same shape as whatif-code-studio's bench worker, without the telemetry: `enforceAudioTrack: true`
+(Remotion mixes the composition's `<Audio>` stems from `timeline.json`, and `master.py` normalises
+the final audio to -14 LUFS), jpeg frames at quality 92, h264/yuv420p, crf 18, bounded concurrency.
 
 Env: MODAL_TOKEN_ID / MODAL_TOKEN_SECRET (or ~/.modal.toml), WHATIF_MODAL_APP (default whatif-app-render),
 WHATIF_MODAL_VCPU (8), WHATIF_MODAL_MEMORY_MIB (12288).
@@ -167,6 +168,7 @@ def make_app(project: pathlib.Path):
         mode: str = "stills",
         scale: float = 1.0,
         frames: str = "",
+        shots_filter: str = "",
         concurrency: int = 4,
         crf: int = 18,
         typecheck: bool = False,
@@ -215,6 +217,8 @@ def make_app(project: pathlib.Path):
             ]
             if frames:
                 cmd += ["--frames", frames]
+            if shots_filter:
+                cmd += ["--shots", shots_filter]
             t = time.perf_counter()
             proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace")
             out["timings"]["node"] = round(time.perf_counter() - t, 3)
@@ -264,6 +268,7 @@ def main(argv: list[str]) -> int:
         return 2
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("slug")
+    ap.add_argument("shots", nargs="*", help="optional shot IDs to render in stills mode (e.g. S2 S8)")
     ap.add_argument("--mode", default="stills")
     ap.add_argument("--project", default=".")
     ap.add_argument("--scale", type=float, default=1.0)
@@ -297,6 +302,7 @@ def main(argv: list[str]) -> int:
                 mode=args.mode,
                 scale=args.scale,
                 frames=args.frames,
+                shots_filter=",".join(args.shots or []),
                 concurrency=args.concurrency,
                 crf=args.crf,
                 typecheck=args.typecheck,

@@ -55,6 +55,12 @@
         <label>Vidéo source (id nouveau, facultatif)
           <input id="np-video" placeholder="zeTS1DyW1ys" autocomplete="off" />
         </label>
+        <label>Format / Orientation
+          <select id="np-aspect">
+            <option value="16:9">16:9 — Paysage (1920×1080)</option>
+            <option value="9:16">9:16 — Vertical Shorts/TikTok (1080×1920)</option>
+          </select>
+        </label>
         <p class="muted small">Un id vidéo transcrit la source en anglais, garde la proposition de narration
           française dans <code>out/&lt;slug&gt;/source.fr.md</code> et attache la voix Fish à cette vidéo.</p>
         <label class="row-inline">

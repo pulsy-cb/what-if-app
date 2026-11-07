@@ -35,6 +35,7 @@ function parseArgs(argv) {
     publicDir: 'public',
     output: '',
     frames: '',
+    shots: '',
     stillsDir: '',
     scale: 1,
     concurrency: 4,
@@ -52,6 +53,7 @@ function parseArgs(argv) {
     else if (a === '--public-dir') o.publicDir = next();
     else if (a === '--output') o.output = next();
     else if (a === '--frames') o.frames = next();
+    else if (a === '--shots') o.shots = next();
     else if (a === '--stills-dir') o.stillsDir = next();
     else if (a === '--scale') o.scale = Number(next());
     else if (a === '--concurrency') o.concurrency = Number(next());
@@ -116,12 +118,19 @@ if (opts.mode === 'stills') {
   const compId = `${ep.id}Board`;
   const composition = await selectComposition({ ...base, id: compId });
   const shots = Array.isArray(tl.shots) && tl.shots.length ? tl.shots : [{ id: 'one' }];
+  const onlySet = new Set(
+    String(opts.shots || '')
+      .split(/[,;\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
   const dir = path.resolve(opts.stillsDir || path.join(outDir, 'board'));
   fs.mkdirSync(dir, { recursive: true });
   const files = [];
   emit({ done: 0, total: shots.length + 1, stage: 'stills', message: `${shots.length} storyboard stills` });
   for (let i = 0; i < shots.length; i++) {
     const id = String(shots[i].id || `shot-${i + 1}`);
+    if (onlySet.size > 0 && !onlySet.has(id)) continue;
     const file = path.join(dir, `${id}.png`);
     await renderStill({ ...base, composition, frame: i, output: file, overwrite: true, scale: opts.scale });
     files.push({ id, path: file, bytes: fs.statSync(file).size });

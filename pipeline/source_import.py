@@ -78,8 +78,8 @@ def main(argv: List[str]) -> int:
 
     want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal")
     script_mode = proj.arg(argv, "--script-mode", "narration") or "narration"
-    # nouveau picks its own default provider, which may have no quota: WHATIF_NARRATION_MODEL overrides it
-    model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or None
+    # nouveau picks its own default provider, which may have no quota: default to agy/gemini-3.8-flash-medium
+    model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or "agy/gemini-3.8-flash-medium"
     apply_script = "--apply" in argv
     want_generate = "--generate" in argv
     nv = Nouveau()
@@ -118,13 +118,31 @@ def main(argv: List[str]) -> int:
     if not usable(proposals):
         want_generate = True
     if want_generate or not proposals:
-        print(f"[source] asking nouveau for 2 French narration proposals ({script_mode})", flush=True)
+        print(f"[source] asking nouveau for 2 French narration proposals ({script_mode}, model={model})", flush=True)
         try:
             fresh = list(nv.proposals(str(video_id), script_mode=script_mode, model=model).get("proposals") or [])
             proposals = fresh + [p for p in proposals if p not in fresh]
         except NouveauError as e:
-            proj.result(ok=False, error=f"translation failed: {e}", videoId=video_id)
-            return 5
+            print(f"[source] translate/generate failed ({e}); falling back to English transcript", file=sys.stderr)
+            try:
+                tr_data = nv.transcript(str(video_id), lang="en")
+                segs = tr_data.get("transcript") or tr_data.get("segments") or []
+                en_text = " ".join(str(s.get("text") or "").strip() for s in segs if str(s.get("text") or "").strip())
+                if en_text:
+                    proposals = [
+                        {
+                            "id": None,
+                            "prompt_type": "transcript_fallback",
+                            "title": title,
+                            "model_name": "deepgram-en",
+                            "translation": en_text,
+                        }
+                    ]
+            except NouveauError:
+                pass
+            if not proposals:
+                proj.result(ok=False, error=f"translation failed: {e}", videoId=video_id)
+                return 5
 
     pool = usable(proposals)
     chosen = pick(pool or proposals, want)
@@ -160,10 +178,11 @@ def main(argv: List[str]) -> int:
     }
 
     if chosen is not None:
-        try:
-            nv.select_proposal(str(video_id), chosen.get("id"))
-        except NouveauError as e:
-            print(f"[source] select failed ({e}); keeping text anyway", file=sys.stderr)
+        if chosen.get("id") is not None:
+            try:
+                nv.select_proposal(str(video_id), chosen.get("id"))
+            except NouveauError as e:
+                print(f"[source] select failed ({e}); keeping text anyway", file=sys.stderr)
         text = str(chosen.get("translation") or "").strip()
         out = proj.out_dir(slug)
         (out / "source.fr.md").write_text(text + "\n", encoding="utf-8")

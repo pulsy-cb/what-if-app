@@ -11,7 +11,7 @@ import path from 'node:path';
  *   export function stand(r: Room, u: number, w: number)                 ->  stand(r: Room, u: number, w: number)
  *   export type Pose = {...}                                            ->  type Pose
  */
-export function engineDigest(projectRoot: string, cap = 9_500): string {
+export function engineDigest(projectRoot: string, cap = 11_500): string {
   const root = path.join(projectRoot, 'src', 'engine');
   const files: string[] = [];
   const walk = (dir: string): void => {

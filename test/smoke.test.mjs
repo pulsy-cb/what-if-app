@@ -128,3 +128,63 @@ test('approval gate blocks a run until the human answers', async () => {
   await app.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('whatif audits: episode formula/language and shots animation/framing checks', async () => {
+  const { episodeAudit, shotsAudit } = await import('../dist/tools/whatif.js');
+  const badFr = {
+    title: ['WHAT IF YOU COULD', 'PLIE UNE FEUILLE ?'],
+    script: [
+      { beat: '1', text: 'Tu plies une feuille en deux dans ta chambre.' },
+      { beat: '2', text: 'Tu la replies encore sur le bureau.' },
+      { beat: '3', text: 'La pile dépasse déjà la table.' },
+      { beat: '4', text: 'What if you could plier une feuille 42 fois ?' },
+      { beat: '5', text: 'À 42 plis, elle atteint la Lune : 439 800 km.' },
+    ],
+    science: [{ claim: '42 plis = 439 800 km', working: '0.1mm * 2^42', source: 'exponentielle' }],
+  };
+  assert.match(episodeAudit(badFr, 'fold') ?? '', /mixes English/);
+
+  const goodFr = {
+    ...badFr,
+    title: ['ET SI TU POUVAIS', 'PLIER UNE FEUILLE 42 FOIS ?'],
+    script: badFr.script.map((b, i) => (i === 3 ? { beat: '4', text: 'Et si tu pouvais plier une feuille 42 fois ?' } : b)),
+  };
+  assert.equal(episodeAudit(goodFr, 'fold'), null);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-shots-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'fold');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const fold = defineEpisode("Fold", { timeline, shots: { S1, S2 } });\n');
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      `export const S1 = ({ t, len }) => <g transform={camT(960, 540, 8.5)}><Study t={t} /><SchLabel x={640} y={500} t={t - 0.5} text="A" /><SchLabel x={650} y={600} t={t} text="B" /></g>;\n` +
+        `export const S2 = ({ t, len }) => <g><Schematic t={t} /><SchLabel x={960} y={540} t={t - 90} text="C" /></g>;\n`,
+    );
+    const ep = { shots: [{ id: 'S1', set: 'study', size: 'medium' }, { id: 'S2', set: 'schematic', size: 'schematic' }] };
+    const tl = { shots: [{ id: 'S1', len: 50 }, { id: 'S2', len: 50 }] };
+    const err = shotsAudit(dir, 'fold', ep, tl) ?? '';
+    assert.match(err, /has no <Hero>/);
+    assert.match(err, /FRAMES at 30 fps/);
+    assert.match(err, /x≈640–660/);
+    assert.match(err, /schedules animation at frame\(s\) 90/);
+
+    const { normalizeAspect, syncStudioAspect } = await import('../dist/tools/whatif.js');
+    assert.equal(normalizeAspect('9:16'), '9:16');
+    assert.equal(normalizeAspect('vertical'), '9:16');
+    assert.equal(normalizeAspect('16:9'), '16:9');
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'), '# Project\n\n- aspect: 9:16 (1080x1920 vertical)\n');
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ id: 'Fold', slug: 'fold' }));
+    fs.writeFileSync(
+      path.join(dir, 'src', 'studio.config.ts'),
+      `export const STUDIO = {\n  width: 1920,\n  height: 1080,\n  aspect: '16:9' as '16:9' | '9:16',\n  fps: 30,\n};\n`,
+    );
+    assert.equal(syncStudioAspect(dir, 'fold'), '9:16');
+    const cfgAfter = fs.readFileSync(path.join(dir, 'src', 'studio.config.ts'), 'utf8');
+    assert.match(cfgAfter, /width:\s*1080/);
+    assert.match(cfgAfter, /height:\s*1920/);
+    assert.match(cfgAfter, /aspect:\s*'9:16'/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
