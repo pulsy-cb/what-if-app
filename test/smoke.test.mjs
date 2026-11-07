@@ -177,13 +177,32 @@ test('whatif audits: episode formula/language and shots animation/framing checks
     fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ id: 'Fold', slug: 'fold' }));
     fs.writeFileSync(
       path.join(dir, 'src', 'studio.config.ts'),
-      `export const STUDIO = {\n  width: 1920,\n  height: 1080,\n  aspect: '16:9' as '16:9' | '9:16',\n  fps: 30,\n};\n`,
+      `// For 16:9 landscape: width: 1920, height: 1080, aspect: '16:9'.\n// For 9:16 vertical: width: 1080, height: 1920, aspect: '9:16'.\nexport const STUDIO = {\n  width: 1920,\n  height: 1080,\n  aspect: '16:9' as '16:9' | '9:16',\n  fps: 30,\n};\n`,
     );
     assert.equal(syncStudioAspect(dir, 'fold'), '9:16');
     const cfgAfter = fs.readFileSync(path.join(dir, 'src', 'studio.config.ts'), 'utf8');
-    assert.match(cfgAfter, /width:\s*1080/);
-    assert.match(cfgAfter, /height:\s*1920/);
-    assert.match(cfgAfter, /aspect:\s*'9:16'/);
+    const studioBlock = cfgAfter.split('export const STUDIO')[1] ?? '';
+    assert.match(studioBlock, /width:\s*1080/);
+    assert.match(studioBlock, /height:\s*1920/);
+    assert.match(studioBlock, /aspect:\s*'9:16'/);
+
+    // Source video translation fidelity check: reject shortened scripts, accept full scripts without science
+    const shortenedSourceEp = {
+      title: ['LE PIRE', 'RENDEZ-VOUS'],
+      source: { provider: 'nouveau', videoId: '7685825400659774751', words: 288 },
+      script: [{ text: 'Un court résumé de quinze mots qui raccourcit complètement la traduction du serveur.' }],
+      science: [],
+    };
+    assert.match(episodeAudit(shortenedSourceEp, 'rdv') ?? '', /shortened or rewrote the :8005 translation proposal/);
+
+    const fullWords = Array.from({ length: 240 }, (_, i) => `mot${i}`).join(' ');
+    const fullSourceEp = {
+      title: ['LE PIRE', 'RENDEZ-VOUS'],
+      source: { provider: 'nouveau', videoId: '7685825400659774751', words: 288 },
+      script: [{ text: fullWords }],
+      science: [],
+    };
+    assert.equal(episodeAudit(fullSourceEp, 'rdv'), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

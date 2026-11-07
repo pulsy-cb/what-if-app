@@ -73,7 +73,8 @@ export function syncStudioAspect(projectRoot: string, slug: string, explicit?: u
 
   let fromCfg: '16:9' | '9:16' | null = null;
   try {
-    const cfg = fs.readFileSync(cfgPath, 'utf8');
+    const cfgRaw = fs.readFileSync(cfgPath, 'utf8');
+    const cfg = cfgRaw.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
     if (/aspect\s*:\s*['"]9:16['"]/.test(cfg) || (/width\s*:\s*1080\b/.test(cfg) && /height\s*:\s*1920\b/.test(cfg))) {
       fromCfg = '9:16';
     } else if (/aspect\s*:\s*['"]16:9['"]/.test(cfg)) {
@@ -84,14 +85,25 @@ export function syncStudioAspect(projectRoot: string, slug: string, explicit?: u
   }
 
   const fromEp = normalizeAspect(ep?.aspect ?? ep?.format ?? ep?.orientation);
-  const aspect: '16:9' | '9:16' = normalizeAspect(explicit) ?? fromEp ?? fromMd ?? fromCfg ?? '16:9';
+  // Explicit input, PROJECT.md, and episode.json always take precedence over the default studio.config.ts
+  const aspect: '16:9' | '9:16' = normalizeAspect(explicit) ?? fromMd ?? fromEp ?? fromCfg ?? '16:9';
 
-  if (ep && ep.aspect !== aspect) {
-    ep.aspect = aspect;
-    try {
-      fs.writeFileSync(epPath, JSON.stringify(ep, null, 1) + '\n');
-    } catch {
-      /* ignore */
+  if (ep) {
+    let epChanged = false;
+    if (ep.aspect !== aspect) {
+      ep.aspect = aspect;
+      epChanged = true;
+    }
+    if (ep.source?.videoId && Array.isArray(ep.science) && ep.science.some((s: any) => /\bTODO\b/i.test(JSON.stringify(s)))) {
+      ep.science = ep.science.filter((s: any) => !/\bTODO\b/i.test(JSON.stringify(s)));
+      epChanged = true;
+    }
+    if (epChanged) {
+      try {
+        fs.writeFileSync(epPath, JSON.stringify(ep, null, 1) + '\n');
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -100,12 +112,19 @@ export function syncStudioAspect(projectRoot: string, slug: string, explicit?: u
     const height = aspect === '9:16' ? 1920 : 1080;
     try {
       let src = fs.readFileSync(cfgPath, 'utf8');
-      src = src.replace(/width\s*:\s*\d+/, `width: ${width}`);
-      src = src.replace(/height\s*:\s*\d+/, `height: ${height}`);
-      if (/aspect\s*:/.test(src)) {
-        src = src.replace(/aspect\s*:\s*['"][^'"]+['"]/, `aspect: '${aspect}'`);
+      const replaceBlock = (block: string) => {
+        let b = block.replace(/width\s*:\s*\d+/g, `width: ${width}`).replace(/height\s*:\s*\d+/g, `height: ${height}`);
+        if (/aspect\s*:/.test(b)) {
+          b = b.replace(/aspect\s*:\s*['"][^'"]+['"]/g, `aspect: '${aspect}'`);
+        } else {
+          b = b.replace(/(height\s*:\s*\d+\s*,)/, `$1\n  aspect: '${aspect}' as '16:9' | '9:16',`);
+        }
+        return b;
+      };
+      if (/export\s+const\s+STUDIO\s*=\s*\{[\s\S]*?\};/.test(src)) {
+        src = src.replace(/export\s+const\s+STUDIO\s*=\s*\{[\s\S]*?\};/, replaceBlock);
       } else {
-        src = src.replace(/(height\s*:\s*\d+\s*,)/, `$1\n  aspect: '${aspect}' as '16:9' | '9:16',`);
+        src = replaceBlock(src);
       }
       fs.writeFileSync(cfgPath, src);
     } catch {
@@ -210,29 +229,50 @@ function diffArtifacts(root: string, before: Map<string, number>): Artifact[] {
  */
 
 /**
- * Validate the 7-beat What If formula, real science backing, and language consistency in episode.json.
+ * Validate the script, source translation fidelity (when imported from :8005), science backing (when standalone),
+ * and language consistency in episode.json.
  */
 export function episodeAudit(episode: any, slug: string): string | null {
   const script = Array.isArray(episode?.script) ? episode.script : [];
-  if (script.length < 4) {
-    return `episode.json.script must follow the What If formula (at least 4 beats: cold-open demos, the premise/title card, the sourced science turn, and the closing question); found ${script.length}.`;
+  const hasSourceVideo = Boolean(episode?.source?.videoId);
+  const minBeats = hasSourceVideo ? 1 : 4;
+  if (script.length < minBeats) {
+    return `episode.json.script must contain at least ${minBeats} beat(s); found ${script.length}.`;
   }
   const fullText = script.map((b: any) => String(b?.text ?? '')).join(' ');
   if (/\bTODO\b/i.test(fullText)) {
-    return `episode.json.script still contains "TODO": write the complete narration before running the pipeline.`;
+    return `episode.json.script still contains "TODO": write the complete narration (or run whatif_run { step: "source", args: ["--pick", "hook", "--apply"] }) before running the pipeline.`;
   }
+
+  const scriptWords = fullText
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const sourceWords = Number(episode?.source?.words ?? 0);
+  if (hasSourceVideo && sourceWords >= 40 && scriptWords < Math.floor(sourceWords * 0.75)) {
+    return (
+      `episode.json.script (${scriptWords} words) shortened or rewrote the :8005 translation proposal (${sourceWords} words). ` +
+      `Do NOT shorten or rewrite the server's translation proposal (projects can last several minutes): keep the full French narration from out/${slug}/source.fr.md ` +
+      `by running whatif_run { episode: "${slug}", step: "source", args: ["--pick", "hook", "--apply"] }.`
+    );
+  }
+
   const science = Array.isArray(episode?.science) ? episode.science : [];
-  if (
-    !science.length ||
-    science.some(
-      (s: any) =>
-        !String(s?.claim ?? '').trim() ||
-        !String(s?.working ?? '').trim() ||
-        !String(s?.source ?? '').trim() ||
-        /\bTODO\b/i.test(`${s?.claim ?? ''} ${s?.working ?? ''} ${s?.source ?? ''}`),
-    )
-  ) {
-    return `episode.json.science must contain at least one real, worked-out fact with non-TODO "claim", "working" and "source".`;
+  const nonTodoScience = science.filter((s: any) => !/\bTODO\b/i.test(`${s?.claim ?? ''} ${s?.working ?? ''} ${s?.source ?? ''}`));
+  if (!hasSourceVideo) {
+    if (
+      !nonTodoScience.length ||
+      science.some(
+        (s: any) =>
+          !String(s?.claim ?? '').trim() ||
+          !String(s?.working ?? '').trim() ||
+          !String(s?.source ?? '').trim() ||
+          /\bTODO\b/i.test(`${s?.claim ?? ''} ${s?.working ?? ''} ${s?.source ?? ''}`),
+      )
+    ) {
+      return `episode.json.science must contain at least one real, worked-out fact with non-TODO "claim", "working" and "source".`;
+    }
   }
 
   // Language consistency: if the narration is in French, the title and beat 2 must not keep "WHAT IF YOU COULD" in English
@@ -307,6 +347,9 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const ROOM_SETS = new Set([
     'study',
     'kitchen',
+    'restaurant',
+    'cafe',
+    'bistro',
     'classroom',
     'stairwell',
     'rooftop',
@@ -459,9 +502,19 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
   if (step === 'stills' || step === 'board' || step === 'motiongrid' || step === 'render') {
     const shots = (episode?.shots ?? []) as any[];
     if (shots.length && shots.every((sh) => /placeholder/i.test(String(sh.note ?? ''))))
-      return `${shots.length} placeholder shot(s) only: the scaffold's generic single shot has nothing to do with the script. Run whatif_run { step: "shotlist" } to cut the words into 9-14 shots, write one component per shot in shots.tsx, then stills`;
+      return `${shots.length} placeholder shot(s) only: the scaffold's generic single shot has nothing to do with the script. Run whatif_run { step: "shotlist" } to cut the words into shots, write DIRECTOR.md and shots.tsx, then stills`;
     if (staleTimeline)
       return `timeline.json is still the placeholder (${timeline?.segments?.length ?? 1} segment): run whatif_run { step: "voice" } then { step: "plan" } first, or every shot renders at 0.0 s`;
+    const directorPath = path.join(src, 'DIRECTOR.md');
+    const directorText = fs.existsSync(directorPath) ? fs.readFileSync(directorPath, 'utf8').trim() : '';
+    if (directorText.length < 200) {
+      return (
+        `src/episodes/${slug}/DIRECTOR.md is missing or incomplete (${directorText.length} chars): before rendering stills or video, write a real Réalisation & Mise en Scène document in src/episodes/${slug}/DIRECTOR.md (>= 200 chars) covering:\n` +
+        `1. Architecture des décors en profondeur (arrière-plan, plan moyen mobilier/table <DiningTable>/<Desk>, premier plan),\n` +
+        `2. Casting & looks des personnages (makeLook),\n` +
+        `3. Découpage plan par plan : cadrage (plans à deux avec tableSit quand deux personnages discutent à table), placement, et chorégraphie physique des bras/mains quand un personnage tient, prend ou pose un objet (handRProp, handWorld, reachPose, grabAt — jamais d'objet flottant loin des mains).`
+      );
+    }
     const auditErr = shotsAudit(projectRoot, slug, episode, timeline);
     if (auditErr) return auditErr;
   }
@@ -823,11 +876,15 @@ const runStep: Tool = {
           `PLAN COLLAPSED: ${got} segment(s) for ${wanted.size} shots. plan.py times each shot from an anchor in ` +
           `episode.json.edit, matched against the words it measured in words.json; anchors it cannot find are merged ` +
           `into the previous shot.\nAnchor candidates (substitute for the "at" values, one per shot):\n${anchorHints(ctx.projectRoot, slug)}`;
-      } else if (durSec >= 12 && (cutsPerMin < 24 || longestSec > 3.8)) {
-        failed = true;
-        planWarning =
-          `PACE TOO SLOW: ${got} segments over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest shot ${longestSec.toFixed(1)}s). ` +
-          `The genre requires >= 27 cuts/min and no static shot over 3.5s. Run whatif_run { step: "shotlist" } to cut into 9-14 clause-aligned shots, then run plan again.`;
+      } else {
+        const minCutsPerMin = durSec > 30 ? 12 : 24;
+        const maxShotSec = durSec > 30 ? 7.0 : 3.8;
+        if (durSec >= 12 && (cutsPerMin < minCutsPerMin || longestSec > maxShotSec)) {
+          failed = true;
+          planWarning =
+            `PACE TOO SLOW: ${got} segments over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest shot ${longestSec.toFixed(1)}s). ` +
+            `Run whatif_run { step: "shotlist" } to cut the measured words into clause-aligned shots, then run plan again.`;
+        }
       }
     }
     return {
@@ -870,6 +927,7 @@ const status: Tool = {
       words: has(path.join(dir, 'words.json')),
       timeline: Boolean(tl && (tl.segments?.length ?? 0) > 0 && (tl.shots?.length ?? 0) > 0),
       voice: has(path.join(pub, 'voice.wav')) || has(path.join(pub, 'voice.mp3')),
+      director: has(path.join(dir, 'DIRECTOR.md')),
       stills: stills.length,
       board: has(path.join(out, 'storyboard.jpg')),
       sfx: has(path.join(pub, 'sfx.wav')),

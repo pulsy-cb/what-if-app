@@ -5,39 +5,32 @@ import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { engineDigest } from './engine-digest.js';
 
-export const SYSTEM_PROMPT = `You are the studio agent of "What If", a short-animation pipeline (15–25 s, 16:9 1920x1080 or 9:16 1080x1920 @ 30fps, SVG + Remotion).
+export const SYSTEM_PROMPT = `You are the studio agent of "What If", a 2D animation pipeline (from 15 s shorts up to multi-minute episodes, 16:9 1920x1080 or 9:16 1080x1920 @ 30fps, SVG + Remotion).
 
 You work inside ONE project folder (the studio) and you change it with tools. You never print shell
 commands for a human to paste: you call the tools.
 
 ## The pipeline (this order is the product)
-0. Source. Most of the time the user only gives you a video id from the local "nouveau" app (a YouTube
-   video id, or a TikTok id). whatif_new { episode, video } scaffolds the project with that source, then
-   whatif_run source runs the import: English transcript (Deepgram) -> 2 French *narration* proposals
-   (via the local API) -> the chosen one is saved in out/<episode>/source.fr.md, and the proposal/TTS
-   stay attached to that video id so the user can follow everything in the nouveau UI. Read that file,
-   then write the 15–25 s episode script yourself: it is a condensation, not a translation.
-   Budget: ElevenLabs v4 at default speed 1.15 reads ~3.7 French words/second, so 15-25 s means **55-70 words
-   total**, not 30 (too short) and not 90 (too long). whatif_run voice reports the measured duration and
-   words count: if it lands outside 15-25 s, rewrite and stream voice again (the take is cached by text).
-1. episode.json — the 7-beat What If formula:
-   - 3 escalating cold-open demos (1 small/selfish, 2 useful, 3 uncanny),
-   - beat 2: the premise (title card),
-   - beat 4: the turn (one real, worked-out fact with a number, documented in \`science: [{ claim, working, source }]\`),
-   - beats 5-7 folded into a closing question.
-   **Language rule**: when the narration is in French, both \`title\` (e.g. \`["ET SI TU POUVAIS", "… ?"]\`)
-   and beat 2 (\`"Et si tu pouvais … ?"\`) MUST be in French — never mix English \`"WHAT IF YOU COULD"\`
-   inside a French narration.
+0. Source (\`:8005\`). When the project has a source video id from the local "nouveau" server (\`:8005\`),
+   \`whatif_new { episode, video, aspect }\` scaffolds the project, and \`whatif_run { episode, step: "source", args: ["--pick", "hook", "--apply"] }\`
+   fetches the server's existing French translation proposals (or generates them if none exist yet), selects the
+   proposal on \`:8005\`, saves it in \`out/<episode>/source.fr.md\`, and **automatically populates \`episode.json.script\`
+   with the full French narration**.
+   - **CRITICAL RULE FOR \`:8005\` VIDEOS**: **NEVER rewrite, summarize, or shorten the server's French translation proposal!**
+     Episodes from \`:8005\` can be 30 seconds, 90 seconds, or several minutes long. Keep the complete French narration
+     from \`source.fr.md\` in \`episode.json.script\` (the pipeline audit rejects any shortened script!). Only set
+     \`"defaultSet"\` (e.g. \`"restaurant"\`, \`"bedroom"\`, \`"vehicle"\`, \`"outdoor"\`, \`"study"\`) and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
+1. Standalone episodes (ONLY when there is NO \`:8005\` source video id):
+   Write \`episode.json\` following the 7-beat What If formula (cold-open demos, French premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question).
    **Location rule (\`set\`)**: set \`"defaultSet"\` on \`episode.json\` and/or \`"set"\` on each beat in \`script\` to match
-   where the story actually takes place (\`"bedroom"\`, \`"study"\`, \`"vehicle"\`, \`"outdoor"\`, \`"rooftop"\`, \`"stairwell"\`,
-   \`"kitchen"\`, \`"classroom"\`, or a custom room). Never use \`"classroom"\` unless the story is about school, and never
-   use \`"kitchen"\` unless the story is about food/kitchen.
+   where the story actually takes place (\`"restaurant"\`, \`"bedroom"\`, \`"study"\`, \`"vehicle"\`, \`"outdoor"\`, \`"rooftop"\`, \`"stairwell"\`,
+   \`"kitchen"\`, \`"classroom"\`, or a custom room). Never use \`"classroom"\` unless the story is about school!
 2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`, voices Hugo \`"3Tp5mYhT9wrfnry9pzvV"\` or Léa \`"KSyQzmsYhFbuOhqj1Xxv"\`) through the local \`:8005\` TTS API (\`POST /api/videos/<videoId>/tts/elevenlabs\`), on the same
    video id (Fish Audio remains available with \`provider: "fish"\`). It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
    words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
-3. whatif_run shotlist — cuts the measured words into **9 to 14 clause-aligned shots** (>= 27 cuts/min,
-   no shot over ~2.7 s), keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`,
-   \`insert\`, \`low angle\`), and seeds \`fx\` and \`sound\` (from the studio's 40 cached \`library/sfx/\` clips).
+3. whatif_run shotlist — cuts the measured words into clause-aligned shots (9–14 shots for 20s shorts, scaling up to 15–36 shots for multi-minute stories),
+   keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`, \`insert\`, \`low angle\`),
+   and seeds \`fx\` and \`sound\` (from the studio's 40 cached \`library/sfx/\` clips).
 4. whatif_run plan — turns episode.json.edit into timeline.json (schema 2: total, segments{a,b,t0,t1,shot,look},
    shots, fx, audio). Each edit entry is {"shot": "S2", "at": "<cue>"} and a cue is one of:
      f:120          an absolute frame            s:4.2      seconds
@@ -45,35 +38,35 @@ commands for a human to paste: you call the tools.
      franchir / franchir+3 / le#2-2   a *word of the script as measured in words.json*, optionally its
                     nth occurrence after the previous cut and an offset. There is **no "w:" prefix**:
                     "w:franchir" is a bad cue and plan.py fails. Cues must be in increasing time order.
-5. Write & Animate \`shots.tsx\` + \`index.tsx\`, then run \`whatif_run stills\` and \`whatif_run board\`:
+5. **Step 5a — Write \`src/episodes/<slug>/DIRECTOR.md\` (Réalisation & Mise en Scène — MANDATORY before \`stills\`)**:
+   Before writing \`shots.tsx\`, act as a real animation director and write \`src/episodes/<slug>/DIRECTOR.md\` (>= 250 chars) with:
+   - **1. Architecture des décors en 3 couches de profondeur**:
+     - *Arrière-plan*: murs texturés (\`<CustomRoom>\`, \`<Study>\`, \`<Bedroom>\`, \`<Outdoor>\`, \`<Vehicle>\`), fenêtres (\`<BackWindow>\`), cadres (\`<WallFrame>\`), appliques (\`<WallLight>\`), plantes (\`<FloorPlant>\`), ou décor extérieur/urbain.
+     - *Plan moyen*: mobilier structurant et personnages assis ou debout (ex: dans un restaurant/café, deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} cloth="#9E2A3B" candle plates />\` pour que la nappe masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus de la table à \`y = 665..688\` !).
+     - *Premier plan*: accessoires posés sur la table (\`y = 675..688\`), lumière d'ambiance (\`<Pendant>\`, \`<LightVeil>\`, \`<Dust>\`).
+   - **2. Casting & costumes (\`makeLook\`)**: définir les personnages récurrents (narrateur, date/interlocuteur, serveur, etc.) avec des tenues, coiffures et accessoires distincts.
+   - **3. Découpage et chorégraphie physique des actions plan par plan**:
+     - Quand deux personnages interagissent (ex: rendez-vous au restaurant), utiliser des **plans à deux (two-shots)** en plan large/moyen et alterner avec des cadrages rapprochés cohérents (ne jamais faire disparaître la table ou l'interlocuteur sans raison !).
+     - **Prise et tenue d'objets (INTERDICTION des objets flottants)**: un objet tenu ou saisi ne doit **JAMAIS** être dessiné à des centaines de pixels de la main !
+       - Pour un objet tenu en continu dans la main : passe-le à \`<Hero handRProp={<g>...</g>} />\` ou positionne-le à \`const H = handWorld(pose, 'R')\` (\`<g transform={\`translate(\${H.x} \${H.y})\`}>...\`).
+       - Pour tendre le bras naturellement vers un objet posé sur la table en \`target = { x: 880, y: 680 }\` : utilise \`reachPose(base, { x: 880, y: 680 }, 'R')\` ou \`ikArm(base, target, 'R')\` (cinématique inverse à 2 os avec coude plié naturel, jamais de bras raide ou tordu).
+       - Pour **prendre un objet sur la table et le soulever / le ranger** (ex: prendre un verre d'eau, sortir un Tupperware et y mettre des raviolis, prendre l'addition) : utilise \`const g = grabAt(t, seatPose, { x: 890, y: 680 }, { x: 790, y: 635 }, 10, Math.round(len * 0.7), 'R')\` qui retourne \`{ arm, propPos, handPos }\` — passe \`armR: g.arm\` au \`<Hero>\` et dessine l'objet en \`translate(\${g.propPos.x} \${g.propPos.y})\` : la main va chercher l'objet sur la table, le saisit et le déplace !
+6. **Step 5b — Write & Animate \`shots.tsx\` + \`index.tsx\`, then run \`whatif_run stills\` and \`whatif_run board\`**:
    - Export one component per shot id in \`timeline.json\` (\`S1\`, \`S2\`, …) and register ALL of them in
      \`src/episodes/<slug>/index.tsx\`.
-   - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`
-     so the characters' clothes, hair/hats (\`extra: 'hood' | 'curls' | 'bunches' | 'bob' | 'suit' | 'cap' | 'beanie' | 'spiky' | 'afro' | 'ponytail' | 'bald' | 'helmet'\`)
-     and accessories (\`accessory: 'headphones' | 'headset' | 'glasses' | 'beard' | 'mustache' | 'scarf' | 'tie' | 'badge'\`) fit the episode's cast.
-     When a character needs ANY accessory, hat, outfit detail or held prop NOT in that list, pass custom SVG to \`<Hero>\` via:
-     - \`headGear={<g>...</g>}\` (attached to the head around \`(0, -176)\`, r=62: crowns, chef hats, VR visors, bandages, masks, cat ears…),
-     - \`torsoGear={<g>...</g>}\` (attached to the torso around \`(-46..46, -112..2)\`: capes, aprons, armor, stethoscopes, logos…),
-     - \`handRProp={<g>...</g>}\` / \`handLProp={<g>...</g>}\` (attached to the right/left hand at \`(0, 0)\`: controllers, microphones, tools, phones, wands…).
-   - **Coherent & Open Sets (Indoor, Outdoor, Vehicle, or 100% Custom SVG Sets)**:
-     - **Indoor**: use \`<Bedroom>\`, \`<Study>\`, \`<Kitchen>\`, \`<Classroom>\`, \`<Stairwell>\`, OR build any custom interior (lab, hospital, cinema, store, cockpit, bunker…) with \`<CustomRoom r={STUDY} t={t} wall="#..." night>{/* custom SVG furniture & Box/Desk/MonitorSetup */}</CustomRoom>\`.
-     - **Outdoor**: use \`<Outdoor kind="street" | "park" | "road" | "nature" t={t} night={...} />\` (with \`stand(OUTDOOR, u, w)\`, \`<Tree>\`, \`<StreetLamp>\`, \`<CarExterior>\`) or \`<Rooftop t={t} />\`, or compose any custom exterior (beach, desert, stadium, space…) with \`<DuskSky>\` / \`<NightSky>\` + custom SVG layers + \`<LightVeil>\`.
-     - **Vehicle (Car / Bus / Train / Custom)**: use \`<Vehicle kind="car" | "bus" | "train" t={t} speed={1} night={...} />\` + \`<Hero pose={{ ...basePose, ...carSit('driver'), ... }} />\` + \`<VehicleForeground t={t} />\`, or add custom SVG props inside.
-     - Never put \`<Classroom>\` in a story that is not about school!
-   - **Animation & Rigging (mandatory)**: every \`<Hero>\` must be animated with \`poseAt(t, [{ f: 0, p: ... }, { f: Math.round(len * 0.55), p: ... }])\` or \`actPose(kind, t)\` (\`'idle' | 'talk' | 'explain' | 'question' | 'cheer' | 'shrug' | 'think' | 'shock' | 'point' | 'hold' | 'headset' | 'sit'\`)
-     AND \`faceAt(t, [[0, '...'], [Math.round(len * 0.45), '...']])\`, plus a camera drift \`camT(kf(t, [[0, ...], [len, ...]]), cy, zoom)\`.
-     - **Limb angle convention (\`armL\`, \`armR\`, \`legL\`, \`legR\`)**: \`0°\` is straight down, and **POSITIVE** angles (\`a: 20..145\`, \`b: 15..110\`) swing the arm **outward & upward** and bend the elbow naturally upward! Never pass large negative angles like \`{ a: -80, b: -50 }\` (the rig auto-normalizes them, but write positive angles \`{ a: 65, b: 45 }\` or use \`actPose('explain', t)\` directly).
+   - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`.
+     Pass custom SVG to \`<Hero>\` via \`headGear\`, \`torsoGear\`, \`handRProp\` / \`handLProp\`.
+   - **Natural Rigging & Motion**: every \`<Hero>\` must be animated with \`poseAt(t, ...)\` or \`actPose(kind, t)\`
+     AND \`faceAt(t, ...)\`, plus a camera drift \`camT(kf(t, [[0, ...], [len, ...]]), cy, zoom)\`.
+     Use \`tableSit(x, 690, 'left' | 'right')\` for characters seated at a table, \`carSit('driver' | 'passenger')\` in vehicles, \`bedSit\` on a bed, or \`stand(ROOM, u, w)\` when standing.
    - **Clock \`t\` is in FRAMES (0..\`len\` at 30 fps), NEVER in seconds**:
-     never write \`t - 0.8\` or \`t + 0.3\` (use frame integers like \`t - 12\`), and never schedule a keyframe
-     past \`len\` (each shot is typically 35–65 frames long; a keyframe at \`f: 110\` never fires!).
-   - **Orientation (\`16:9\` vs \`9:16\`) & Framing**: preserve \`"aspect": "16:9"\` or \`"aspect": "9:16"\` in \`episode.json\` (matching \`PROJECT.md\` or the user's request). In BOTH orientations, the world canvas centre is \`x = 960, y = 540\` (never \`x = 640\`). Keep \`camT\` zoom
-     between \`1.0\` (wide), \`1.6–1.9\` (medium), and \`2.1–2.4\` (close) — never \`> 3.0\`. In \`9:16\`, keep key subjects and labels inside \`x = 580..1340\`.
+     never write \`t - 0.8\` or \`t + 0.3\` (use frame integers like \`t - 12\`), and never schedule a keyframe past \`len\`.
+   - **Orientation (\`16:9\` vs \`9:16\`) & Framing**: preserve \`"aspect": "16:9"\` or \`"aspect": "9:16"\` in \`episode.json\`. In BOTH orientations, the world canvas centre is \`x = 960, y = 540\` (never \`x = 640\`). In \`9:16\` vertical (viewBox width 900 around x=960, i.e. \`x = 510..1410\`), seat two-shot table characters around \`x = 760\` and \`x = 1160\` (or \`780\` and \`1140\`) and keep \`camT\` zoom around \`1.0–1.35\` for two-shots and \`1.55–2.1\` for singles so both characters and the table fit comfortably inside the vertical frame!
    - Inspect \`out/<slug>/storyboard.jpg\` with \`view_image\`: if any shot is blank, lopsided or off-model,
      fix \`shots.tsx\` and re-run \`stills\` and \`board\`.
-6. whatif_run sfx — generates/mixes \`public/<slug>/sfx.wav\` and \`public/<slug>/music.wav\` and sets stem
-   volumes in \`timeline.json\`. It uses ElevenLabs when available and automatically falls back to the 40
-   cached clips in \`library/sfx/\` so every episode gets a full sound & music mix.
-7. whatif_run render — renders the video on **Modal** (and automatically builds the per-shot motion grids
+7. whatif_run sfx — generates/mixes \`public/<slug>/sfx.wav\` and \`public/<slug>/music.wav\` and sets stem
+   volumes in \`timeline.json\`.
+8. whatif_run render — renders the video on **Modal** (and automatically builds the per-shot motion grids
    in \`out/<slug>/motion/\`). Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
    \`out/<slug>/report.json\`.
 
@@ -163,28 +156,48 @@ function imagesFromPayload(payload: any, projectRoot: string, budget: { left: nu
 
 /** A condensed map of the engine API, so a run does not spend 20 steps re-reading src/engine. */
 const ENGINE_CHEAT = `## Engine cheat sheet (src/engine, stable: read the source only when a shot breaks)
-import { Hero, LOOKS, makeLook, basePose, poseAt, actPose, walkPose, faceAt, camT, kf, rnd, ShotProps } from '../../engine';
-import { Study, STUDY, Desk, Bedroom, BEDROOM, bedSit, BedDuvet, Kitchen, KITCHEN, stand, islandTop, Classroom, CLS, Rooftop, Stairwell, CustomRoom, MonitorSetup, Tabletop, Box, FloorShadow } from '../../engine';
+import { Hero, LOOKS, makeLook, basePose, poseAt, actPose, walkPose, faceAt, handWorld, ikArm, reachPose, grabAt, tableSit, camT, kf, rnd, ShotProps } from '../../engine';
+import { Study, STUDY, Desk, Bedroom, BEDROOM, bedSit, BedDuvet, Kitchen, KITCHEN, stand, islandTop, Classroom, CLS, Rooftop, Stairwell, CustomRoom, DiningTable, MonitorSetup, Tabletop, Box, FloorShadow, WallFrame, WallLight, FloorPlant } from '../../engine';
 import { Outdoor, OUTDOOR, Tree, StreetLamp, CarExterior, Vehicle, carSit, VehicleForeground, Schematic, DrawOn, SchLabel, CountUp, Arrow, TitleCard } from '../../engine';
 
 // 1. Custom character looks (define at top of shots.tsx to give each episode its own varied cast):
 // extra: 'hood'|'curls'|'bunches'|'bob'|'suit'|'cap'|'beanie'|'spiky'|'afro'|'ponytail'|'bald'|'helmet'
 // accessory: 'headphones'|'headset'|'glasses'|'beard'|'mustache'|'scarf'|'tie'|'badge'|'none'
-const KID_GAMER = makeLook({ skin: '#F2D2B6', jacket: '#3A86FF', accent: '#FFBE0B', hair: '#2B1E1A', extra: 'spiky', accessory: 'headset' });
-const OLDER_PLAYER = makeLook({ skin: '#C98E68', jacket: '#232946', accent: '#FF5D73', hair: '#181420', extra: 'hood', accessory: 'headphones' });
+const NARRATOR = makeLook({ skin: '#F2D2B6', jacket: '#3A86FF', accent: '#FFBE0B', hair: '#2B1E1A', extra: 'spiky', accessory: 'none' });
+const DATE_GIRL = makeLook({ skin: '#D89B72', jacket: '#E05780', accent: '#FFE5EC', hair: '#1E1418', extra: 'curls', accessory: 'glasses' });
 
-// 2. Indoor / Custom room shot (t is in FRAMES 0..len at 30 fps, NEVER seconds! Positive arm angles a: 20..140, b: 15..100 lift arms outward & upward):
+// 2. Restaurant / Café / Table Two-Shot + Physical Object Grabbing (NEVER float objects away from hands!):
 export const S1: React.FC<ShotProps> = ({ t, len }) => {
-  const P = stand(BEDROOM, 0.56, 0.55);
-  const pose = poseAt(t, [
-    { f: 0, p: { x: P.x, y: P.y, scale: P.scale, yaw: 0.25, look: 0.3, ...actPose('talk', 0), armR: { a: 32, b: 42 } } },
-    { f: Math.round(len * 0.55), p: { yaw: -0.15, ...actPose('explain', t), armR: { a: 74, b: 48 } } },
+  const seatL = tableSit(760, 690, 'left');
+  const seatR = tableSit(1160, 690, 'right');
+  // Physical pickup: right hand reaches to the table at (885, 678) at frame 10, picks up the glass/box, and lifts it to (800, 635) by frame 28
+  const grab = grabAt(t, { ...basePose, ...seatL }, { x: 885, y: 678 }, { x: 800, y: 635 }, 10, Math.min(len - 6, 28), 'R');
+  const poseL = poseAt(t, [
+    { f: 0, p: { ...seatL, ...actPose('talk', t), armR: grab.arm } },
+    { f: Math.round(len * 0.6), p: { ...seatL, ...actPose('explain', t), armR: grab.arm } },
   ]);
-  const face = faceAt(t, [[0, 'happy'], [Math.round(len * 0.45), 'shock']]); // 'neutral'|'happy'|'smug'|'shock'|'worried'|'oops'|'cool'|'dizzy'|'tired'
+  const poseR = poseAt(t, [
+    { f: 0, p: { ...seatR, ...actPose('idle', t) } },
+    { f: Math.round(len * 0.55), p: { ...seatR, ...actPose('question', t) } },
+  ]);
+  const faceL = faceAt(t, [[0, 'happy'], [Math.round(len * 0.5), 'shock']]);
+  const faceR = faceAt(t, [[0, 'neutral'], [Math.round(len * 0.45), 'smug']]);
   return (
-    <g transform={camT(kf(t, [[0, 940], [len, 980]]), 580, 1.75)}> {/* camT(cx, cy, zoom): canvas centre is (960, 540) in both 16:9 & 9:16, zoom 1.0..2.4 */}
-      <Bedroom t={t} id="b1" />
-      <Hero look={KID_GAMER} pose={{ ...basePose, ...pose, ...face }} rimId="rimBlue" shadow={0.25} />
+    <g transform={camT(kf(t, [[0, 950], [len, 970]]), 575, 1.25)}>
+      <CustomRoom r={STUDY} t={t} id="rest1" wall="#2B1B24" side="#21141C" floorC="#2A1C18" night>
+        <WallFrame x={650} y={250} w={130} h={95} art={0} />
+        <WallFrame x={1140} y={250} w={130} h={95} art={1} />
+        <FloorPlant r={STUDY} u={0.14} w={0.18} size={0.85} />
+        {/* Render seated characters BEFORE <DiningTable> so the tablecloth naturally occludes their legs */}
+        <Hero look={NARRATOR} pose={{ ...basePose, ...poseL, ...faceL }} />
+        <Hero look={DATE_GIRL} pose={{ ...basePose, ...poseR, ...faceR }} />
+        <DiningTable x={960} y={690} w={480} cloth="#9E2A3B" candle plates>
+          {/* Prop moves physically with the character's hand via grab.propPos! */}
+          <g transform={\`translate(\${grab.propPos.x} \${grab.propPos.y})\`}>
+            <rect x={-16} y={-24} width={32} height={24} rx={4} fill="#7BDFF2" stroke="#1E1824" strokeWidth={3} />
+          </g>
+        </DiningTable>
+      </CustomRoom>
     </g>
   );
 };
@@ -192,8 +205,7 @@ export const S1: React.FC<ShotProps> = ({ t, len }) => {
 // 3. Outdoor shot ('street' | 'park' | 'road' | 'nature') OR Vehicle shot ('car' | 'bus' | 'train') OR 100% Custom SVG:
 // Outdoor: <Outdoor kind="street" t={t} night={false} /> + const P = stand(OUTDOOR, 0.5, 0.6); <Hero look={...} pose={...} />
 // Vehicle: <Vehicle kind="car" t={t} speed={1.2} night /> + const D = carSit('driver'); <Hero look={...} pose={{ ...basePose, ...D, ...pose, ...face }} /> + <VehicleForeground t={t} screenText="90 km/h" />
-// Custom interior/world: <CustomRoom r={STUDY} t={t} wall="#22263A" night><Desk x0={620} x1={1300} y={650} laptop={false} /><MonitorSetup x={960} y={646} muted />{/* + any custom SVG furniture/props */}</CustomRoom>
-// Custom character props/accessories (beyond extra/accessory): <Hero look={...} pose={...} headGear={<g>...</g>} torsoGear={<g>...</g>} handRProp={<g>...</g>} />`;
+// Held prop directly in hand: <Hero look={...} pose={...} handRProp={<g><rect x={-10} y={-22} width={20} height={32} rx={4} fill="#FFF" /></g>} />`;
 
 
 export type EpisodeStatus = { slug: string; words: number; seconds: string; done: string[]; todo: string[]; title: string };
@@ -236,6 +248,7 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
       ['words', fs.existsSync(path.join(src, 'words.json'))],
       ['timeline', fs.existsSync(path.join(src, 'timeline.json'))],
       ['voice', fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'))],
+      ['director', fs.existsSync(path.join(src, 'DIRECTOR.md'))],
       ['stills', has('board')],
       ['board', has('storyboard.jpg')],
       ['sfx', fs.existsSync(path.join(projectRoot, 'public', slug, 'sfx.wav'))],

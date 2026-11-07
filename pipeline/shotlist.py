@@ -47,6 +47,11 @@ KEYWORDS = {
         "cuisine", "cuisiner", "tasse", "cafe", "manger", "couteau", "assiette", "four", "frigo",
         "cookie", "biscuit", "pizza", "repas", "petit-dejeuner", "diner", "recette",
     ],
+    "restaurant": [
+        "restaurant", "resto", "serveur", "serveuse", "menu", "addition", "table", "ravioli",
+        "raviolis", "tupperware", "soda", "verre", "plat", "date", "patron", "cheque", "pourboire",
+        "commande", "commander", "boisson", "entree", "dessert", "bistrot",
+    ],
     "vehicle": [
         "voiture", "auto", "volant", "route", "conduire", "conduit", "conducteur", "passager",
         "siege", "bus", "train", "metro", "trajet", "embouteillage", "phare", "autoroute", "frein",
@@ -176,6 +181,7 @@ def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], d
 COMPANION_SETS: dict[str, str] = {
     "bedroom": "study",
     "study": "bedroom",
+    "restaurant": "restaurant",
     "vehicle": "outdoor",
     "outdoor": "rooftop",
     "rooftop": "outdoor",
@@ -266,6 +272,7 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
     k = min(k, n // 2)
     total_s = max(1.0, float(words[-1].get("e", 0)) - float(words[0].get("s", 0)))
     ideal_dur = total_s / k
+    max_dur = max(2.8, ideal_dur * 1.55)
 
     b_scores = [boundary_score(words, i, beat_map) for i in range(n)]
 
@@ -278,8 +285,8 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
         pen = abs(dur - ideal_dur) * 14.0
         if dur < 1.0:
             pen += (1.0 - dur) * 80.0
-        elif dur > 2.7:
-            pen += (dur - 2.7) * 55.0
+        elif dur > max_dur:
+            pen += (dur - max_dur) * 55.0
         return (b_scores[i] if i > 0 else 0.0) - pen
 
     # dp[s][j]: best score for partitioning words[0:j] into `s` segments
@@ -381,13 +388,20 @@ def main() -> int:
     total_frames = round(float(words[-1].get("e", 0)) * FPS) or (len(words) * 12)
     seconds = total_frames / FPS
 
-    # Genre pace: >= 27 cuts/min -> 1 cut every ~1.5s, minimum 9 shots for a 15-25s episode
-    k = args.shots or max(9, min(14, round(seconds / 1.5), len(words) // 3))
+    # Genre pace: for short 15-28s clips, 9-14 shots (~1.6s avg). For multi-minute stories, scale smoothly up to 36 shots (~3.2s avg).
+    if args.shots:
+        k = args.shots
+    elif seconds <= 28:
+        k = max(9, min(14, round(seconds / 1.6), len(words) // 3))
+    else:
+        k = max(12, min(36, round(seconds / 3.2), len(words) // 5))
 
     keys = title_words(ep)
     beat_map, beat_sets = beat_starts_in_words(ep, words)
     primary_set, secondary_set = infer_story_sets(ep, words, root, args.slug)
     bounds = choose_cuts(words, k, beat_map)
+    sci_list = ep.get("science") or []
+    has_science = bool(sci_list) and not any("todo" in str(s).lower() for s in sci_list)
 
     shots: list[dict] = []
     edit: list[dict] = []
@@ -433,8 +447,8 @@ def main() -> int:
         explicit_beat_set = next((beat_sets[idx] for idx in range(start, end) if idx in beat_sets), "")
 
         is_title = i == title_idx
-        is_turn = "4" in b_label or "turn" in b_label.lower() or "cost" in b_label.lower()
-        has_digits = any(re.search(r"\d", t) for t in text)
+        is_turn = has_science and ("4" in b_label or "turn" in b_label.lower() or "cost" in b_label.lower())
+        has_digits = has_science and any(re.search(r"\d", t) for t in text)
         if is_title:
             room = explicit_beat_set or (primary_set if primary_set != DIAGRAM else "rooftop")
         elif is_turn or (has_digits and i > title_idx and previous_set != DIAGRAM):

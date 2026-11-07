@@ -42,6 +42,20 @@ def blocks(text: str, limit: int = MAX_BLOCK_WORDS) -> List[Dict[str, Any]]:
     return out
 
 
+def make_title_lines(raw_title: str) -> List[str]:
+    """Turn a French proposal title into two short uppercase title-card lines."""
+    clean = re.sub(r"\s+", " ", (raw_title or "").strip()).upper()
+    words = clean.split()
+    if not words:
+        return ["HISTOIRE VRAIE", "…"]
+    if len(words) <= 4:
+        mid = max(1, len(words) // 2)
+        return [" ".join(words[:mid]), " ".join(words[mid:]) or "…"]
+    short = words[:7]
+    mid = max(2, len(short) // 2)
+    return [" ".join(short[:mid]), " ".join(short[mid:])]
+
+
 def usable(proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """`source_transcript` is the English transcript reused as a proposal: never the French narration."""
     return [p for p in proposals if (p.get("prompt_type") or "") != "source_transcript"]
@@ -76,11 +90,12 @@ def main(argv: List[str]) -> int:
         proj.result(ok=False, error="no video id: pass --video <video_id> or set source.videoId in episode.json")
         return 2
 
-    want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal")
+    want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal") or "hook"
     script_mode = proj.arg(argv, "--script-mode", "elevenlabs") or "elevenlabs"
     # nouveau picks its own default provider, which may have no quota: default to agy/gemini-3.8-flash-medium
     model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or "agy/gemini-3.8-flash-medium"
-    apply_script = "--apply" in argv
+    # By default, apply the chosen server translation proposal directly to episode.json.script so it is never shortened
+    apply_script = "--no-apply" not in argv
     want_generate = "--generate" in argv
     nv = Nouveau()
 
@@ -213,6 +228,16 @@ def main(argv: List[str]) -> int:
         if apply_script:
             ep["script"] = blocks(text)
             source["appliedBlocks"] = len(ep["script"])
+            chosen_title = str(chosen.get("title") or title).strip()
+            if chosen_title:
+                ep["topic"] = chosen_title
+                cur_title = ep.get("title")
+                if not cur_title or cur_title == ["ET SI TU POUVAIS", "… ?"]:
+                    ep["title"] = make_title_lines(chosen_title)
+            # Clear placeholder TODO science entries on imported narrative videos
+            sci = ep.get("science")
+            if isinstance(sci, list) and any("TODO" in str(s) for s in sci):
+                ep["science"] = []
         proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
         proj.save_json(out / "source.json", {**payload, "selected": source, "text": text})
         payload["scriptWords"] = source["words"]

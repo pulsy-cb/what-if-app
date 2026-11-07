@@ -492,10 +492,11 @@ function kickoffMessage({ episode, video, aspect }) {
   const fmt = aspect === '9:16' ? '9:16 vertical (1080×1920)' : '16:9 paysage (1920×1080)';
   return [
     `Nouvel épisode « ${episode} » (format ${fmt}) à partir de la vidéo nouveau ${video}. Fais tout, du début à la fin, sans me demander de validation.`,
-    `1. whatif_run {step:"source"} (args ["--pick","hook","--apply"]) : transcription anglaise, proposition de narration française dans ${episode ? `out/${episode}/source.fr.md` : 'out/<slug>/source.fr.md'}, episode.json rempli.`,
-    `2. Lis ce fichier, puis réécris episode.json en 15-25 s (50 à 60 mots français) sur la formule What If (6 entrées dans script : 3 démos cold open, la prémisse en français "Et si tu pouvais … ?", le turn avec un fait réel sourcé dans science, et la question finale ; title en français ["ET SI TU POUVAIS", "… ?"] ; conserve "aspect": "${aspect || '16:9'}").`,
-    `3. Enchaîne voice, shotlist, plan, écris tous les plans animés dans shots.tsx (avec <Hero>, poseAt ou actPose, faceAt, kf en frames 0..len, centrés autour de x=960) et index.tsx, puis stills et board ; regarde la planche toi-même et corrige les shots si besoin.`,
-    `4. Puis sfx, render et master jusqu'au mp4 final, et résume-moi le résultat (durée, LUFS, fichiers).`,
+    `1. whatif_run {step:"source", args:["--pick","hook","--apply"]} : récupère la proposition de traduction française du serveur :8005 dans out/${episode}/source.fr.md et l'applique directement dans episode.json.script. IMPORTANT : NE RACCOURCIS PAS et NE RÉÉCRIS PAS la traduction du serveur :8005 (un projet peut durer de 20s à plusieurs minutes ; garde l'intégralité du texte traduit dans episode.json.script, règle simplement "defaultSet" selon le lieu de l'histoire et conserve "aspect": "${aspect || '16:9'}").`,
+    `2. Enchaîne voice, shotlist et plan.`,
+    `3. Avant de coder shots.tsx, écris une vraie note de réalisation et mise en scène dans src/episodes/${episode}/DIRECTOR.md : (a) Construction riche des décors en 3 couches de profondeur (arrière-plan détaillé, plan moyen mobilier/table <DiningTable>/<Desk>, premier plan), (b) Casting et costumes (makeLook), (c) Découpage plan par plan avec vrais champs/contrechamps ou plans à deux (tableSit quand deux personnages sont à table) et chorégraphie physique précise des mains/bras quand un personnage prend, tient ou pose un objet (handRProp, handWorld, reachPose, grabAt — aucun accessoire ne doit flotter loin des mains).`,
+    `4. Écris shots.tsx et index.tsx en suivant fidèlement DIRECTOR.md, lance stills et board, inspecte storyboard.jpg avec view_image et corrige si besoin.`,
+    `5. Puis sfx, render et master jusqu'au mp4 final en ${fmt}, et résume-moi le résultat (durée, orientation, LUFS, fichiers).`,
   ].join('\n');
 }
 

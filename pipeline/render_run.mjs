@@ -116,7 +116,13 @@ if (opts.mode === 'bundle') {
 
 if (opts.mode === 'stills') {
   const compId = `${ep.id}Board`;
-  const composition = await selectComposition({ ...base, id: compId });
+  const rawComp = await selectComposition({ ...base, id: compId });
+  const isPortrait = String(ep.aspect || tl.aspect || '').trim() === '9:16';
+  const composition = {
+    ...rawComp,
+    width: isPortrait ? 1080 : Number(tl.width || rawComp.width),
+    height: isPortrait ? 1920 : Number(tl.height || rawComp.height),
+  };
   const shots = Array.isArray(tl.shots) && tl.shots.length ? tl.shots : [{ id: 'one' }];
   const onlySet = new Set(
     String(opts.shots || '')
@@ -146,11 +152,12 @@ if (opts.mode === 'video') {
   const range = parseFrames(opts.frames, total);
   const output = path.resolve(opts.output || path.join(outDir, `${opts.slug}-silent.mp4`));
   fs.mkdirSync(path.dirname(output), { recursive: true });
+  const isPortrait = String(ep.aspect || tl.aspect || '').trim() === '9:16';
   const resolved = {
     ...composition,
     durationInFrames: total,
-    width: Number(tl.width || composition.width),
-    height: Number(tl.height || composition.height),
+    width: isPortrait ? 1080 : Number(tl.width || composition.width),
+    height: isPortrait ? 1920 : Number(tl.height || composition.height),
     fps: Number(tl.fps || composition.fps),
   };
   const tRender = mono();
