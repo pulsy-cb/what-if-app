@@ -137,6 +137,12 @@ def title_words(ep: dict) -> set[str]:
     return {bare_ascii(w) for w in re.findall(r"[\w'-]+", text) if len(bare_ascii(w)) > 3}
 
 
+def strip_tts_tags(text: str) -> str:
+    s = re.sub(r"\[[^\]]*\]", " ", text or "")
+    s = re.sub(r"<[^>]*>", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], dict[int, str]]:
     """Map word indices where each script beat starts -> beat label, and every word index -> beat set (if specified)."""
     out: dict[int, str] = {}
@@ -146,7 +152,7 @@ def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], d
     for b in ep.get("script") or []:
         if not isinstance(b, dict):
             continue
-        btext = str(b.get("text") or "").strip()
+        btext = strip_tts_tags(str(b.get("text") or "").strip())
         blabel = str(b.get("beat") or "").strip()
         bset = str(b.get("set") or "").strip().lower()
         bwords = [bare_ascii(x) for x in re.findall(r"[\w'\u2019-]+", btext) if bare_ascii(x)]

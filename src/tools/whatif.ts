@@ -515,7 +515,7 @@ const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeout
     timeoutMs: 1_200_000,
     desc: 'nouveau video id -> English transcript -> French narration proposals (needs a video id)',
   },
-  voice: { py: 'voice_fish.py', own: true, timeoutMs: 900_000, desc: 'Fish Audio TTS through :8005 + word timings (free tier)' },
+  voice: { py: 'voice_fish.py', own: true, timeoutMs: 900_000, desc: 'ElevenLabs TTS (default: eleven_v4, Hugo/Léa) or Fish Audio through :8005 + Deepgram word timings' },
   shotlist: {
     py: 'shotlist.py',
     own: true,
@@ -582,8 +582,8 @@ const newProject: Tool = {
     const ep: Record<string, any> = EPISODE_STUB(slug, aspect);
     if (input.video) {
       ep.source = { provider: 'nouveau', videoId: input.video };
-      // the voice goes through the local TTS API, on the source video
-      ep.voice = { provider: 'fish', voiceId: 'a688e2ec8bde444a876c160875a61804', modelId: 's2.1-pro-free', speakingRate: 1 };
+      // the voice goes through the local :8005 TTS API (ElevenLabs v4 by default, attached to the source video)
+      ep.voice = { provider: 'elevenlabs', voiceId: '3Tp5mYhT9wrfnry9pzvV', modelId: 'eleven_v4', speakingRate: 1 };
     }
     fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify(ep, null, 1) + '\n');
     fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify(TIMELINE_STUB(slug), null, 1) + '\n');
@@ -622,7 +622,7 @@ const newProject: Tool = {
     if (!fs.existsSync(memory)) {
       fs.writeFileSync(
         memory,
-        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n- aspect: ${aspect} (${aspect === '9:16' ? '1080x1920 vertical' : '1920x1080 landscape'})\n${input.video ? `- source video (nouveau): ${input.video}\n` : ''}- pipeline: source -> script -> voice -> plan -> stills -> board -> sfx -> render -> master (unattended)\n- voice: Fish Audio (free tier) through the local TTS API; ElevenLabs is only used for the SFX\n- render: Modal (out/<slug>/<slug>-raw.mp4), then master.py --skip-render\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
+        `# Project\n\n- skill: ${ctx.skillDir}\n- episode: ${slug}\n- aspect: ${aspect} (${aspect === '9:16' ? '1080x1920 vertical' : '1920x1080 landscape'})\n${input.video ? `- source video (nouveau): ${input.video}\n` : ''}- pipeline: source -> script -> voice -> plan -> stills -> board -> sfx -> render -> master (unattended)\n- voice: ElevenLabs TTS (default: eleven_v4, voice Hugo 3Tp5mYhT9wrfnry9pzvV or Léa KSyQzmsYhFbuOhqj1Xxv) through the local :8005 API\n- render: Modal (out/<slug>/<slug>-raw.mp4), then master.py --skip-render\n\n## Decisions\n\n- (the agent appends decisions here)\n`,
       );
     }
     return {
@@ -636,7 +636,7 @@ const newProject: Tool = {
 const runStep: Tool = {
   name: 'whatif_run',
   description:
-    'Run one pipeline step on an episode: source (import a nouveau video id), voice (Fish Audio through the local TTS API), shotlist (auto shot list from the measured words), plan, stills (Modal), board, sfx (ElevenLabs, costs credits), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
+    'Run one pipeline step on an episode: source (import a nouveau video id), voice (ElevenLabs v4 TTS by default through the local :8005 API), shotlist (auto shot list from the measured words), plan, stills (Modal), board, sfx (ElevenLabs or cached studio library/sfx), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
   policy: 'ask',
   schema: {
     type: 'object',

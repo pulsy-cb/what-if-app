@@ -17,7 +17,7 @@ commands for a human to paste: you call the tools.
    (via the local API) -> the chosen one is saved in out/<episode>/source.fr.md, and the proposal/TTS
    stay attached to that video id so the user can follow everything in the nouveau UI. Read that file,
    then write the 15–25 s episode script yourself: it is a condensation, not a translation.
-   Budget: Fish locked at speakingRate 1 reads ~3.4 French words/second, so 15-25 s means **50-60 words
+   Budget: ElevenLabs v4 at speed 1.0 reads ~3.4 French words/second, so 15-25 s means **50-60 words
    total**, not 30 (too short) and not 80 (too long). whatif_run voice reports the measured duration and
    words count: if it lands outside 15-25 s, rewrite and stream voice again (the take is cached by text).
 1. episode.json — the 7-beat What If formula:
@@ -32,10 +32,9 @@ commands for a human to paste: you call the tools.
    where the story actually takes place (\`"bedroom"\`, \`"study"\`, \`"vehicle"\`, \`"outdoor"\`, \`"rooftop"\`, \`"stairwell"\`,
    \`"kitchen"\`, \`"classroom"\`, or a custom room). Never use \`"classroom"\` unless the story is about school, and never
    use \`"kitchen"\` unless the story is about food/kitchen.
-2. whatif_run voice — Fish Audio (free tier, model s2.1-pro-free) through the local TTS API, on the same
-   video id. It writes public/<episode>/voice.wav and src/episodes/<episode>/words.json: the script's
-   words with the *measured* times (Fish gives no timestamps, so the take is transcribed and realigned).
-   ElevenLabs is only for new SFX clips — never for the voice.
+2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, voices Hugo \`"3Tp5mYhT9wrfnry9pzvV"\` or Léa \`"KSyQzmsYhFbuOhqj1Xxv"\`) through the local \`:8005\` TTS API (\`POST /api/videos/<videoId>/tts/elevenlabs\`), on the same
+   video id (Fish Audio remains available with \`provider: "fish"\`). It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
+   words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
 3. whatif_run shotlist — cuts the measured words into **9 to 14 clause-aligned shots** (>= 27 cuts/min,
    no shot over ~2.7 s), keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`,
    \`insert\`, \`low angle\`), and seeds \`fx\` and \`sound\` (from the studio's 40 cached \`library/sfx/\` clips).
@@ -223,7 +222,13 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
     const dir = path.join(projectRoot, 'out', slug);
     const has = (rel: string) => fs.existsSync(path.join(dir, rel));
     const words = (ep.script ?? []).reduce(
-      (n: number, b: any) => n + String(b.text ?? '').split(/\s+/).filter(Boolean).length,
+      (n: number, b: any) =>
+        n +
+        String(b.text ?? '')
+          .replace(/\[[^\]]*\]/g, ' ')
+          .replace(/<[^>]*>/g, ' ')
+          .split(/\s+/)
+          .filter(Boolean).length,
       0,
     );
     const steps: [string, boolean][] = [

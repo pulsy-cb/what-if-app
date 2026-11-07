@@ -73,11 +73,19 @@ def arg(argv: List[str], name: str, default: Optional[str] = None) -> Optional[s
     return default
 
 
+def strip_tts_tags(text: str) -> str:
+    """Remove ElevenLabs v4 [...] voice directions and <...> prosody tags before word splitting."""
+    s = re.sub(r"\[[^\]]*\]", " ", text or "")
+    s = re.sub(r"<[^>]*>", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def split_words(text: str) -> List[Dict[str, str]]:
     """Text -> [{w, p}] with the punctuation that follows each word (it drives the pause limits).
 
     Same rule as the skill's voice.py, so words.json stays compatible with plan.py.
     """
+    text = strip_tts_tags(text)
     words: List[Dict[str, str]] = []
     cur: Optional[Dict[str, str]] = None
     for ch in text:

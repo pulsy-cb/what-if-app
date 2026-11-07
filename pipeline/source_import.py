@@ -18,7 +18,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 import proj
-from nouveau_client import FISH_MODEL, FISH_VOICE, Nouveau, NouveauError
+from nouveau_client import ELEVENLABS_MODEL, ELEVENLABS_VOICE, FISH_MODEL, FISH_VOICE, Nouveau, NouveauError
 
 MAX_BLOCK_WORDS = 22
 
@@ -77,7 +77,7 @@ def main(argv: List[str]) -> int:
         return 2
 
     want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal")
-    script_mode = proj.arg(argv, "--script-mode", "narration") or "narration"
+    script_mode = proj.arg(argv, "--script-mode", "elevenlabs") or "elevenlabs"
     # nouveau picks its own default provider, which may have no quota: default to agy/gemini-3.8-flash-medium
     model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or "agy/gemini-3.8-flash-medium"
     apply_script = "--apply" in argv
@@ -202,6 +202,14 @@ def main(argv: List[str]) -> int:
             }
         )
         ep["source"] = source
+        voice_cfg = ep.get("voice") or {}
+        if not voice_cfg or (voice_cfg.get("provider") == "fish" and voice_cfg.get("voiceId") == FISH_VOICE):
+            ep["voice"] = {
+                "provider": "elevenlabs",
+                "voiceId": ELEVENLABS_VOICE,
+                "modelId": ELEVENLABS_MODEL,
+                "speakingRate": 1,
+            }
         if apply_script:
             ep["script"] = blocks(text)
             source["appliedBlocks"] = len(ep["script"])

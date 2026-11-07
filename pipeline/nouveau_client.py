@@ -19,7 +19,21 @@ import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 DEFAULT_URL = "http://127.0.0.1:8005"
-# Fish Audio "free" tier: the model every daily run uses, and a French male narration voice.
+# ElevenLabs TTS (default on :8005): v4 model + French voices Hugo (male) and Léa (female).
+ELEVENLABS_MODEL = "eleven_v4"
+ELEVENLABS_MODELS = ("eleven_v4", "eleven_v3", "eleven_multilingual_v2")
+ELEVENLABS_VOICE = "3Tp5mYhT9wrfnry9pzvV"  # "Hugo" (fr-FR, male, default)
+ELEVENLABS_VOICE_LEA = "KSyQzmsYhFbuOhqj1Xxv"  # "Léa" (fr-FR, female)
+ELEVENLABS_VOICES: Dict[str, str] = {
+    "3Tp5mYhT9wrfnry9pzvV": "3Tp5mYhT9wrfnry9pzvV",
+    "KSyQzmsYhFbuOhqj1Xxv": "KSyQzmsYhFbuOhqj1Xxv",
+    "hugo": "3Tp5mYhT9wrfnry9pzvV",
+    "male": "3Tp5mYhT9wrfnry9pzvV",
+    "lea": "KSyQzmsYhFbuOhqj1Xxv",
+    "léa": "KSyQzmsYhFbuOhqj1Xxv",
+    "female": "KSyQzmsYhFbuOhqj1Xxv",
+}
+# Fish Audio "free" tier (optional fallback):
 FISH_MODEL = "s2.1-pro-free"
 FISH_VOICE = "a688e2ec8bde444a876c160875a61804"  # "Zack D Films" (fr-FR)
 
@@ -103,6 +117,9 @@ class Nouveau:
     def fish_status(self) -> Dict[str, Any]:
         return self._request("GET", "/api/fish-audio-tts/status", timeout=20)
 
+    def elevenlabs_status(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/elevenlabs-tts/status", timeout=20)
+
     def inworld_status(self) -> Dict[str, Any]:
         return self._request("GET", "/api/inworld-tts/status", timeout=20)
 
@@ -161,6 +178,33 @@ class Nouveau:
         return self._request("POST", f"/api/videos/{video_id}/translations/{proposal_id}/script-json", payload={}, timeout=timeout)
 
     # ------------------------------------------------------------------ TTS
+    def tts_elevenlabs(
+        self,
+        video_id: str,
+        text: str,
+        voice_id: str = ELEVENLABS_VOICE,
+        model_id: str = ELEVENLABS_MODEL,
+        speed: float = 1.0,
+        stability: float = 0.5,
+        similarity_boost: float = 0.75,
+        style: float = 0.0,
+        use_speaker_boost: bool = True,
+        proposal_id: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "text": text,
+            "voiceId": voice_id,
+            "modelId": model_id,
+            "stability": float(stability),
+            "similarityBoost": float(similarity_boost),
+            "style": float(style),
+            "useSpeakerBoost": bool(use_speaker_boost),
+            "speed": max(0.7, min(1.2, float(speed))),
+        }
+        if proposal_id:
+            body["proposalId"] = proposal_id
+        return self._request("POST", f"/api/videos/{video_id}/tts/elevenlabs", payload=body, timeout=600)
+
     def tts_fish(
         self,
         video_id: str,
