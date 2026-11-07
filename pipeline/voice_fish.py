@@ -27,6 +27,7 @@ import proj
 from nouveau_client import (
     ELEVENLABS_MODEL,
     ELEVENLABS_MODELS,
+    ELEVENLABS_SPEED,
     ELEVENLABS_VOICE,
     ELEVENLABS_VOICES,
     FISH_MODEL,
@@ -235,13 +236,16 @@ def main(argv: List[str]) -> int:
         "provider": "elevenlabs",
         "voiceId": ELEVENLABS_VOICE,
         "modelId": ELEVENLABS_MODEL,
-        "speakingRate": 1.0,
+        "speakingRate": ELEVENLABS_SPEED,
         "stability": 0.5,
         "similarityBoost": 0.75,
         "style": 0.0,
         "useSpeakerBoost": True,
     }
-    V.update(ep.get("voice") or {})
+    ep_voice = dict(ep.get("voice") or {})
+    if ep_voice.get("speakingRate") in (None, 1, 1.0) and "speed" not in ep_voice:
+        ep_voice["speakingRate"] = ELEVENLABS_SPEED
+    V.update(ep_voice)
     if proj.arg(argv, "--provider"):
         V["provider"] = proj.arg(argv, "--provider")
     if proj.arg(argv, "--voice"):
@@ -249,7 +253,7 @@ def main(argv: List[str]) -> int:
     if proj.arg(argv, "--model"):
         V["modelId"] = proj.arg(argv, "--model")
     if proj.arg(argv, "--rate") or proj.arg(argv, "--speed"):
-        V["speakingRate"] = float(proj.arg(argv, "--rate") or proj.arg(argv, "--speed") or 1.0)
+        V["speakingRate"] = float(proj.arg(argv, "--rate") or proj.arg(argv, "--speed") or ELEVENLABS_SPEED)
     if proj.arg(argv, "--stability"):
         V["stability"] = float(proj.arg(argv, "--stability") or 0.5)
     if proj.arg(argv, "--similarity"):
@@ -308,7 +312,7 @@ def main(argv: List[str]) -> int:
                     text,
                     voice_id=str(V["voiceId"]),
                     model_id=str(V["modelId"]),
-                    speed=float(V.get("speakingRate") or V.get("speed") or 1.0),
+                    speed=float(V.get("speakingRate") or V.get("speed") or ELEVENLABS_SPEED),
                     stability=float(V.get("stability") if V.get("stability") is not None else 0.5),
                     similarity_boost=float(V.get("similarityBoost") if V.get("similarityBoost") is not None else 0.75),
                     style=float(V.get("style") if V.get("style") is not None else 0.0),

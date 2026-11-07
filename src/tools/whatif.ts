@@ -582,8 +582,8 @@ const newProject: Tool = {
     const ep: Record<string, any> = EPISODE_STUB(slug, aspect);
     if (input.video) {
       ep.source = { provider: 'nouveau', videoId: input.video };
-      // the voice goes through the local :8005 TTS API (ElevenLabs v4 by default, attached to the source video)
-      ep.voice = { provider: 'elevenlabs', voiceId: '3Tp5mYhT9wrfnry9pzvV', modelId: 'eleven_v4', speakingRate: 1 };
+      // the voice goes through the local :8005 TTS API (ElevenLabs v4 at speed 1.15 by default, attached to the source video)
+      ep.voice = { provider: 'elevenlabs', voiceId: '3Tp5mYhT9wrfnry9pzvV', modelId: 'eleven_v4', speakingRate: 1.15 };
     }
     fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify(ep, null, 1) + '\n');
     fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify(TIMELINE_STUB(slug), null, 1) + '\n');

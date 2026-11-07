@@ -18,7 +18,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 import proj
-from nouveau_client import ELEVENLABS_MODEL, ELEVENLABS_VOICE, FISH_MODEL, FISH_VOICE, Nouveau, NouveauError
+from nouveau_client import ELEVENLABS_MODEL, ELEVENLABS_SPEED, ELEVENLABS_VOICE, FISH_MODEL, FISH_VOICE, Nouveau, NouveauError
 
 MAX_BLOCK_WORDS = 22
 
@@ -208,7 +208,7 @@ def main(argv: List[str]) -> int:
                 "provider": "elevenlabs",
                 "voiceId": ELEVENLABS_VOICE,
                 "modelId": ELEVENLABS_MODEL,
-                "speakingRate": 1,
+                "speakingRate": ELEVENLABS_SPEED,
             }
         if apply_script:
             ep["script"] = blocks(text)

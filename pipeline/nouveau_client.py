@@ -24,6 +24,7 @@ ELEVENLABS_MODEL = "eleven_v4"
 ELEVENLABS_MODELS = ("eleven_v4", "eleven_v3", "eleven_multilingual_v2")
 ELEVENLABS_VOICE = "3Tp5mYhT9wrfnry9pzvV"  # "Hugo" (fr-FR, male, default)
 ELEVENLABS_VOICE_LEA = "KSyQzmsYhFbuOhqj1Xxv"  # "Léa" (fr-FR, female)
+ELEVENLABS_SPEED = 1.15
 ELEVENLABS_VOICES: Dict[str, str] = {
     "3Tp5mYhT9wrfnry9pzvV": "3Tp5mYhT9wrfnry9pzvV",
     "KSyQzmsYhFbuOhqj1Xxv": "KSyQzmsYhFbuOhqj1Xxv",
@@ -184,7 +185,7 @@ class Nouveau:
         text: str,
         voice_id: str = ELEVENLABS_VOICE,
         model_id: str = ELEVENLABS_MODEL,
-        speed: float = 1.0,
+        speed: float = ELEVENLABS_SPEED,
         stability: float = 0.5,
         similarity_boost: float = 0.75,
         style: float = 0.0,

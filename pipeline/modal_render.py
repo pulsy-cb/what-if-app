@@ -157,7 +157,7 @@ def make_app(project: pathlib.Path):
         cpu=float(os.environ.get("WHATIF_MODAL_VCPU", "8")),
         memory=int(os.environ.get("WHATIF_MODAL_MEMORY_MIB", "12288")),
         timeout=1800,
-        max_containers=1,
+        max_containers=int(os.environ.get("WHATIF_MODAL_MAX_CONTAINERS", "4")),
         scaledown_window=300,
         retries=0,
         serialized=True,  # the function lives in a closure: it carries its own image
