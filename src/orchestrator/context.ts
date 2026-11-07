@@ -54,6 +54,9 @@ commands for a human to paste: you call the tools.
 6. **Step 5b — Write & Animate \`shots.tsx\` + \`index.tsx\`, then run \`whatif_run stills\` and \`whatif_run board\`**:
    - Export one component per shot id in \`timeline.json\` (\`S1\`, \`S2\`, …) and register ALL of them in
      \`src/episodes/<slug>/index.tsx\`.
+   - **Batching rule for long episodes (> 10 shots)**: never try to generate 15–36 shots in a single giant \`write_file\` call (it will hit the output token limit). Instead, write \`shots.tsx\` in **batches of 6–8 shots**:
+     1. First call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "..." })\` with imports, \`makeLook\` cast, shared set helpers, and shots \`S1..S7\`,
+     2. Then call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "...", append: true })\` for \`S8..S14\`, then \`S15..S21\`, etc., until every shot in \`timeline.json\` is exported!
    - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`.
      Pass custom SVG to \`<Hero>\` via \`headGear\`, \`torsoGear\`, \`handRProp\` / \`handLProp\`.
    - **Natural Rigging & Motion**: every \`<Hero>\` must be animated with \`poseAt(t, ...)\` or \`actPose(kind, t)\`
@@ -323,6 +326,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
   for (let i = history.length - 1; i >= 0; i--) {
     const row = history[i]!;
     const payload = row.payload ? JSON.parse(row.payload) : null;
+    if (row.role === 'assistant' && !row.content.trim() && !payload?.toolCalls?.length) continue;
     const age = history.length - 1 - i;
     let content = row.content;
     if (row.role === 'tool' && age > 3) content = content.slice(0, TOOL_BUDGET);

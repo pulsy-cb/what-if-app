@@ -53,10 +53,10 @@ export function loadConfig(): Config {
     skillDir: detectSkillDir(),
     webDir: path.join(packageRoot, 'web', 'public'),
     authToken: process.env.WHATIF_AUTH_TOKEN ?? null,
-    maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 48),
+    maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 1_000),
     contextChars: Number(process.env.WHATIF_CONTEXT_CHARS ?? 90_000),
     approvalTimeoutMs: Number(process.env.WHATIF_APPROVAL_TIMEOUT_MS ?? 30 * 60_000),
-    maxTokens: Number(process.env.WHATIF_MAX_TOKENS ?? 8_000),
+    maxTokens: Number(process.env.WHATIF_MAX_TOKENS ?? 24_000),
     approvalsMode: ((): 'off' | 'pipeline' | 'all' => {
       const raw = (process.env.WHATIF_APPROVALS ?? 'off').toLowerCase();
       return raw === 'all' ? 'all' : raw === 'pipeline' || raw === 'on' ? 'pipeline' : 'off';

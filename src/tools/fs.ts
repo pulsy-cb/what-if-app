@@ -64,16 +64,17 @@ const readFile: Tool = {
       path: { type: 'string', description: 'Project-relative path.' },
       start: { type: 'integer', description: 'First line (1-based).' },
       end: { type: 'integer', description: 'Last line, inclusive.' },
+      limit: { type: 'integer', description: 'Optional max number of lines to read.' },
     },
     required: ['path'],
     additionalProperties: false,
   },
-  async run(input: { path: string; start?: number; end?: number }, ctx) {
+  async run(input: { path: string; start?: number; end?: number; limit?: number }, ctx) {
     const src = readText(ctx.projectRoot, input.path, 2_000_000);
     if (src === null) throw new Error(`cannot read ${input.path} (missing, binary or > 2MB)`);
     const all = src.split('\n');
     const start = Math.max(1, input.start ?? 1);
-    const end = Math.min(all.length, input.end ?? start + 5_999);
+    const end = Math.min(all.length, input.end ?? (input.limit ? start + input.limit - 1 : start + 5_999));
     const slice = all.slice(start - 1, end);
     let body = '';
     for (let i = 0; i < slice.length; i++) body += `${String(start + i).padStart(5)}| ${slice[i]}\n`;
@@ -88,7 +89,8 @@ const readFile: Tool = {
 
 const writeFile: Tool = {
   name: 'write_file',
-  description: 'Create a file, or replace it entirely. Prefer edit_file for small changes to an existing file.',
+  description:
+    'Create a file, replace it entirely, or append to it (when append: true). For large files like shots.tsx with 10+ shots, write the first 6-8 shots with write_file and append the remaining shots in batches of 6-8 with append: true.',
   policy: 'auto',
   mutating: true,
   schema: {
@@ -96,15 +98,27 @@ const writeFile: Tool = {
     properties: {
       path: { type: 'string' },
       content: { type: 'string' },
+      append: { type: 'boolean', description: 'If true, append content to the end of the file instead of overwriting.' },
     },
     required: ['path', 'content'],
     additionalProperties: false,
   },
-  async run(input: { path: string; content: string }, ctx): Promise<ToolResult> {
+  async run(input: { path: string; content: string; append?: boolean }, ctx): Promise<ToolResult> {
     if (isBinaryPath(input.path)) throw new Error('write_file refuses binary extensions');
     const abs = safeJoin(ctx.projectRoot, input.path);
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
+    if (input.append && existed) {
+      const prev = fs.readFileSync(abs, 'utf8');
+      const sep = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
+      fs.appendFileSync(abs, sep + input.content, 'utf8');
+      const totalLines = fs.readFileSync(abs, 'utf8').split('\n').length;
+      return {
+        ok: true,
+        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)`,
+        data: { path: input.path, created: false, appended: true, lines: totalLines },
+      };
+    }
     fs.writeFileSync(abs, input.content, 'utf8');
     const lines = input.content.split('\n').length;
     return {
@@ -309,14 +323,16 @@ const grep: Tool = {
     properties: {
       pattern: { type: 'string' },
       glob: { type: 'string', description: 'Optional path glob filter.' },
+      path: { type: 'string', description: 'Optional file path or glob filter (alias for glob).' },
       max: { type: 'integer' },
     },
     required: ['pattern'],
     additionalProperties: false,
   },
-  async run(input: { pattern: string; glob?: string; max?: number }, ctx) {
+  async run(input: { pattern: string; glob?: string; path?: string; max?: number }, ctx) {
     const re = new RegExp(input.pattern, 'i');
-    const globRe = input.glob ? globToRegExp(input.glob) : null;
+    const filterPat = input.glob ?? input.path;
+    const globRe = filterPat ? globToRegExp(filterPat) : null;
     const max = input.max ?? 120;
     const hits: string[] = [];
     for (const rel of walk(ctx.projectRoot, { maxFiles: 6000 })) {

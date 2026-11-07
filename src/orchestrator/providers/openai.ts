@@ -43,11 +43,14 @@ export function openAIProvider(cfg: {
       }
 
       let text = '';
+      let finishReason: string | undefined;
       const calls = new Map<number, { id: string; name: string; args: string }>();
       for await (const data of sseData(res.body)) {
         if (data === '[DONE]') break;
         const evt = safeJson(data);
-        const delta = evt?.choices?.[0]?.delta;
+        const choice = evt?.choices?.[0];
+        if (choice?.finish_reason) finishReason = String(choice.finish_reason);
+        const delta = choice?.delta;
         if (!delta) continue;
         if (typeof delta.content === 'string' && delta.content) {
           text += delta.content;
@@ -62,11 +65,18 @@ export function openAIProvider(cfg: {
           calls.set(i, cur);
         }
       }
-      const toolCalls: ToolCall[] = [...calls.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .filter(([, c]) => c.name)
-        .map(([i, c]) => ({ id: c.id || `call_${i}_${Date.now()}`, name: c.name, args: safeJson(c.args) ?? {} }));
-      return { text, toolCalls };
+      let truncatedToolCall: string | undefined;
+      const toolCalls: ToolCall[] = [];
+      for (const [i, c] of [...calls.entries()].sort((a, b) => a[0] - b[0])) {
+        if (!c.name) continue;
+        const parsed = c.args.trim() ? safeJson(c.args) : {};
+        if (parsed === null || typeof parsed !== 'object') {
+          truncatedToolCall = c.name;
+          continue;
+        }
+        toolCalls.push({ id: c.id || `call_${i}_${Date.now()}`, name: c.name, args: parsed as Record<string, unknown> });
+      }
+      return { text, toolCalls, finishReason, truncatedToolCall };
     },
   };
 }

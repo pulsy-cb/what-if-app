@@ -20,8 +20,8 @@ services:
       WHATIF_CONTEXT_CHARS: ${WHATIF_CONTEXT_CHARS:-90000}
       # off (défaut) = l'agent va au bout sans rien demander ; pipeline|all = portes d'approbation
       WHATIF_APPROVALS: ${WHATIF_APPROVALS:-off}
-      WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-48}
-      WHATIF_MAX_TOKENS: ${WHATIF_MAX_TOKENS:-8000}
+      WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-1000}
+      WHATIF_MAX_TOKENS: ${WHATIF_MAX_TOKENS:-24000}
       # the local app that owns the videos, the French narrations and the TTS takes
       WHATIF_NOUVEAU_URL: ${WHATIF_NOUVEAU_URL:-http://127.0.0.1:8005}
       WHATIF_NARRATION_MODEL: ${WHATIF_NARRATION_MODEL:-agy/gemini-3.8-flash-medium}

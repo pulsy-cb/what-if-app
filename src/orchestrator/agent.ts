@@ -69,6 +69,20 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         onText: (delta) => bus.emit(threadId, 'assistant_delta', { text: delta }),
       });
 
+      if (!res.toolCalls.length && (res.truncatedToolCall || res.finishReason === 'length' || !res.text.trim())) {
+        // An empty reply or a tool call cut off by max_tokens ("length"): do not pollute the DB with an empty
+        // assistant row; nudge the model to write large files (like shots.tsx with 15-36 shots) in smaller batches.
+        emptyTurns++;
+        const note = res.truncatedToolCall
+          ? `L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Pour écrire shots.tsx sur un épisode long, écris d'abord l'en-tête et les 6-8 premiers plans avec write_file ({ path, content }), puis ajoute les plans suivants par lots de 6-8 avec write_file ({ path, content, append: true }). Reprends immédiatement.`
+          : `Réponse coupée par le budget de tokens (${provider.model}, WHATIF_MAX_TOKENS=${config.maxTokens}). Ne réfléchis pas trop longtemps avant d'agir : écris shots.tsx par lots de 6-8 plans avec write_file (puis append: true pour la suite).`;
+        bus.emit(threadId, 'notice', { text: note });
+        db.addMessage(threadId, 'system', note);
+        if (emptyTurns <= 6) continue;
+        bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
+        return;
+      }
+
       const assistantId = db.addMessage(
         threadId,
         'assistant',
@@ -77,28 +91,15 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       );
       bus.emit(threadId, 'assistant_message', { id: assistantId, text: res.text, toolCalls: res.toolCalls });
 
-      if (!res.toolCalls.length && !res.text.trim()) {
-        // An empty reply with no tool call is a provider problem, not an answer: reasoning models spend a
-        // small max_tokens budget thinking and return finish_reason "length" with nothing to show.
-        emptyTurns++;
-        const note =
-          `Réponse vide du modèle (${provider.model}) : aucun texte, aucun outil. ` +
-          `C'est typique d'un modèle de raisonnement dont le budget de tokens est épuisé en réflexion ` +
-          `(WHATIF_MAX_TOKENS=${config.maxTokens}). Nouvel essai.`;
-        bus.emit(threadId, 'notice', { text: note });
-        if (emptyTurns <= 4) continue;
-        db.addMessage(threadId, 'system', note);
-        bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
-        return;
-      }
-
       if (!res.toolCalls.length) {
-        // A run that has already touched the pipeline does not stop halfway: models answer with a
-        // plan ("I'll fix the plan first") and end the turn. Nudge it back to work, a few times.
+        // An episode with remaining pipeline steps (whether started in this turn or resumed via "continue")
+        // should not stop halfway just because the model printed a transitional sentence ("Now the shots file...").
         const todo = pipelineTodo(project.root);
-        if (ranPipeline && todo.length && nudges < 3) {
+        if ((ranPipeline || todo.length > 0) && todo.length && nudges < 10) {
           nudges++;
-          const nudge = `Tu as encore arrêté le tour alors que la chaîne n'est pas finie. Étapes restantes pour cet épisode : ${todo.join(', ')}. Continue maintenant, sans redemander d'accord.`;
+          const nudge =
+            `La chaîne n'est pas terminée (étapes restantes : ${todo.join(', ')}). ` +
+            `Appelle directement l'outil suivant maintenant (pour un shots.tsx de plus de 10 plans, écris-le par lots de 6-8 plans avec write_file puis write_file { append: true }).`;
           db.addMessage(threadId, 'system', nudge);
           bus.emit(threadId, 'notice', { text: nudge });
           continue;
@@ -106,6 +107,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
         return;
       }
+
+      emptyTurns = 0;
+      nudges = 0;
 
       const producedImages: string[] = [];
       for (const call of res.toolCalls) {

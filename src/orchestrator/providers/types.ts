@@ -17,7 +17,13 @@ export type ChatRequest = {
   onText?: (delta: string) => void;
 };
 
-export type ChatResult = { text: string; toolCalls: ToolCall[]; usage?: unknown };
+export type ChatResult = {
+  text: string;
+  toolCalls: ToolCall[];
+  usage?: unknown;
+  finishReason?: string;
+  truncatedToolCall?: string;
+};
 
 export type Provider = {
   id: string;
