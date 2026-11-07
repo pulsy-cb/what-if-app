@@ -192,7 +192,7 @@ function renderSidebar() {
         onclick: () => selectProject(p),
         title: p.root,
       },
-      p.name,
+      p.running ? `● ${p.name}` : p.name,
       el('span', { class: 'sub', text: p.id }),
     );
     projects.append(li);
@@ -200,10 +200,11 @@ function renderSidebar() {
   const threads = $('#threads');
   threads.replaceChildren();
   for (const t of S.threads) {
+    const label = t.title || '(nouveau fil)';
     threads.append(
       el('li', {
         class: S.thread?.id === t.id ? 'active' : '',
-        text: t.title || '(nouveau fil)',
+        text: t.running || (S.thread?.id === t.id && S.running) ? `● ${label}` : label,
         onclick: () => selectThread(t),
       }),
     );
@@ -343,17 +344,39 @@ function connect(threadId) {
   });
   on('tool_call', (d) => {
     if (S.live) S.live = null;
-    const card = toolCard({ name: d.name, pending: true, input: d.input });
+    const stepLabel = d.input?.step ? ` (${d.input.step})` : d.input?.path ? ` (${d.input.path})` : '';
+    const card = toolCard({ name: `${d.name}${stepLabel}`, pending: true, input: d.input });
     card.id = `tool-${d.id}`;
+    card.open = d.name === 'whatif_run';
+    const liveLog = el('pre', { class: 'live-log muted small', text: 'démarrage…' });
+    card.append(liveLog);
     messagesBox().append(card);
+    scrollDown();
+  });
+  on('log', (d) => {
+    const runningCards = messagesBox().querySelectorAll('details.tool.running');
+    const last = runningCards[runningCards.length - 1];
+    if (!last || !d?.line) return;
+    let liveLog = last.querySelector('.live-log');
+    if (!liveLog) {
+      liveLog = el('pre', { class: 'live-log muted small' });
+      last.append(liveLog);
+    }
+    const prev = liveLog.textContent === 'démarrage…' ? [] : liveLog.textContent.split('\n').filter(Boolean);
+    prev.push(String(d.line));
+    liveLog.textContent = prev.slice(-14).join('\n');
+    const statusSpan = last.querySelector('summary .status');
+    if (statusSpan) statusSpan.textContent = `en cours · ${String(d.line).slice(0, 56)}`;
     scrollDown();
   });
   on('tool_result', (d) => {
     const old = document.getElementById(`tool-${d.id}`);
-    const card = toolCard({ ...d, pending: false });
-    card.open = !d.ok;
+    const stepLabel = d.input?.step ? ` (${d.input.step})` : '';
+    const card = toolCard({ ...d, name: `${d.name}${stepLabel}`, pending: false });
+    card.open = !d.ok || Boolean(d.artifacts?.length);
     if (old) old.replaceWith(card);
     else messagesBox().append(card);
+    if (d.artifacts?.length) loadDeliverables();
     scrollDown();
   });
   on('approval_request', (d) => showApproval(d));
@@ -367,12 +390,15 @@ function connect(threadId) {
   on('turn_start', (d) => {
     S.running = true;
     updateRunningUI();
+    loadProjects();
     $('#model').textContent = `${d.model}`;
   });
   on('turn_end', () => {
     S.running = false;
     S.live = null;
     updateRunningUI();
+    loadDeliverables();
+    loadProjects();
     scrollDown();
   });
   on('hello', (d) => {

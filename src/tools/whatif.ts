@@ -670,12 +670,28 @@ const runStep: Tool = {
     const rawMp4 = `out/${slug}/${slug}-raw.mp4`;
     const extraNotes: string[] = [];
 
+    const forwardLine = (line: string) => {
+      if (line.startsWith('RESULT_JSON:')) return;
+      if (line.startsWith('PROGRESS_JSON:')) {
+        try {
+          const p = JSON.parse(line.slice('PROGRESS_JSON:'.length));
+          const msg = p.stage ? `[${p.stage}] ${p.detail ?? p.status ?? JSON.stringify(p)}` : JSON.stringify(p);
+          ctx.log(msg);
+        } catch {
+          ctx.log(line.slice('PROGRESS_JSON:'.length));
+        }
+        return;
+      }
+      ctx.log(line);
+    };
+
     /** Run one more step in the same cwd (used for automatic shotlist/sfx/motiongrid chaining). */
     const stepOnce = async (name: string): Promise<{ code: number; text: string; result?: Record<string, unknown> }> => {
       const def = STEPS[name]!;
       const dir = def.own ? PIPELINE : scripts;
       const argv2 = def.py ? [PY, path.join(dir, def.py!), slug] : ['node', path.join(dir, def.node!), slug];
-      const r = await exec(argv2, { cwd: ctx.projectRoot, timeoutMs: def.timeoutMs ?? 600_000, signal: ctx.signal });
+      ctx.log(`→ sub-step ${name} (${slug})…`);
+      const r = await exec(argv2, { cwd: ctx.projectRoot, timeoutMs: def.timeoutMs ?? 600_000, signal: ctx.signal, onLine: forwardLine });
       const raw = r.stdout.split('\n').filter(Boolean);
       const line = raw.filter((l) => l.startsWith('RESULT_JSON:')).pop();
       let result: Record<string, unknown> | undefined;
@@ -761,7 +777,7 @@ const runStep: Tool = {
     }
 
     ctx.log(`whatif_run ${input.step} ${slug}: ${argv.join(' ')}`);
-    const res = await exec(argv, { cwd: ctx.projectRoot, timeoutMs, signal: ctx.signal });
+    const res = await exec(argv, { cwd: ctx.projectRoot, timeoutMs, signal: ctx.signal, onLine: forwardLine });
     const lines = res.stdout.split('\n').filter(Boolean);
     // our pipeline scripts report one machine-readable line; the rest is the human log
     let payload: Record<string, unknown> | undefined;
@@ -773,7 +789,6 @@ const runStep: Tool = {
         payload = undefined;
       }
     }
-    for (const l of lines) if (l.startsWith('PROGRESS_JSON:')) ctx.log(l.slice('PROGRESS_JSON:'.length));
     const visible = lines.filter((l) => !l.startsWith('RESULT_JSON:') && !l.startsWith('PROGRESS_JSON:'));
     const tail = (s: string[]) => s.slice(-25).join('\n');
     const credits = /credits?[^0-9]{0,12}(\d+)/i.exec(res.stdout);

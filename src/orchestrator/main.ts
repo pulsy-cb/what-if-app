@@ -146,7 +146,15 @@ export function createApp(config: Config = loadConfig()): App {
     // ---- projects
     if (parts[1] === 'projects') {
       if (method === 'GET' && parts.length === 2) {
-        return json(res, 200, db.listProjects().map((p) => ({ ...p, credits: db.creditsSpent(p.id) })));
+        return json(
+          res,
+          200,
+          db.listProjects().map((p) => {
+            const pThreads = db.listThreads(p.id);
+            const isRunning = pThreads.some((t) => running.has(t.id));
+            return { ...p, credits: db.creditsSpent(p.id), running: isRunning };
+          }),
+        );
       }
       if (method === 'POST' && parts.length === 2) {
         const body = await readJson(req);
@@ -206,7 +214,8 @@ export function createApp(config: Config = loadConfig()): App {
     // ---- threads
     if (parts[1] === 'threads') {
       if (method === 'GET' && parts.length === 2) {
-        return json(res, 200, db.listThreads(url.searchParams.get('projectId') ?? undefined));
+        const list = db.listThreads(url.searchParams.get('projectId') ?? undefined);
+        return json(res, 200, list.map((t) => ({ ...t, running: running.has(t.id) })));
       }
       if (method === 'POST' && parts.length === 2) {
         const body = await readJson(req);

@@ -38,7 +38,14 @@ export function splitCommand(line: string): string[] {
 /** Run a program with an argv array (never through a shell). Resolves with the exit code, never rejects on exit != 0. */
 export function exec(
   argv: string[],
-  opts: { cwd: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
+  opts: {
+    cwd: string;
+    timeoutMs?: number;
+    maxBytes?: number;
+    signal?: AbortSignal;
+    env?: NodeJS.ProcessEnv;
+    onLine?: (line: string) => void;
+  },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     if (!argv.length) {
@@ -71,13 +78,26 @@ export function exec(
       child.kill('SIGKILL');
     }, opts.timeoutMs ?? 180_000);
 
+    let lineBuf = '';
+    const emitLines = (chunk: string) => {
+      if (!opts.onLine) return;
+      lineBuf += chunk;
+      const parts = lineBuf.split('\n');
+      lineBuf = parts.pop() ?? '';
+      for (const l of parts) {
+        const trimmed = l.trim();
+        if (trimmed) opts.onLine(trimmed);
+      }
+    };
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     child.stdout!.on('data', (d: string) => {
       if (out.length < max) out += d;
+      emitLines(d);
     });
     child.stderr!.on('data', (d: string) => {
       if (err.length < max) err += d;
+      emitLines(d);
     });
     child.on('error', (e) => {
       err += String(e);
