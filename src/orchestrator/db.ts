@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, thread_id TEXT, tool TEXT,
   credits INTEGER NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+  elapsed_ms INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
 `;
 
 export class Db {
@@ -165,5 +169,36 @@ export class Db {
   creditsSpent(projectId: string): number {
     const row = this.raw.prepare('SELECT COALESCE(SUM(credits), 0) AS total FROM ledger WHERE project_id = ?').get(projectId) as unknown as { total: number };
     return Number(row?.total ?? 0);
+  }
+
+  // ---------------------------------------------------------------- run timings
+  addRunDuration(projectId: string, threadId: string, elapsedMs: number, steps = 0): void {
+    this.raw
+      .prepare('INSERT INTO project_runs (project_id, thread_id, elapsed_ms, steps, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(projectId, threadId, Math.max(0, Math.round(elapsedMs)), steps, this.now());
+  }
+
+  projectTiming(projectId: string): { totalMs: number; lastRunMs: number } {
+    const agg = this.raw
+      .prepare('SELECT COALESCE(SUM(elapsed_ms), 0) AS total, COUNT(*) AS cnt FROM project_runs WHERE project_id = ?')
+      .get(projectId) as unknown as { total: number; cnt: number } | undefined;
+    const last = this.raw
+      .prepare('SELECT elapsed_ms FROM project_runs WHERE project_id = ? ORDER BY id DESC LIMIT 1')
+      .get(projectId) as unknown as { elapsed_ms: number } | undefined;
+    if (agg && Number(agg.cnt) > 0) {
+      return { totalMs: Number(agg.total ?? 0), lastRunMs: Number(last?.elapsed_ms ?? 0) };
+    }
+    // Fallback for projects created before project_runs existed: span between first and last message across the project's threads
+    const span = this.raw
+      .prepare(
+        `SELECT MIN(m.created_at) AS first_at, MAX(m.created_at) AS last_at, COUNT(m.id) AS cnt
+         FROM messages m JOIN threads t ON m.thread_id = t.id WHERE t.project_id = ?`,
+      )
+      .get(projectId) as unknown as { first_at: string | null; last_at: string | null; cnt: number } | undefined;
+    if (span && Number(span.cnt) >= 2 && span.first_at && span.last_at) {
+      const diff = Math.max(0, Date.parse(span.last_at) - Date.parse(span.first_at));
+      return { totalMs: diff, lastRunMs: diff };
+    }
+    return { totalMs: 0, lastRunMs: 0 };
   }
 }

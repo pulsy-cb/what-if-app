@@ -102,6 +102,13 @@ test('agent loop end-to-end over HTTP with the mock provider', async () => {
 
     const messages = await (await fetch(`${base}/api/threads/${thread.id}/messages`)).json();
     assert.ok(messages.messages.some((m) => m.role === 'tool' && m.payload?.name === 'repo_map'));
+    assert.equal(typeof messages.elapsedMs, 'number');
+    assert.ok(messages.elapsedMs >= 0);
+
+    const projs = await (await fetch(`${base}/api/projects`)).json();
+    const demoProj = projs.find((p) => p.id === 'demo');
+    assert.ok(demoProj);
+    assert.equal(typeof demoProj.elapsedMs, 'number');
   } finally {
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });

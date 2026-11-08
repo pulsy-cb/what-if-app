@@ -1,10 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Bus } from './bus.js';
 import type { Config } from './config.js';
 import type { Db } from './db.js';
 import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
-import { buildMessages, pipelineTodo, toolMessageContent } from './context.js';
+import { activeEpisodeSlug, buildMessages, pipelineTodo, toolMessageContent } from './context.js';
 import { formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
 
 export type AgentDeps = {
@@ -51,7 +53,40 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     return;
   }
 
-  bus.emit(threadId, 'turn_start', { provider: provider.label, model: provider.model, project: project.id });
+  const turnStartedAt = Date.now();
+  const finishTurn = (steps: number, aborted: boolean, limitReached = false) => {
+    const elapsedMs = Math.max(0, Date.now() - turnStartedAt);
+    db.addRunDuration(project.id, threadId, elapsedMs, steps);
+    const timing = db.projectTiming(project.id);
+    try {
+      const slug = activeEpisodeSlug(project.root, db.listMessages(threadId));
+      if (slug) {
+        const repPath = path.join(project.root, 'out', slug, 'report.json');
+        if (fs.existsSync(repPath)) {
+          const rep = JSON.parse(fs.readFileSync(repPath, 'utf8'));
+          rep.agent_elapsed_seconds = Number((elapsedMs / 1000).toFixed(1));
+          rep.agent_total_seconds = Number((timing.totalMs / 1000).toFixed(1));
+          fs.writeFileSync(repPath, JSON.stringify(rep, null, 1) + '\n');
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    bus.emit(threadId, 'turn_end', {
+      steps,
+      aborted,
+      limitReached,
+      elapsedMs,
+      totalProjectMs: timing.totalMs,
+    });
+  };
+
+  bus.emit(threadId, 'turn_start', {
+    provider: provider.label,
+    model: provider.model,
+    project: project.id,
+    startedAt: turnStartedAt,
+  });
 
   try {
     let ranPipeline = false;
@@ -65,7 +100,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
 
     for (let step = 0; step < config.maxSteps; step++) {
       if (signal.aborted) {
-        bus.emit(threadId, 'turn_end', { steps: step, aborted: true });
+        finishTurn(step, true);
         return;
       }
       bus.emit(threadId, 'thinking', { step: step + 1 });
@@ -88,7 +123,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         bus.emit(threadId, 'notice', { text: note });
         db.addMessage(threadId, 'user', note);
         if (emptyTurns <= 5) continue;
-        bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
+        finishTurn(step + 1, false);
         return;
       }
 
@@ -123,7 +158,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           bus.emit(threadId, 'notice', { text: nudge });
           continue;
         }
-        bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
+        finishTurn(step + 1, false);
         return;
       }
 
@@ -263,7 +298,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               db.addMessage(threadId, 'user', loopNote);
               bus.emit(threadId, 'notice', { text: loopNote });
               if (consecutiveFails >= 5) {
-                bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false, limitReached: true });
+                finishTurn(step + 1, false, true);
                 return;
               }
             }
@@ -335,12 +370,12 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     const note = `Limite de ${config.maxSteps} étapes atteinte: je m'arrête ici. Dis-moi comment continuer.`;
     const id = db.addMessage(threadId, 'assistant', note);
     bus.emit(threadId, 'assistant_message', { id, text: note });
-    bus.emit(threadId, 'turn_end', { steps: config.maxSteps, aborted: false, limitReached: true });
+    finishTurn(config.maxSteps, false, true);
   } catch (e) {
     const message = `Erreur: ${errText(e)}`;
     const id = db.addMessage(threadId, 'assistant', message);
     bus.emit(threadId, 'error', { message });
     bus.emit(threadId, 'assistant_message', { id, text: message });
-    bus.emit(threadId, 'turn_end', { steps: 0, aborted: signal.aborted });
+    finishTurn(0, signal.aborted, false);
   }
 }

@@ -8,10 +8,33 @@ const S = {
   threads: [],
   thread: null,
   running: false,
+  startedAt: null,
+  elapsedMs: 0,
+  timerInterval: null,
   es: null,
   lastSeq: 0,
   live: null,
 };
+
+function fmtClock(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function fmtDuration(ms) {
+  if (!ms || ms < 500) return '';
+  const totalSec = Math.max(1, Math.round(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -185,6 +208,12 @@ function renderSidebar() {
   const projects = $('#projects');
   projects.replaceChildren();
   for (const p of S.projects) {
+    const durLabel = p.running
+      ? `⏱ ${fmtClock(Date.now() - (p.startedAt || Date.now()))}`
+      : p.elapsedMs > 0
+        ? `⏱ ${fmtDuration(p.elapsedMs)}`
+        : '';
+    const subText = durLabel ? `${p.id} · ${durLabel}` : p.id;
     const li = el(
       'li',
       {
@@ -193,7 +222,7 @@ function renderSidebar() {
         title: p.root,
       },
       p.running ? `● ${p.name}` : p.name,
-      el('span', { class: 'sub', text: p.id }),
+      el('span', { class: 'sub', text: subText }),
     );
     projects.append(li);
   }
@@ -213,11 +242,20 @@ function renderSidebar() {
 
 async function loadProjects() {
   S.projects = await api('/api/projects');
+  if (S.project) {
+    const updated = S.projects.find((p) => p.id === S.project.id);
+    if (updated) {
+      S.project = updated;
+      if (!S.running && updated.elapsedMs) S.elapsedMs = updated.elapsedMs;
+    }
+  }
   renderSidebar();
 }
 
 async function selectProject(project) {
   S.project = project;
+  S.elapsedMs = project.elapsedMs || 0;
+  S.startedAt = project.startedAt || null;
   S.threads = await api(`/api/threads?projectId=${encodeURIComponent(project.id)}`);
   S.thread = null;
   detach();
@@ -225,6 +263,7 @@ async function selectProject(project) {
   renderSidebar();
   loadDeliverables();
   $('#credits').textContent = `${project.credits ?? 0} cr`;
+  updateRunningUI();
   if (S.threads.length) await selectThread(S.threads[0]);
   else renderEmpty();
 }
@@ -261,7 +300,9 @@ async function loadDeliverables() {
     const url = fileUrl(report.path);
     api(`/api/file?project=${encodeURIComponent(S.project.id)}&path=${encodeURIComponent(report.path)}`)
       .then((r) => {
-        const txt = `−${Math.abs(r.lufs ?? 0).toFixed(1)} LUFS · ${(r.true_peak_dbtp ?? 0).toFixed(1)} dBTP · ${(r.seconds ?? 0).toFixed(1)} s`;
+        const agentSec = r.agent_total_seconds || r.agent_elapsed_seconds || (S.elapsedMs ? S.elapsedMs / 1000 : 0);
+        const agentTxt = agentSec ? ` · ⏱ agent ${fmtDuration(agentSec * 1000)}` : '';
+        const txt = `−${Math.abs(r.lufs ?? 0).toFixed(1)} LUFS · ${(r.true_peak_dbtp ?? 0).toFixed(1)} dBTP · ${(r.seconds ?? 0).toFixed(1)} s${agentTxt}`;
         box.append(el('div', { class: 'deliverable' }, el('span', { class: 'tag', text: 'master' }), el('span', { class: 'tag', text: txt }),
           el('a', { href: url.toString(), target: '_blank', text: 'report.json' })));
       })
@@ -294,6 +335,8 @@ async function selectThread(thread) {
   const data = await api(`/api/threads/${thread.id}/messages`);
   for (const m of data.messages) renderMessage(m);
   S.running = data.running;
+  S.startedAt = data.startedAt || (data.running ? Date.now() : null);
+  if (typeof data.elapsedMs === 'number' && data.elapsedMs > 0) S.elapsedMs = data.elapsedMs;
   updateRunningUI();
   for (const a of data.pending ?? []) showApproval({ id: a.id, tool: a.tool, input: JSON.parse(a.input) });
   scrollDown();
@@ -389,13 +432,18 @@ function connect(threadId) {
   on('error', (d) => messagesBox().append(el('div', { class: 'think', text: `Erreur : ${d.message}` })));
   on('turn_start', (d) => {
     S.running = true;
+    S.startedAt = d.startedAt || Date.now();
     updateRunningUI();
     loadProjects();
     $('#model').textContent = `${d.model}`;
   });
-  on('turn_end', () => {
+  on('turn_end', (d) => {
+    const runDur = d?.elapsedMs || (S.startedAt ? Date.now() - S.startedAt : 0);
     S.running = false;
+    S.startedAt = null;
     S.live = null;
+    if (d?.totalProjectMs) S.elapsedMs = d.totalProjectMs;
+    else if (runDur > 0) S.elapsedMs = (S.elapsedMs || 0) + runDur;
     updateRunningUI();
     loadDeliverables();
     loadProjects();
@@ -403,6 +451,8 @@ function connect(threadId) {
   });
   on('hello', (d) => {
     S.running = Boolean(d.running);
+    if (d.running) S.startedAt = d.startedAt || S.startedAt || Date.now();
+    if (typeof d.elapsedMs === 'number' && d.elapsedMs > 0) S.elapsedMs = d.elapsedMs;
     updateRunningUI();
   });
 }
@@ -438,9 +488,41 @@ async function decide(id, approve) {
 }
 
 // ------------------------------------------------------------------ sending
+function renderTimerChip() {
+  const chip = $('#timer');
+  if (!chip) return;
+  if (S.running) {
+    const liveMs = (S.elapsedMs || 0) + Math.max(0, Date.now() - (S.startedAt || Date.now()));
+    chip.hidden = false;
+    chip.className = 'chip timer-running';
+    chip.textContent = `⏱ ${fmtClock(liveMs)}`;
+    chip.title = 'Temps écoulé sur ce projet (en cours)';
+  } else if (S.elapsedMs > 0) {
+    chip.hidden = false;
+    chip.className = 'chip timer-done';
+    chip.textContent = `✓ Terminé en ${fmtDuration(S.elapsedMs)}`;
+    chip.title = `Temps total pris par l'agent sur le projet ${S.project?.name || ''}`;
+  } else {
+    chip.hidden = true;
+  }
+}
+
 function updateRunningUI() {
   $('#stop').hidden = !S.running;
-  $('#send').disabled = S.running;
+  $('#send').disabled = !S.running ? false : true;
+  if (S.running) {
+    if (!S.startedAt) S.startedAt = Date.now();
+    if (!S.timerInterval) {
+      S.timerInterval = setInterval(() => {
+        renderTimerChip();
+        renderSidebar();
+      }, 1000);
+    }
+  } else if (S.timerInterval) {
+    clearInterval(S.timerInterval);
+    S.timerInterval = null;
+  }
+  renderTimerChip();
   const perThread = S.thread ? ` · ${S.thread.title || 'fil'}` : '';
   document.title = `${S.running ? '● ' : ''}What If${perThread}`;
 }
@@ -456,8 +538,9 @@ $('#composer').addEventListener('submit', async (e) => {
   if (!text) return;
   input.value = '';
   try {
-    await api(`/api/threads/${S.thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+    const res = await api(`/api/threads/${S.thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
     S.running = true;
+    S.startedAt = res?.startedAt || Date.now();
     updateRunningUI();
   } catch (err) {
     alert(String(err));
@@ -548,8 +631,10 @@ $('#np-create').addEventListener('click', async (e) => {
     if (tool && !tool.ok) messagesBox().append(el('div', { class: 'think', text: `Scaffold : ${tool.summary}` }));
     const kick = $('#np-kick').checked ? kickoffMessage({ episode, video, aspect }) : null;
     if (kick) {
-      await api(`/api/threads/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text: kick }) });
+      const res = await api(`/api/threads/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ text: kick }) });
       S.running = true;
+      S.elapsedMs = 0;
+      S.startedAt = res?.startedAt || Date.now();
       updateRunningUI();
     }
   } catch (err) {

@@ -65,7 +65,7 @@ export function createApp(config: Config = loadConfig()): App {
   const bus = new Bus();
   const registry = defaultRegistry();
   const approvals = new Approvals(db, bus);
-  const running = new Map<string, AbortController>();
+  const running = new Map<string, { controller: AbortController; startedAt: number }>();
 
   const toolContext = (projectId: string, threadId: string, signal?: AbortSignal): ToolContext => {
     const project = db.getProject(projectId);
@@ -171,8 +171,16 @@ export function createApp(config: Config = loadConfig()): App {
           200,
           db.listProjects().map((p) => {
             const pThreads = db.listThreads(p.id);
-            const isRunning = pThreads.some((t) => running.has(t.id));
-            return { ...p, credits: db.creditsSpent(p.id), running: isRunning };
+            const activeRun = pThreads.map((t) => running.get(t.id)).find(Boolean) ?? null;
+            const timing = db.projectTiming(p.id);
+            return {
+              ...p,
+              credits: db.creditsSpent(p.id),
+              running: Boolean(activeRun),
+              startedAt: activeRun?.startedAt ?? null,
+              elapsedMs: timing.totalMs,
+              lastRunMs: timing.lastRunMs,
+            };
           }),
         );
       }
@@ -250,7 +258,17 @@ export function createApp(config: Config = loadConfig()): App {
 
       if (method === 'GET' && parts[3] === 'messages') {
         const messages = db.listMessages(threadId!).map((m) => ({ ...m, payload: m.payload ? JSON.parse(m.payload) : null }));
-        return json(res, 200, { thread, messages, pending: db.pendingApprovals(threadId!), running: running.has(threadId!) });
+        const activeRun = running.get(threadId!);
+        const timing = db.projectTiming(thread!.project_id);
+        return json(res, 200, {
+          thread,
+          messages,
+          pending: db.pendingApprovals(threadId!),
+          running: Boolean(activeRun),
+          startedAt: activeRun?.startedAt ?? null,
+          elapsedMs: timing.totalMs,
+          lastRunMs: timing.lastRunMs,
+        });
       }
 
       if (method === 'POST' && parts[3] === 'messages') {
@@ -264,7 +282,8 @@ export function createApp(config: Config = loadConfig()): App {
           db.raw.prepare('UPDATE threads SET title = ? WHERE id = ?').run(text.slice(0, 80), threadId!);
         }
         const controller = new AbortController();
-        running.set(threadId!, controller);
+        const startedAt = Date.now();
+        running.set(threadId!, { controller, startedAt });
         void runTurn(
           {
             db,
@@ -278,11 +297,11 @@ export function createApp(config: Config = loadConfig()): App {
           threadId!,
           controller.signal,
         ).finally(() => running.delete(threadId!));
-        return json(res, 202, { ok: true });
+        return json(res, 202, { ok: true, startedAt });
       }
 
       if (method === 'POST' && parts[3] === 'stop') {
-        running.get(threadId!)?.abort();
+        running.get(threadId!)?.controller.abort();
         return json(res, 200, { ok: true });
       }
 
@@ -296,7 +315,19 @@ export function createApp(config: Config = loadConfig()): App {
         const write = (e: { seq: number; type: string; data: unknown }) => {
           res.write(`id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
         };
-        write({ seq: 0, type: 'hello', data: { threadId, running: running.has(threadId!) } });
+        const activeRun = running.get(threadId!);
+        const timing = db.projectTiming(thread!.project_id);
+        write({
+          seq: 0,
+          type: 'hello',
+          data: {
+            threadId,
+            running: Boolean(activeRun),
+            startedAt: activeRun?.startedAt ?? null,
+            elapsedMs: timing.totalMs,
+            lastRunMs: timing.lastRunMs,
+          },
+        });
         for (const e of bus.replay(threadId!)) write(e);
         const unsubscribe = bus.subscribe(threadId!, write);
         const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
@@ -365,7 +396,7 @@ export function createApp(config: Config = loadConfig()): App {
   }
 
   const close = async () => {
-    for (const c of running.values()) c.abort();
+    for (const c of running.values()) c.controller.abort();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     db.close();
   };
