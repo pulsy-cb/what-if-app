@@ -203,6 +203,25 @@ test('whatif audits: episode formula/language and shots animation/framing checks
       science: [],
     };
     assert.equal(episodeAudit(fullSourceEp, 'rdv'), null);
+
+    // Continuity & narrative checks in shotsAudit (DIRECTOR.md hex mismatch, dialogue schematic replacement, English banner)
+    fs.writeFileSync(path.join(epDir, 'DIRECTOR.md'), 'Palette: murs #EFE3CC, canapé #7A8B6F, veste #3A86FF.');
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      `export const S1 = ({ t, len }) => <g transform={camT(960, 540, 1.2)}><Study t={t} fill="#112233" /><Hero look={N} pose={poseAt(t, [{f:0,p:{}}])} /></g>;\n` +
+        `export const S2 = ({ t, len }) => <g><Schematic t={t} /><SchLabel x={960} y={540} t={t} text="YOU PUT ITCHING POWDER" /></g>;\n`,
+    );
+    const epCont = {
+      script: [{ text: 'Il me va parfaitement a-t-elle souri dans le salon.' }],
+      shots: [
+        { id: 'S1', set: 'study', size: 'wide', note: 'J ai versé la poudre' },
+        { id: 'S2', set: 'study', size: 'insert', note: 'Il me va parfaitement a-t-elle souri' },
+      ],
+    };
+    const errCont = shotsAudit(dir, 'fold', epCont, tl) ?? '';
+    assert.match(errCont, /DIRECTOR\.md specifies colour palette/);
+    assert.match(errCont, /replaces a character dialogue\/reaction/);
+    assert.match(errCont, /untranslated English banner/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -13,7 +13,17 @@ const run = promisify(execFile);
  */
 export async function inkBox(
   file: string,
-): Promise<{ x0: number; x1: number; y0: number; y1: number; fill: number; leftFill: number; rightFill: number } | null> {
+): Promise<{
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  fill: number;
+  leftFill: number;
+  rightFill: number;
+  topFill: number;
+  bottomFill: number;
+} | null> {
   if (!fs.existsSync(file)) return null;
   try {
     const { stdout } = await run('ffmpeg', ['-v', 'error', '-i', file, '-vf', 'scale=64:36,format=gray', '-f', 'rawvideo', '-'], {
@@ -31,6 +41,8 @@ export async function inkBox(
     let count = 0;
     let left = 0;
     let right = 0;
+    let top = 0;
+    let bottom = 0;
     // Skip 2px border (corner registration marks in Schematic live near the frame edges)
     for (let y = 2; y < h - 2; y++) {
       for (let x = 2; x < w - 2; x++) {
@@ -39,6 +51,8 @@ export async function inkBox(
         count++;
         if (x < w / 2) left++;
         else right++;
+        if (y < h / 2) top++;
+        else bottom++;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
@@ -47,7 +61,7 @@ export async function inkBox(
     }
     const totalCells = (w - 4) * (h - 4);
     const halfCells = totalCells / 2;
-    if (x1 < 0) return { x0: 0, x1: 0, y0: 0, y1: 0, fill: 0, leftFill: 0, rightFill: 0 };
+    if (x1 < 0) return { x0: 0, x1: 0, y0: 0, y1: 0, fill: 0, leftFill: 0, rightFill: 0, topFill: 0, bottomFill: 0 };
     return {
       x0: x0 / w,
       x1: (x1 + 1) / w,
@@ -56,6 +70,8 @@ export async function inkBox(
       fill: count / totalCells,
       leftFill: left / halfCells,
       rightFill: right / halfCells,
+      topFill: top / halfCells,
+      bottomFill: bottom / halfCells,
     };
   } catch {
     return null;
@@ -79,7 +95,7 @@ export async function layoutReport(dir: string): Promise<string> {
     if (!box) continue;
     const id = name.replace(/\.png$/i, '');
     lines.push(
-      `${id}: ink x ${box.x0.toFixed(2)}-${box.x1.toFixed(2)}, y ${box.y0.toFixed(2)}-${box.y1.toFixed(2)}, covers ${(box.fill * 100).toFixed(0)}% (L ${(box.leftFill * 100).toFixed(0)}% / R ${(box.rightFill * 100).toFixed(0)}%)`,
+      `${id}: ink x ${box.x0.toFixed(2)}-${box.x1.toFixed(2)}, y ${box.y0.toFixed(2)}-${box.y1.toFixed(2)}, covers ${(box.fill * 100).toFixed(0)}% (L ${(box.leftFill * 100).toFixed(0)}% / R ${(box.rightFill * 100).toFixed(0)}%, T ${(box.topFill * 100).toFixed(0)}% / B ${(box.bottomFill * 100).toFixed(0)}%)`,
     );
     if (box.fill < 0.06) {
       failedIds.push(id);
@@ -98,6 +114,10 @@ export async function layoutReport(dir: string): Promise<string> {
       failedIds.push(id);
       empty.push(
         `${id} leaves the left half dead (x starts at ${box.x0.toFixed(2)}, left ink ${(box.leftFill * 100).toFixed(0)}%): centre elements around x=960`,
+      );
+    } else if (box.y1 - box.y0 < 0.28 || box.bottomFill < 0.02 || box.topFill < 0.02) {
+      warn.push(
+        `${id} has unbalanced vertical framing (y ${box.y0.toFixed(2)}-${box.y1.toFixed(2)}, top ${(box.topFill * 100).toFixed(0)}% / bottom ${(box.bottomFill * 100).toFixed(0)}%): adjust cy/zoom in camT so the floor or ceiling does not swallow half the frame`,
       );
     } else if (box.fill < 0.12) {
       warn.push(`${id} is sparse (${(box.fill * 100).toFixed(0)}% ink): add props, labels or a closer framing`);

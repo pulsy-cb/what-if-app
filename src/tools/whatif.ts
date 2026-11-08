@@ -356,6 +356,49 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const isSchoolStory = /\b(prof|professeur|classe|ecole|école|eleve|élève|tableau|cours|examen|interro|college|collège|lycee|lycée|math|teacher|school|classroom)\b/i.test(
     fullScriptText,
   );
+  const frHits = (fullScriptText.match(/\b(tu|le|la|les|un|une|des|dans|sur|pour|avec|est|sont|mais|plus|je|elle|il)\b/gi) ?? []).length;
+  const isFrench = frHits >= 4;
+
+  // Continuity check: DIRECTOR.md / bible.json <-> shots.tsx
+  try {
+    const biblePath = path.join(src, 'bible.json');
+    if (fs.existsSync(biblePath)) {
+      const bible = JSON.parse(fs.readFileSync(biblePath, 'utf8'));
+      for (const c of Array.isArray(bible?.cast) ? bible.cast : []) {
+        const cname = typeof c === 'string' ? c : String(c?.id ?? c?.name ?? '');
+        if (cname && !new RegExp(`\\b${cname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(shotsSource)) {
+          errors.push(`bible.json declares cast member "${cname}" which is missing from shots.tsx`);
+        }
+      }
+      for (const req of Array.isArray(bible?.requiredElements) ? bible.requiredElements : []) {
+        const token = String(req ?? '').trim();
+        if (token && !shotsSource.includes(token)) {
+          errors.push(`bible.json requires "${token}" in shots.tsx, but it was not found`);
+        }
+      }
+    }
+  } catch {
+    /* ignore malformed optional bible.json */
+  }
+
+  try {
+    const directorPath = path.join(src, 'DIRECTOR.md');
+    if (fs.existsSync(directorPath)) {
+      const directorMd = fs.readFileSync(directorPath, 'utf8');
+      const dirHex = [...new Set((directorMd.match(/#[0-9A-Fa-f]{6}\b/g) ?? []).map((h) => h.toUpperCase()))];
+      const shotsHex = new Set((shotsSource.match(/#[0-9A-Fa-f]{6}\b/g) ?? []).map((h) => h.toUpperCase()));
+      if (dirHex.length >= 3) {
+        const matchedHex = dirHex.filter((h) => shotsHex.has(h));
+        if (matchedHex.length === 0) {
+          errors.push(
+            `DIRECTOR.md specifies colour palette (${dirHex.slice(0, 5).join(', ')}) that is completely absent from shots.tsx: keep DIRECTOR.md and shots.tsx in sync (use the set/character colours from DIRECTOR.md, or update DIRECTOR.md to match the actual set).`,
+          );
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
 
   // Check custom character looks defined via makeLook({ ... }): distinct silhouettes/jackets and dark-on-dark contrast
   const lookDefs: { name: string; jacket?: string; extra?: string; skin?: string }[] = [];
@@ -395,7 +438,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     }
   }
 
-  for (const sh of tlShots) {
+  for (let shotIdx = 0; shotIdx < tlShots.length; shotIdx++) {
+    const sh = tlShots[shotIdx]!;
     const id = String(sh.id ?? '');
     const len = Number(sh.len ?? 60);
     const body = bodies[id] ?? '';
@@ -404,6 +448,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const epShot = epShots[id] ?? {};
     const set = String(epShot.set ?? '').toLowerCase();
     const size = String(epShot.size ?? sh.size ?? '').toLowerCase();
+    const note = String(epShot.note ?? '');
     const isTitle = size.includes('title') || /<TitleCard\b/.test(body);
     const isInsert = size.includes('insert') || size.includes('macro');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
@@ -417,6 +462,24 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       errors.push(
         `${id} renders <Classroom> (with "7 × 8" on a blackboard) in a story that has nothing to do with school! Build a custom set that matches the story (<CustomRoom>, <RoomShell>, <Box>, <Outdoor>, <Vehicle>, or custom SVG).`,
       );
+    }
+
+    // Forbid replacing a spoken line / emotional reaction with a bare <Schematic> diagram and no character
+    const isDialogueOrReaction = /\b(souri|demandé|demande|dit-elle|dit-il|pleurait|hurlait|désolée|désolé|aide-moi|voyons)\b/i.test(note);
+    if (isDialogueOrReaction && /<Schematic\b/.test(body) && !hasHero && set !== 'schematic') {
+      errors.push(
+        `${id} replaces a character dialogue/reaction ("${note.slice(0, 48)}") with an empty <Schematic> diagram and no <Hero>: show the speaking or reacting character (<Hero>) in the scene set!`,
+      );
+    }
+
+    // Forbid mid-story <TitleCard> in narrative episodes (>= 8 shots) unless explicitly marked as title in the opening third
+    if (/<TitleCard\b/.test(body) && tlShots.length >= 8 && shotIdx > Math.max(3, Math.floor(tlShots.length * 0.35)) && shotIdx < tlShots.length - 1 && !size.includes('title')) {
+      errors.push(`${id} places a <TitleCard> in the middle of the story (shot ${shotIdx + 1}/${tlShots.length}): keep <TitleCard> for the opening premise only.`);
+    }
+
+    // Catch untranslated English titles/banners inside a French episode
+    if (isFrench && /\b(YOU PUT ITCHING|WHAT IF YOU|MY BEST FRIEND|THE LAST GUY|I PUT ITCHING)\b/i.test(body)) {
+      errors.push(`${id} contains untranslated English banner/title text in a French episode: write all on-screen labels and titles in French.`);
     }
 
     // Check that the shot actually uses its frame clock `t`
