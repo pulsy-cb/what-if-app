@@ -21,6 +21,8 @@ export type Config = {
   nouveauUrl: string;
   /** "modal" (default) renders on Modal, "local" falls back to npx remotion inside this container. */
   renderMode: 'modal' | 'local';
+  /** Maximum number of independent reviewer feedback rounds per episode before letting the pipeline proceed. */
+  reviewMaxRounds: number;
 };
 
 /** Find the upstream skill folder: env first, then a sibling clone of this app. */
@@ -63,5 +65,6 @@ export function loadConfig(): Config {
     })(),
     nouveauUrl: (process.env.WHATIF_NOUVEAU_URL ?? 'http://127.0.0.1:8005').replace(/\/$/, ''),
     renderMode: process.env.WHATIF_RENDER === 'local' ? 'local' : 'modal',
+    reviewMaxRounds: Math.max(0, Number(process.env.WHATIF_REVIEW_MAX_ROUNDS ?? 2)),
   };
 }

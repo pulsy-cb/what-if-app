@@ -8,7 +8,7 @@ import { Db } from './db.js';
 import { Bus } from './bus.js';
 import { Approvals } from './approvals.js';
 import { defaultRegistry, type ToolContext, type ToolRegistry } from '../tools/index.js';
-import { PROVIDER_PRESETS, providerConfig, resolveProvider } from './providers/index.js';
+import { PROVIDER_PRESETS, providerConfig, resolveProvider, resolveReviewProvider, reviewProviderConfig } from './providers/index.js';
 import { runTurn } from './agent.js';
 import { mimeOf, safeJoin, walk } from '../tools/paths.js';
 
@@ -137,11 +137,13 @@ export function createApp(config: Config = loadConfig()): App {
     if (parts[1] === 'settings') {
       if (method === 'GET') {
         const cfg = providerConfig(db);
+        const revCfg = reviewProviderConfig(db);
         return json(res, 200, {
           provider: cfg.provider,
           baseURL: cfg.baseURL,
           model: cfg.model,
           hasKey: Boolean(cfg.apiKey),
+          reviewer: revCfg ? { provider: revCfg.provider, model: revCfg.model, baseURL: revCfg.baseURL } : null,
           presets: PROVIDER_PRESETS,
           skillDir: config.skillDir,
           maxSteps: config.maxSteps,
@@ -264,7 +266,15 @@ export function createApp(config: Config = loadConfig()): App {
         const controller = new AbortController();
         running.set(threadId!, controller);
         void runTurn(
-          { db, bus, config, registry, approvals, provider: () => resolveProvider(db) },
+          {
+            db,
+            bus,
+            config,
+            registry,
+            approvals,
+            provider: () => resolveProvider(db),
+            reviewProvider: () => resolveReviewProvider(db),
+          },
           threadId!,
           controller.signal,
         ).finally(() => running.delete(threadId!));

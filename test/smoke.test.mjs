@@ -311,6 +311,34 @@ test('context compaction: compacts old write_file payloads, drops orphan tool me
     assert.match(pinMsg.content, /Salon crème #EFE3CC/);
     assert.match(pinMsg.content, /const NARR = makeLook/);
     assert.match(pinMsg.content, /Remaining to export: S2/);
+
+    // Test independent Reviewer (parseReviewJson, formatReviewFeedback, reviewEpisodeBoard)
+    const { parseReviewJson, formatReviewFeedback, reviewEpisodeBoard } = await import('../dist/orchestrator/reviewer.js');
+    const parsedFail = parseReviewJson(
+      '```json\n{"pass":false,"summary":"Incohérence S2","issues":[{"shot":"S2","severity":"error","problem":"Panneau hors sujet","fix":"Mettre <Hero> en plan serré"}]}\n```',
+      'gemini-2.5-flash',
+      'ep',
+    );
+    assert.equal(parsedFail.pass, false);
+    assert.equal(parsedFail.issues.length, 1);
+    const fb = formatReviewFeedback(parsedFail, 'ep');
+    assert.match(fb, /CORRECTIONS REQUISES/);
+    assert.match(fb, /args: \["S2"\]/);
+
+    const fakeReviewer = {
+      label: 'review-mock',
+      model: 'review-flash',
+      async chat({ messages }) {
+        assert.equal(messages.length, 2, 'reviewer must run in a clean 2-message context');
+        return {
+          text: JSON.stringify({ pass: true, summary: 'Tout est cohérent.', issues: [] }),
+          toolCalls: [],
+        };
+      },
+    };
+    const report = await reviewEpisodeBoard(fakeReviewer, dir, 'ep');
+    assert.equal(report.pass, true);
+    assert.ok(fs.existsSync(path.join(dir, 'out', 'ep', 'review.json')), 'review.json should be saved');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

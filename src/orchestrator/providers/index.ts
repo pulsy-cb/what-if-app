@@ -46,6 +46,54 @@ export function resolveProvider(db: Db): Provider {
   }
 }
 
+/**
+ * Independent Reviewer provider configuration.
+ * Uses WHATIF_REVIEW_PROVIDER / WHATIF_REVIEW_BASE_URL / WHATIF_REVIEW_MODEL / WHATIF_REVIEW_API_KEY
+ * (or DB settings reviewProvider / reviewBaseURL / reviewModel / reviewApiKey), falling back to the primary
+ * provider when WHATIF_REVIEWER_ENABLED=true. Disabled by default when the primary provider is "mock".
+ */
+export function reviewProviderConfig(db: Db): ProviderConfig | null {
+  const s = db.settings();
+  const env = process.env;
+  const rawEnabled = (s.reviewerEnabled ?? env.WHATIF_REVIEWER_ENABLED ?? '').trim().toLowerCase();
+  if (rawEnabled === 'false' || rawEnabled === '0' || rawEnabled === 'off' || rawEnabled === 'no') {
+    return null;
+  }
+  const hasExplicitReviewModel = Boolean(
+    (s.reviewModel || env.WHATIF_REVIEW_MODEL || s.reviewProvider || env.WHATIF_REVIEW_PROVIDER || '').trim(),
+  );
+  const enabled = rawEnabled === 'true' || rawEnabled === '1' || rawEnabled === 'on' || hasExplicitReviewModel;
+  const primary = providerConfig(db);
+  if (!enabled && primary.provider === 'mock') return null;
+  // Enable by default on real providers unless explicitly turned off
+  const kind = ((s.reviewProvider || env.WHATIF_REVIEW_PROVIDER || primary.provider) as ProviderConfig['provider']);
+  if (kind === 'mock' && !hasExplicitReviewModel) return null;
+  const preset = PROVIDER_PRESETS[kind] ?? PROVIDER_PRESETS.openai!;
+  const sameProviderAsPrimary = !s.reviewProvider && !env.WHATIF_REVIEW_PROVIDER;
+  return {
+    provider: kind,
+    baseURL: s.reviewBaseURL || env.WHATIF_REVIEW_BASE_URL || (sameProviderAsPrimary ? primary.baseURL : preset.baseURL),
+    apiKey: s.reviewApiKey || env.WHATIF_REVIEW_API_KEY || primary.apiKey || '',
+    model: s.reviewModel || env.WHATIF_REVIEW_MODEL || (sameProviderAsPrimary ? primary.model : preset.model),
+    maxTokens: Number(env.WHATIF_REVIEW_MAX_TOKENS || 4_000),
+  };
+}
+
+export function resolveReviewProvider(db: Db): Provider | null {
+  const cfg = reviewProviderConfig(db);
+  if (!cfg) return null;
+  switch (cfg.provider) {
+    case 'mock':
+      return mockProvider(cfg.model);
+    case 'anthropic':
+      if (!cfg.apiKey) return null;
+      return anthropicProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
+    default:
+      if (!cfg.apiKey && !/127\.0\.0\.1|localhost/.test(cfg.baseURL)) return null;
+      return openAIProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
+  }
+}
+
 export * from './types.js';
 export { mockProvider } from './mock.js';
 export { openAIProvider } from './openai.js';

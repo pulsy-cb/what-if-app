@@ -5,6 +5,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { buildMessages, pipelineTodo, toolMessageContent } from './context.js';
+import { formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
 
 export type AgentDeps = {
   db: Db;
@@ -13,6 +14,7 @@ export type AgentDeps = {
   registry: ToolRegistry;
   approvals: Approvals;
   provider: () => Provider;
+  reviewProvider?: () => Provider | null;
 };
 
 const IMAGE_PATH = /\.(png|jpe?g|webp)$/i;
@@ -59,6 +61,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     let lastFailSig = '';
     let consecutiveFails = 0;
     let checkpointedThisTurn = false;
+    let reviewRounds = 0;
 
     for (let step = 0; step < config.maxSteps; step++) {
       if (signal.aborted) {
@@ -271,6 +274,53 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
 
           for (const a of result.artifacts ?? []) {
             if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
+          }
+
+          // Independent Reviewer gate after storyboard generation (`whatif_run { step: "board" }`)
+          if (
+            call.name === 'whatif_run' &&
+            String(call.args?.step ?? '') === 'board' &&
+            result.ok &&
+            reviewRounds < config.reviewMaxRounds
+          ) {
+            const reviewer = deps.reviewProvider ? deps.reviewProvider() : null;
+            const epSlug = String(call.args?.episode ?? '').trim();
+            if (reviewer && epSlug) {
+              reviewRounds++;
+              const revId = `review-${step}-${reviewRounds}`;
+              const revStart = Date.now();
+              bus.emit(threadId, 'tool_call', {
+                id: revId,
+                name: 'reviewer',
+                input: { episode: epSlug, round: reviewRounds, model: reviewer.model },
+                policy: 'auto',
+                mustAsk: false,
+              });
+              try {
+                const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal);
+                const feedback = formatReviewFeedback(report, epSlug);
+                bus.emit(threadId, 'tool_result', {
+                  id: revId,
+                  name: 'reviewer',
+                  ok: report.pass,
+                  summary: feedback,
+                  artifacts: [{ kind: 'file', path: `out/${epSlug}/review.json`, mime: 'application/json' }],
+                  credits: 0,
+                  durationMs: Date.now() - revStart,
+                });
+                db.addMessage(threadId, 'user', feedback);
+              } catch (revErr) {
+                bus.emit(threadId, 'tool_result', {
+                  id: revId,
+                  name: 'reviewer',
+                  ok: true,
+                  summary: `Reviewer skipped (${errText(revErr)})`,
+                  artifacts: [],
+                  credits: 0,
+                  durationMs: Date.now() - revStart,
+                });
+              }
+            }
           }
         }
       }
