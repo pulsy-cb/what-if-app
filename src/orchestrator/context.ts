@@ -57,10 +57,14 @@ commands for a human to paste: you call the tools.
    - **1. Architecture des décors sur mesure en 3 couches de profondeur**:
      Each episode is unique — build custom sets tailored to the story using \`makeRoom\` / \`RoomShell\` / \`CustomRoom\` / \`Box\` / \`FloorShadow\` or custom SVG environments:
      - *Arrière-plan (couche 1)*: murs texturés (\`<CustomRoom>\`, \`<RoomShell>\`, ou décor extérieur/véhicule/SVG sur mesure), fenêtres (\`<BackWindow>\`), cadres (\`<WallFrame>\`), appliques (\`<WallLight>\`), plantes (\`<FloorPlant>\`), éléments architecturaux propres à l'histoire. Give each shot's set a **unique \`id\`** (e.g. \`id="s1"\`, \`id="s2"\`).
-     - *Plan moyen (couche 2)*: mobilier structurant (\`<Box>\`, \`<FloorShadow>\`, \`<DiningTable>\`, \`<Desk>\`, comptoirs, bancs) et personnages assis ou debout (ex: deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} cloth="#9E2A3B" candle plates />\` pour que la nappe masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus de la table à \`y = 665..688\` !).
-     - *Premier plan & lumière (couche 3)*: accessoires posés sur la table (\`y = 675..688\`), éléments d'amorce (\`filter="url(#blur16)"\` en over-the-shoulder), lumière d'ambiance (\`<Pendant>\`, \`<LightVeil>\`, \`<Glow>\`, \`<Dust>\`).
-   - **2. Casting & silhouettes distinctes (\`makeLook\`)**: définir les personnages récurrents avec des silhouettes (\`extra\`), accessoires (\`accessory\`) et palettes de couleurs distincts, aligner le genre du personnage narrateur principal sur \`episode.json.voice.narratorGender\` (ex: coiffure \`'ponytail' | 'bun' | 'long' | 'bob'\` si \`narratorGender === "female"\` avec la voix de Léa), et vérifier le contraste avec les murs (jamais de veste/membres sombres sans contour ou rim light sur un mur sombre).
-   - **3. Découpage et chorégraphie physique des actions plan par plan**:
+     - *Plan moyen (couche 2)*: mobilier structurant (\`<Box>\`, \`<FloorShadow>\`, \`<DiningTable>\`, \`<Desk>\`, canapés, comptoirs, bancs) et personnages assis ou debout (ex: deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} cloth="#9E2A3B" candle plates />\` pour que la nappe masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus de la table à \`y = 665..688\` !).
+     - *Premier plan & lumière (couche 3)*: accessoires posés sur la table/meuble (\`y = 675..688\`), éléments d'amorce (\`filter="url(#blur16)"\` en over-the-shoulder), lumière d'ambiance (\`<Pendant>\`, \`<LightVeil>\`, \`<Glow>\`, \`<Dust>\`).
+   - **2. Casting, silhouettes distinctes & objet-clé (\`makeLook\`)**: définir les personnages récurrents avec des silhouettes (\`extra\`), accessoires (\`accessory\`) et palettes de couleurs distincts, aligner le genre du personnage narrateur principal sur \`episode.json.voice.narratorGender\` (ex: coiffure \`'ponytail' | 'bun' | 'long' | 'bob'\` si \`narratorGender === "female"\` avec la voix de Léa), et vérifier le contraste avec les murs (jamais de veste/membres sombres sans contour ou rim light sur un mur sombre). **Règle d'objet/vêtement-clé** : si l'histoire porte sur un vêtement ou objet spécifique (un nouveau haut, un sac, un plat, une fiole, une bague), donne-lui une couleur et une forme **distinctes** de la veste habituelle des personnages, et respecte la chronologie du récit (un personnage ne porte ou ne tient l'objet qu'à partir du plan où le texte le dit !).
+   - **3. Découpage, continuité décor↔code et chorégraphie physique des actions plan par plan**:
+     - **Continuité stricte \`DIRECTOR.md\` ↔ \`shots.tsx\`**: le décor, les couleurs de murs et TOUS les meubles/accessoires décrits dans \`DIRECTOR.md\` ou cités dans le texte (ex. canapé, table basse, bol, fenêtre) DOIVENT réellement être codés dans le composant de décor partagé en haut de \`shots.tsx\`. Ne décris jamais un décor dans \`DIRECTOR.md\` pour en coder un autre dans \`shots.tsx\` !
+     - **Règles narratives sur les inserts et cartes-titres**:
+       - Un plan \`insert\` zoome (\`camT(..., 2.0..2.4)\`) sur l'**objet concret** ou les mains dans le décor de la scène. **INTERDICTION** de remplacer un plan de dialogue, de sourire ou de réaction par un panneau \`<Schematic>\` ou un texte inventé hors sujet (tout libellé \`<SchLabel>\` doit reprendre les mots exacts de la narration en français).
+       - \`<TitleCard>\` est réservé au titre d'ouverture/prémisse (début d'épisode) : **JAMAIS** de \`<TitleCard>\` au milieu d'une scène dramatique, et **JAMAIS** de texte en anglais dans un épisode français.
      - Quand deux personnages interagissent, utiliser des **plans à deux (two-shots)** en plan large/moyen et alterner avec des cadrages rapprochés cohérents (ne jamais faire disparaître le mobilier ou l'interlocuteur sans raison !).
      - **Prise et tenue d'objets (INTERDICTION des objets flottants)**: un objet tenu ou saisi ne doit **JAMAIS** être dessiné à des centaines de pixels de la main !
        - Pour un objet tenu en continu dans la main : passe-le à \`<Hero handRProp={<g>...</g>} />\` ou positionne-le à \`const H = handWorld(pose, 'R')\` (\`<g transform={\`translate(\${H.x} \${H.y})\`}>...\`).
@@ -71,7 +75,7 @@ commands for a human to paste: you call the tools.
      \`src/episodes/<slug>/index.tsx\`.
    - **Batching rule for long episodes (> 10 shots)**: never try to generate 15–36 shots in a single giant \`write_file\` call (it will hit the output token limit). Instead, write \`shots.tsx\` in **batches of 6–8 shots**:
      1. First call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "..." })\` with imports, \`makeLook\` cast, shared custom set components, and shots \`S1..S7\`,
-     2. Then call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "...", append: true })\` for \`S8..S14\`, then \`S15..S21\`, etc., until every shot in \`timeline.json\` is exported!
+     2. Then call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "...", append: true })\` for \`S8..S14\`, then \`S15..S21\`, etc., until every shot in \`timeline.json\` is exported! (Check the live "Active episode continuity pin" in the system prompt: it always shows your shared header from \`shots.tsx\`, which shots are already exported, and the exact specs of the remaining shots).
    - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`. Give each character a distinct \`extra\` and contrasting \`jacket\`. Pass custom SVG to \`<Hero>\` via \`headGear\`, \`torsoGear\`, \`handRProp\` / \`handLProp\`.
    - **Natural Rigging, Lip-Sync & Camera**: every \`<Hero>\` must be animated with \`poseAt(t, ...)\` or \`actPose(kind, t)\`
      AND \`faceAt(t, ...)\`, plus camera motion (\`camT(kf(t, [[0, ...], [len, ...]]), cy, zoom)\` or \`camPush\`/\`camPan\`).
@@ -350,6 +354,93 @@ export function pipelineTodo(projectRoot: string, history?: MessageRow[]): strin
   return target.todo.filter((t) => t !== 'script');
 }
 
+/**
+ * Pin the active episode's continuity bible, DIRECTOR.md, shared shots.tsx header (makeLook + set components),
+ * last exported shot, and the remaining unexported shots (with frame lengths and spoken words) right in the
+ * system header. This ensures small/Flash models never lose track of character looks, set props, or shot IDs
+ * across compacted batches on long episodes.
+ */
+export function episodePin(projectRoot: string, history?: MessageRow[]): string {
+  const slug = activeEpisodeSlug(projectRoot, history);
+  if (!slug) return '';
+  const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+  if (!fs.existsSync(epDir)) return '';
+
+  const parts: string[] = [`## Active episode continuity pin (${slug})`];
+
+  const bibleRaw = (readText(epDir, 'bible.json', 4_000) ?? '').trim();
+  if (bibleRaw) {
+    parts.push(`### bible.json\n\`\`\`json\n${bibleRaw.slice(0, 2_500)}\n\`\`\``);
+  }
+
+  const directorRaw = (readText(epDir, 'DIRECTOR.md', 8_000) ?? '').trim();
+  if (directorRaw) {
+    parts.push(`### DIRECTOR.md (pinned for continuity)\n${directorRaw.slice(0, 3_200)}`);
+  }
+
+  let epJson: any = null;
+  let tlJson: any = null;
+  try {
+    epJson = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+  } catch {
+    /* ignore */
+  }
+  try {
+    tlJson = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+  } catch {
+    /* ignore */
+  }
+
+  const shotsRaw = readText(epDir, 'shots.tsx', 120_000) ?? '';
+  const isStub = shotsRaw.includes('SHOT S1 — PLACEHOLDER');
+  const exportMatches = [...shotsRaw.matchAll(/export\s+(?:const|function)\s+(S\d+)\b/g)];
+  const exportedIds = isStub ? [] : exportMatches.map((m) => m[1]!);
+  const exportedSet = new Set(exportedIds);
+
+  const tlShots: any[] = Array.isArray(tlJson?.shots) ? tlJson.shots : [];
+  const epShotsMap = new Map<string, any>();
+  for (const s of Array.isArray(epJson?.shots) ? epJson.shots : []) {
+    if (s?.id) epShotsMap.set(String(s.id), s);
+  }
+
+  if (tlShots.length > 1) {
+    const missing = tlShots.filter((s) => !exportedSet.has(String(s.id)));
+    parts.push(
+      `### Shots progress (${exportedIds.length}/${tlShots.length} exported in shots.tsx)\n` +
+        `- Exported: ${exportedIds.length ? exportedIds.join(', ') : '(none yet)'}\n` +
+        `- Remaining to export: ${missing.length ? missing.map((s) => s.id).join(', ') : '(all exported!)'}`,
+    );
+    if (missing.length > 0) {
+      const nextBatch = missing.slice(0, 12).map((s) => {
+        const id = String(s.id);
+        const epS = epShotsMap.get(id) ?? {};
+        const size = epS.size ?? s.size ?? 'medium';
+        const set = epS.set ?? 'custom';
+        const note = epS.note ?? '';
+        return `  - ${id}: len=${s.len}f (${(Number(s.len || 60) / 30).toFixed(1)}s), size="${size}", set="${set}", words="${note}"`;
+      });
+      parts.push(`### Next shots to write (use these exact IDs, lengths and sizes):\n${nextBatch.join('\n')}`);
+    }
+  }
+
+  if (!isStub && exportMatches.length > 0) {
+    const firstIdx = exportMatches[0]!.index ?? 0;
+    const header = shotsRaw.slice(0, firstIdx).trim();
+    if (header) {
+      parts.push(
+        `### Shared header in shots.tsx (reuse these exact makeLook constants & set components in subsequent batches):\n\`\`\`tsx\n${header.slice(0, 2_800)}\n\`\`\``,
+      );
+    }
+    const lastMatch = exportMatches[exportMatches.length - 1]!;
+    const lastCode = shotsRaw.slice(lastMatch.index ?? 0).trim();
+    if (lastCode) {
+      parts.push(`### Last exported shot in shots.tsx (${lastMatch[1]}):\n\`\`\`tsx\n${lastCode.slice(0, 1_200)}\n\`\`\``);
+    }
+  }
+
+  return parts.length > 1 ? parts.join('\n\n') : '';
+}
+
 export type BuildOptions = {
   projectRoot: string;
   history: MessageRow[];
@@ -363,11 +454,13 @@ function compactToolCalls(calls: ToolCall[] | undefined, age: number): ToolCall[
   return calls.map((c) => {
     if (c.name === 'write_file' && typeof c.args?.content === 'string' && c.args.content.length > 600) {
       const lines = c.args.content.split('\n').length;
+      const exportsInChunk = [...c.args.content.matchAll(/export\s+(?:const|function)\s+([A-Za-z0-9_$]+)\b/g)].map((m) => m[1]);
+      const expNote = exportsInChunk.length ? ` (exports: ${exportsInChunk.join(', ')})` : '';
       return {
         ...c,
         args: {
           ...c.args,
-          content: `[compacted: ${lines} lines (${c.args.content.length} chars) written to ${String(c.args.path ?? 'file')} — current file is on disk]`,
+          content: `[compacted: ${lines} lines (${c.args.content.length} chars)${expNote} written to ${String(c.args.path ?? 'file')} — current file & header are pinned above]`,
         },
       };
     }
@@ -399,6 +492,7 @@ function messageCharCost(msg: ChatMessage): number {
 
 /** Compile the conversation: stable system prefix first (for prompt caching), live state, then compacted history. */
 export function buildMessages(opts: BuildOptions): ChatMessage[] {
+  const pin = episodePin(opts.projectRoot, opts.history);
   // Put static instructions and engine signatures first so LLM prompt caches hit on every step of a turn
   const head: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -413,6 +507,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
       role: 'system',
       content: `## Where the episode stands (live, recomputed each turn)\n${projectState(opts.projectRoot)}\n\nDo the next todo step; do not re-read files you already know unless a step fails.`,
     },
+    ...(pin ? [{ role: 'system' as const, content: pin }] : []),
   ];
   const headChars = head.reduce((n, m) => n + m.content.length, 0);
 

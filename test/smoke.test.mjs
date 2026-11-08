@@ -255,6 +255,43 @@ test('context compaction: compacts old write_file payloads, drops orphan tool me
     const oldAssistant = msgs.find((m) => m.role === 'assistant' && m.toolCalls?.length);
     assert.ok(oldAssistant, 'old assistant tool call should be present');
     assert.match(String(oldAssistant.toolCalls[0].args.content), /\[compacted:/);
+
+    // Test episodePin: pins DIRECTOR.md, shared shots.tsx header, exported shots, and remaining shots
+    const epDir = path.join(dir, 'src', 'episodes', 'ep');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'Ep',
+        slug: 'ep',
+        title: ['TEST'],
+        script: [{ text: 'Un deux trois quatre' }],
+        shots: [
+          { id: 'S1', size: 'wide', set: 'study', note: 'Un deux' },
+          { id: 'S2', size: 'close', set: 'study', note: 'trois quatre' },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({
+        slug: 'ep',
+        total: 120,
+        segments: [{ shot: 'S1', a: 0, b: 60 }, { shot: 'S2', a: 60, b: 120 }],
+        shots: [{ id: 'S1', len: 60, size: 'wide' }, { id: 'S2', len: 60, size: 'close' }],
+      }),
+    );
+    fs.writeFileSync(path.join(epDir, 'DIRECTOR.md'), '# Réalisation\nSalon crème #EFE3CC avec canapé vert #7A8B6F.');
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      `import React from 'react';\nconst NARR = makeLook({ jacket: '#3A86FF' });\nexport const S1 = ({ t, len }) => <g />;\n`,
+    );
+    const msgsPinned = buildMessages({ projectRoot: dir, history, maxChars: 90_000 });
+    const pinMsg = msgsPinned.find((m) => m.role === 'system' && m.content.startsWith('## Active episode continuity pin'));
+    assert.ok(pinMsg, 'continuity pin system message should be present');
+    assert.match(pinMsg.content, /Salon crème #EFE3CC/);
+    assert.match(pinMsg.content, /const NARR = makeLook/);
+    assert.match(pinMsg.content, /Remaining to export: S2/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
