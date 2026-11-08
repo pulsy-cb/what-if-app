@@ -18,6 +18,39 @@ navigateur ──► POST /api/threads/:id/messages      (une instruction, en fr
              SSE ◄── texte, appels d'outils, artefacts, demandes d'approbation
 ```
 
+## Exemples de productions générées
+
+### Plans HD générés par l'agent (Remotion + moteur 2D)
+
+| *La Bande de Möbius* — ruban continu | *La Bande de Möbius* — carton titre |
+| :---: | :---: |
+| ![Möbius S2](docs/screenshots/shot-mobius-s2.png) | ![Möbius S3](docs/screenshots/shot-mobius-s3.png) |
+| ***Doubler une feuille de papier* — classe** | ***Doubler une feuille de papier* — géométrie** |
+| ![Math Teacher S1](docs/screenshots/shot-math-teacher-s1.png) | ![Math Teacher S8](docs/screenshots/shot-math-teacher-s8.png) |
+| ***Et si tu n'avais pas coupé le son ?* — insert UI** | ***Et si ton date était le patron ?* — schématique** |
+| ![Almost Muted S4](docs/screenshots/shot-almost-muted-s4.png) | ![RDV S12](docs/screenshots/shot-rdv-s12.png) |
+
+### Planches de storyboard automatiques (`whatif_run board`)
+
+Chaque épisode passe par une planche de contact complète (1 image clé par plan + cadrage + timecode + sous-titres alignés au mot près) inspectée par les audits de layout et par l'agent **Reviewer** indépendant avant le rendu vidéo final :
+
+#### *Et si tu n'avais pas coupé le son ?* (`almost-muted`)
+![Storyboard Almost Muted](docs/screenshots/storyboard-almost-muted.jpg)
+
+#### *La Bande de Möbius* (`mobius`)
+![Storyboard Möbius](docs/screenshots/storyboard-mobius.jpg)
+
+<details>
+<summary>Voir d'autres planches de storyboard (<i>Doubler une feuille de papier</i>, <i>Et si ton date était le patron ?</i>)</summary>
+
+#### *Doubler une feuille de papier* (`math-teacher`)
+![Storyboard Math Teacher](docs/screenshots/storyboard-math-teacher.jpg)
+
+#### *Et si ton date était le patron ?* (`rdv`)
+![Storyboard RDV](docs/screenshots/storyboard-rdv.jpg)
+
+</details>
+
 ## Démarrage
 
 ### En local (Node ≥ 22.5)
