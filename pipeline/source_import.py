@@ -32,8 +32,21 @@ from nouveau_client import (
 MAX_BLOCK_WORDS = 22
 
 
+def clean_french_spacing(text: str) -> str:
+    """Fix spurious spaces around hyphens in French subject-verb inversions ('a- t- elle' -> 'a-t-elle', 'ai- je' -> 'ai-je')."""
+    s = re.sub(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]+)-\s+t-\s+(il|elle|on|ils|elles)\b", r"\1-t-\2", text, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\b([A-Za-zÀ-ÖØ-öø-ÿ]+)-\s+(je|tu|il|elle|on|nous|vous|ils|elles|ce|la|le|les|moi|toi|lui|leur|nous|vous|y|en)\b",
+        r"\1-\2",
+        s,
+        flags=re.IGNORECASE,
+    )
+    return s
+
+
 def sentences(text: str) -> List[str]:
-    parts = re.split(r"(?<=[.!?…])\s+", text.replace("\n", " ").strip())
+    cleaned = clean_french_spacing(text)
+    parts = re.split(r"(?<=[.!?…])\s+", cleaned.replace("\n", " ").strip())
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -229,7 +242,7 @@ def main(argv: List[str]) -> int:
                 nv.select_proposal(str(video_id), chosen.get("id"))
             except NouveauError as e:
                 print(f"[source] select failed ({e}); keeping text anyway", file=sys.stderr)
-        text = str(chosen.get("translation") or "").strip()
+        text = clean_french_spacing(str(chosen.get("translation") or "").strip())
         out = proj.out_dir(slug)
         (out / "source.fr.md").write_text(text + "\n", encoding="utf-8")
         voice_det = detect_narrator_voice(text, str(chosen.get("title") or title))

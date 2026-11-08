@@ -66,7 +66,7 @@ KEYWORDS = {
         "casque", "micro", "muet", "mute", "jeu", "jouer", "gamer", "vocal", "console", "manette",
         "stream", "discord", "appel",
     ],
-    "rooftop": ["toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "monde", "terre", "etoile", "lune"],
+    "rooftop": ["toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "etoile", "lune", "terrasse"],
     "stairwell": ["escalier", "marche", "monte", "descend", "etage", "rampe", "couloir", "ascenseur"],
     "study": [
         "bureau", "feuille", "fiche", "crayon", "cahier", "stylo", "papier", "dessin", "bande",
@@ -78,7 +78,7 @@ KEYWORDS = {
     ],
 }
 
-# Words after which a cut is forbidden (determiners, prepositions, clitics that bind to the next word)
+# Words after which a cut is forbidden (determiners, prepositions, clitics, auxiliaries that bind to the next word)
 NO_CUT_AFTER = {
     "le", "la", "les", "un", "une", "des", "du", "de", "d", "au", "aux",
     "ce", "cet", "cette", "ces", "mon", "ton", "son", "ma", "ta", "sa", "mes", "tes", "ses", "nos", "vos", "leurs",
@@ -87,6 +87,44 @@ NO_CUT_AFTER = {
     "et", "ou", "mais", "donc", "or", "ni", "car", "que", "qu", "qui", "dont", "ou", "si", "comme",
     "plus", "moins", "tres", "trop", "tout", "toute", "tous", "toutes", "meme", "autre", "autres",
     "demi", "semi", "non", "pas", "peu", "bien",
+    "ai", "as", "ont", "avais", "avait", "avaient", "suis", "es", "est", "sommes", "etes", "sont",
+    "etais", "etait", "etaient", "vais", "vas", "va", "allais", "allait", "allaient", "peux", "peut",
+    "pouvais", "pouvait", "voulais", "voulait", "dois", "doit", "devait", "commence", "essayait", "essaye",
+}
+
+# Multi-word conjunctions that must never be split across two shots ("même | si", "pendant | que", "parce | que")
+COMPOUND_CONNECTORS = {
+    ("meme", "si"), ("parce", "que"), ("parce", "qu"), ("pendant", "que"), ("pendant", "qu"),
+    ("alors", "que"), ("alors", "qu"), ("tandis", "que"), ("avant", "que"), ("avant", "de"),
+    ("apres", "que"), ("apres", "avoir"), ("sans", "que"), ("bien", "que"), ("pour", "que"),
+    ("afin", "que"), ("afin", "de"), ("des", "que"), ("jusqu", "a"), ("au", "lieu"),
+}
+
+# Semantic vocabulary for shot framing (replaces blind % len(SIZES) cycling)
+SPEECH_REACTION_WORDS = {
+    "dit", "demande", "demander", "repondu", "repond", "souri", "sourire", "pleurait", "pleurer", "pleure",
+    "hurlait", "hurler", "hurle", "crie", "crier", "appele", "visage", "yeux", "regard", "regarde",
+    "bouche", "larmes", "pardon", "desolee", "desole", "merci", "aide", "attends", "voyons", "pourquoi",
+    "quoi", "comment", "chuchote", "soupire", "ri", "rire", "rougi", "blanchi", "grimace", "silence",
+}
+
+OBJECT_PROP_WORDS = {
+    "bouteille", "fiole", "flacon", "poudre", "telephone", "portable", "ecran", "message", "texto",
+    "cle", "cles", "serrure", "billet", "carte", "lettre", "note", "addition", "facture", "ticket",
+    "plat", "assiette", "bol", "verre", "tasse", "sac", "boite", "tupperware", "bague", "alliance",
+    "montre", "bouton", "fil", "cable", "couteau", "ciseaux", "stylo", "feuille", "photo", "etiquette",
+    "ceinture", "doritos", "chips", "portefeuille", "monnaie", "enveloppe", "pilule", "comprime",
+}
+
+WIDE_ACTION_WORDS = {
+    "approchee", "approche", "bondi", "saute", "leve", "levee", "assis", "assise", "entre", "entree",
+    "sorti", "sortie", "couru", "marche", "tire", "pousse", "arrache", "ensemble", "toutes", "canape",
+    "salon", "piece", "rue", "porte", "couloir", "escalier", "tous", "devant", "autour",
+}
+
+DRAMATIC_LOW_HIGH_WORDS = {
+    "hurlait", "geant", "monstre", "coince", "coincee", "piege", "impossible", "terreur", "panique",
+    "etire", "dechire", "comprimait", "ecrase", "soudain", "explose", "effondre", "domine",
 }
 
 # Pre-cached clips in studio/library/sfx/ (exact prompt + duration so wi.py clip_path resolves offline)
@@ -233,6 +271,18 @@ def infer_story_sets(ep: dict, words: list[dict], root: Path, slug: str) -> tupl
     return primary, second
 
 
+def clean_french_spacing(text: str) -> str:
+    """Fix spurious spaces around hyphens in French inversions ('a- t- elle' -> 'a-t-elle', 'ai- je' -> 'ai-je')."""
+    s = re.sub(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]+)-\s+t-\s+(il|elle|on|ils|elles)\b", r"\1-t-\2", text, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\b([A-Za-zÀ-ÖØ-öø-ÿ]+)-\s+(je|tu|il|elle|on|nous|vous|ils|elles|ce|la|le|les|moi|toi|lui|leur|y|en)\b",
+        r"\1-\2",
+        s,
+        flags=re.IGNORECASE,
+    )
+    return s
+
+
 def boundary_score(words: list[dict], idx: int, beat_map: dict[int, str]) -> float:
     """Higher score = better place to start a new shot at word `idx` (cutting between idx-1 and idx)."""
     if idx <= 0 or idx >= len(words):
@@ -248,19 +298,21 @@ def boundary_score(words: list[dict], idx: int, beat_map: dict[int, str]) -> flo
     if idx in beat_map:
         score += 50.0
     if any(c in prev_p for c in ".?!…"):
-        score += 35.0
+        score += 42.0
     elif any(c in prev_p for c in ":;—"):
-        score += 24.0
+        score += 26.0
     elif "," in prev_p:
-        score += 15.0
+        score += 16.0
 
-    # Never cut right after a determiner, preposition, or inside "bout à bout" / "demi-tour"
+    # Never cut right after a determiner, preposition, auxiliary, or inside "bout à bout" / "même si" / "pendant que"
     if prev_w in NO_CUT_AFTER or prev_p.endswith("-"):
-        score -= 40.0
+        score -= 48.0
+    if (prev_w, curr_w) in COMPOUND_CONNECTORS:
+        score -= 60.0
     if idx + 1 < len(words) and curr_w == "a" and bare_ascii(str(words[idx + 1].get("w", ""))) == prev_w:
         score -= 45.0  # e.g. "bout | à bout"
-    if curr_w in {"et", "mais", "puis", "alors", "quand", "un", "une", "le", "la", "les", "tu", "il", "elle", "on"}:
-        score += 4.0
+    if curr_w in {"et", "mais", "puis", "alors", "quand", "un", "une", "le", "la", "les", "tu", "il", "elle", "on"} and prev_w not in NO_CUT_AFTER:
+        score += 5.0
     return score
 
 
@@ -272,6 +324,7 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
     k = min(k, n // 2)
     total_s = max(1.0, float(words[-1].get("e", 0)) - float(words[0].get("s", 0)))
     ideal_dur = total_s / k
+    min_dur = 1.8 if total_s > 32.0 else 1.15
     max_dur = max(2.8, ideal_dur * 1.55)
 
     b_scores = [boundary_score(words, i, beat_map) for i in range(n)]
@@ -283,8 +336,8 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
         t1 = float(words[j - 1].get("e", 0))
         dur = max(0.1, t1 - t0)
         pen = abs(dur - ideal_dur) * 14.0
-        if dur < 1.0:
-            pen += (1.0 - dur) * 80.0
+        if dur < min_dur:
+            pen += (min_dur - dur) * 95.0
         elif dur > max_dur:
             pen += (dur - max_dur) * 55.0
         return (b_scores[i] if i > 0 else 0.0) - pen
@@ -313,6 +366,56 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
         cur = parent[s][cur]
         cuts[s - 1] = cur
     return cuts
+
+
+def infer_shot_size(
+    chunk: list[dict],
+    idx: int,
+    total_shots: int,
+    is_title: bool,
+    room: str,
+    prev_size: str,
+    insert_count: int,
+) -> str:
+    """Choose camera framing from the narrative semantics of the clause (never blind % len cycling)."""
+    if is_title:
+        return "title, wide"
+    if room == DIAGRAM:
+        return "schematic"
+    if idx == 0:
+        return "wide"
+
+    tokens = {bare_ascii(str(w.get("w") or "")) for w in chunk if bare_ascii(str(w.get("w") or ""))}
+    puncts = "".join(str(w.get("p") or str(w.get("w") or "")) for w in chunk)
+    has_question_or_exclaim = "?" in puncts or "!" in puncts
+    speech_hits = len(tokens & SPEECH_REACTION_WORDS) + (2 if has_question_or_exclaim else 0)
+    prop_hits = len(tokens & OBJECT_PROP_WORDS)
+    wide_hits = len(tokens & WIDE_ACTION_WORDS)
+    dramatic_hits = len(tokens & DRAMATIC_LOW_HIGH_WORDS)
+
+    max_inserts = max(2, total_shots // 5)
+    # 1. Insert: ONLY when a physical object/prop is explicitly named, without full-body movement or direct dialogue, and never back-to-back
+    if prop_hits > 0 and speech_hits == 0 and wide_hits == 0 and prev_size != "insert" and insert_count < max_inserts:
+        return "insert"
+
+    # 2. Dramatic angle: only when strong physical/emotional tension words appear, and never back-to-back
+    if dramatic_hits > 0 and "angle" not in prev_size:
+        return "medium, low angle" if (idx % 2 == 0) else "medium, high angle"
+
+    # 3. Close-up: spoken lines, questions/exclamations, facial reactions
+    if speech_hits > 0 and prev_size != "close":
+        return "close"
+
+    # 4. Wide shot: physical movement, group action, room entry/exit
+    if wide_hits > 0 and prev_size != "wide":
+        return "wide"
+
+    # 5. Natural cinematic alternation (wide -> medium -> close -> medium) without ever repeating the exact same framing twice
+    fallback_order = ["medium", "close", "wide", "medium"]
+    cand = fallback_order[idx % len(fallback_order)]
+    if cand == prev_size:
+        cand = "medium" if prev_size != "medium" else ("close" if speech_hits >= wide_hits else "wide")
+    return cand
 
 
 def build_default_sound(shots: list[dict], title_idx: int) -> dict:
@@ -408,10 +511,14 @@ def main() -> int:
     previous_set = ""
     run = 0
     title_idx = -1
+    has_source_video = bool((ep.get("source") or {}).get("videoId"))
 
-    # Find which chunk best matches the premise / title card (beat 2 or title words)
+    # Find which chunk best matches the premise / title card (beat 2 or "et si..." phrase in the opening third)
     best_title_score = 0
+    max_title_pos = max(3, len(bounds) // 3)
     for i in range(len(bounds)):
+        if i < 1 or i > max_title_pos:
+            continue
         start = bounds[i]
         end = bounds[i + 1] if i + 1 < len(bounds) else len(words)
         chunk = words[start:end]
@@ -420,20 +527,23 @@ def main() -> int:
         overlap = len({bare_ascii(str(w["w"])) for w in chunk} & keys)
         is_whatif_phrase = "et si " in f"{chunk_ascii} " or "what if " in f"{chunk_ascii} "
         t_score = (
-            (10 if ("2" in b_label or "premise" in b_label.lower() or "title" in b_label.lower()) else 0)
-            + (20 if is_whatif_phrase else 0)
+            (15 if ("2" in b_label or "premise" in b_label.lower() or "title" in b_label.lower()) else 0)
+            + (25 if is_whatif_phrase else 0)
             + overlap * 3
         )
-        if t_score > best_title_score and 1 <= i <= len(bounds) - 2:
+        if t_score > best_title_score:
             best_title_score = t_score
             title_idx = i
-    if title_idx < 0 and len(bounds) >= 4:
-        title_idx = min(len(bounds) - 3, max(2, len(bounds) // 2))
-
-    # Vary camera framing within the same location so staying in one room/vehicle/exterior feels cinematic
-    SAME_SET_SIZES = ["close", "insert", "medium, low angle", "wide", "close", "medium, high angle"]
+    # For standalone 7-beat What If episodes, ensure a title card exists near the start; for narrative :8005 stories,
+    # never force a random title card in the middle of the story unless there is an explicit What If premise!
+    if has_source_video and best_title_score < 18:
+        title_idx = -1
+    elif not has_source_video and title_idx < 0 and len(bounds) >= 4:
+        title_idx = min(3, len(bounds) - 2)
 
     wi_prev = 0
+    prev_size = ""
+    insert_count = 0
     for i in range(len(bounds)):
         start = bounds[i]
         end = bounds[i + 1] if i + 1 < len(bounds) else len(words)
@@ -442,7 +552,7 @@ def main() -> int:
             continue
         text = [str(w["w"]).strip() for w in chunk]
         span = max(18, round(float(chunk[-1].get("e", 0)) * FPS) - round(float(chunk[0].get("s", 0)) * FPS))
-        label = " ".join(text[:10])
+        label = clean_french_spacing(" ".join(text[:12]))
         b_label = next((beat_map[idx] for idx in range(start, end) if idx in beat_map), "")
         explicit_beat_set = next((beat_sets[idx] for idx in range(start, end) if idx in beat_sets), "")
 
@@ -451,35 +561,33 @@ def main() -> int:
         has_digits = has_science and any(re.search(r"\d", t) for t in text)
         if is_title:
             room = explicit_beat_set or (primary_set if primary_set != DIAGRAM else "rooftop")
-        elif is_turn or (has_digits and i > title_idx and previous_set != DIAGRAM):
+        elif is_turn or (has_digits and i > max(0, title_idx) and previous_set != DIAGRAM):
             room = DIAGRAM
         elif explicit_beat_set:
             room = explicit_beat_set
         else:
+            has_explicit_default = bool(str(ep.get("defaultSet") or ep.get("set") or "").strip())
+            min_hits = 2 if has_explicit_default else 1
             hits = {
                 room_name: sum(1 for t in text if bare_ascii(t) in {bare_ascii(k) for k in words_of})
                 for room_name, words_of in KEYWORDS.items()
             }
             ranked = sorted(hits.items(), key=lambda kv: -kv[1])
-            best = next((name for name, score in ranked if score > 0 and (name != DIAGRAM or run < 2)), "")
+            best = next((name for name, score in ranked if score >= min_hits and (name != DIAGRAM or (has_science and run < 2))), "")
             if best:
                 room = best
-            elif previous_set and previous_set != DIAGRAM and run < 3:
+            elif previous_set and previous_set != DIAGRAM and (has_explicit_default or run < 3):
                 room = previous_set
             else:
                 # Stay faithful to the story's world (primary_set / secondary_set) — never teleport into classroom/kitchen
-                room = secondary_set if (previous_set == primary_set and run >= 3) else primary_set
+                room = secondary_set if (previous_set == primary_set and run >= 3 and not has_explicit_default) else primary_set
         run = run + 1 if room == previous_set else 1
         previous_set = room
 
-        if is_title:
-            size = "title, wide"
-        elif room == DIAGRAM:
-            size = "schematic"
-        elif run > 1:
-            size = SAME_SET_SIZES[(run - 1) % len(SAME_SET_SIZES)]
-        else:
-            size = SIZES[i % len(SIZES)]
+        size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count)
+        prev_size = size
+        if size == "insert":
+            insert_count += 1
         if is_title and not label.lower().startswith("title"):
             label = f"title card: {label}"
 
@@ -509,13 +617,17 @@ def main() -> int:
 
     ep["shots"] = shots
     ep["edit"] = edit
-    title_id = shots[title_idx]["id"] if 0 <= title_idx < len(shots) else "S4"
     last_id = shots[-1]["id"]
-    ep["fx"] = [
-        {"at": title_id, "kind": "flash", "color": "#FFF3DC", "o": 0.45},
-        {"at": last_id, "kind": "flash", "color": "#FF3344", "o": 0.4},
-        {"at": last_id, "kind": "shake", "len": 8, "amp": 10},
-    ]
+    fx_list = []
+    if 0 <= title_idx < len(shots):
+        fx_list.append({"at": shots[title_idx]["id"], "kind": "flash", "color": "#FFF3DC", "o": 0.45})
+    fx_list.extend(
+        [
+            {"at": last_id, "kind": "flash", "color": "#FF3344", "o": 0.4},
+            {"at": last_id, "kind": "shake", "len": 8, "amp": 10},
+        ]
+    )
+    ep["fx"] = fx_list
     ep["sound"] = build_default_sound(shots, title_idx)
 
     ep_path.write_text(json.dumps(ep, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
