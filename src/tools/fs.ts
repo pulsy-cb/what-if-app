@@ -1,9 +1,67 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { exec } from './exec.js';
 import type { Tool, ToolResult } from './types.js';
 import {
   exportedSymbols, globToRegExp, isBinaryPath, mimeOf, readText, relOf, safeJoin, walk,
 } from './paths.js';
+
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** Refuse writing to executable script folders, package manifests, or git internals inside the project. */
+function assertWritableProjectPath(relPath: string): void {
+  const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (
+    norm === 'package.json' ||
+    norm === 'package-lock.json' ||
+    norm.startsWith('scripts/') ||
+    norm.startsWith('.git/') ||
+    /(^|\/)\.env(\.|$)/.test(norm)
+  ) {
+    throw new Error(`writing to "${norm}" is refused by security policy`);
+  }
+}
+
+/**
+ * Fast local TypeScript check when an episode's shots.tsx or index.tsx is written/edited and node_modules exists.
+ * Catches syntax/prop errors immediately before a slow Modal round-trip.
+ */
+async function quickEpisodeTypecheck(projectRoot: string, relPath: string): Promise<string> {
+  const norm = relPath.replace(/\\/g, '/');
+  const m = /^src\/episodes\/([^/]+)\/(shots|index)\.tsx$/.exec(norm);
+  if (!m) return '';
+  const slug = m[1]!;
+  if (!fs.existsSync(path.join(projectRoot, 'node_modules'))) return '';
+  const projTsc = path.join(projectRoot, 'node_modules', '.bin', 'tsc');
+  const appTsc = path.join(APP_ROOT, 'node_modules', '.bin', 'tsc');
+  const tscBin = fs.existsSync(projTsc) ? projTsc : fs.existsSync(appTsc) ? appTsc : '';
+  if (!tscBin) return '';
+
+  // Only run tsc once all timeline shots are exported (skip intermediate write_file append chunks)
+  try {
+    const tl = JSON.parse(fs.readFileSync(path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json'), 'utf8'));
+    const shotsSrc = fs.readFileSync(path.join(projectRoot, 'src', 'episodes', slug, 'shots.tsx'), 'utf8');
+    const wanted: string[] = (tl?.shots ?? []).map((s: any) => String(s?.id ?? '')).filter(Boolean);
+    if (wanted.some((id) => !new RegExp(`export\\s+(?:const|function)\\s+${id}\\b`).test(shotsSrc))) {
+      return '';
+    }
+  } catch {
+    /* run check anyway */
+  }
+
+  const res = await exec([tscBin, '-p', 'tsconfig.json', '--noEmit', '--pretty', 'false'], {
+    cwd: projectRoot,
+    timeoutMs: 25_000,
+  });
+  if (res.code === 0) return '\n[tsc] OK (0 TypeScript errors)';
+  const out = `${res.stdout}\n${res.stderr}`
+    .split('\n')
+    .filter((l) => l.includes(`src/episodes/${slug}/`) || /error TS\d+/.test(l))
+    .slice(0, 15)
+    .join('\n');
+  return out ? `\n[tsc] TypeScript errors detected — fix before running stills/render:\n${out}` : '';
+}
 
 const repoMap: Tool = {
   name: 'repo_map',
@@ -105,6 +163,7 @@ const writeFile: Tool = {
   },
   async run(input: { path: string; content: string; append?: boolean }, ctx): Promise<ToolResult> {
     if (isBinaryPath(input.path)) throw new Error('write_file refuses binary extensions');
+    assertWritableProjectPath(input.path);
     const abs = safeJoin(ctx.projectRoot, input.path);
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -113,17 +172,19 @@ const writeFile: Tool = {
       const sep = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
       fs.appendFileSync(abs, sep + input.content, 'utf8');
       const totalLines = fs.readFileSync(abs, 'utf8').split('\n').length;
+      const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
       return {
         ok: true,
-        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)`,
+        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
         data: { path: input.path, created: false, appended: true, lines: totalLines },
       };
     }
     fs.writeFileSync(abs, input.content, 'utf8');
     const lines = input.content.split('\n').length;
+    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
     return {
       ok: true,
-      summary: `${existed ? 'replaced' : 'created'} ${input.path} (${lines} lines, ${Buffer.byteLength(input.content)} bytes)`,
+      summary: `${existed ? 'replaced' : 'created'} ${input.path} (${lines} lines, ${Buffer.byteLength(input.content)} bytes)${tscNote}`,
       data: { path: input.path, created: !existed, lines },
     };
   },
@@ -256,6 +317,7 @@ const editFile: Tool = {
     additionalProperties: false,
   },
   async run(input: { path: string; edits: { oldText: string; newText: string }[] }, ctx) {
+    assertWritableProjectPath(input.path);
     const src = readText(ctx.projectRoot, input.path, 2_000_000);
     if (src === null) throw new Error(`cannot read ${input.path}`);
     let out = src;
@@ -284,9 +346,10 @@ const editFile: Tool = {
     }
     const abs = safeJoin(ctx.projectRoot, input.path);
     fs.writeFileSync(abs, out, 'utf8');
+    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
     return {
       ok: true,
-      summary: `${applied.length} edit(s) applied to ${input.path}`,
+      summary: `${applied.length} edit(s) applied to ${input.path}${tscNote}`,
       data: { path: input.path, edits: applied.length },
     };
   },

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,13 @@ import { defaultRegistry, type ToolContext, type ToolRegistry } from '../tools/i
 import { PROVIDER_PRESETS, providerConfig, resolveProvider } from './providers/index.js';
 import { runTurn } from './agent.js';
 import { mimeOf, safeJoin, walk } from '../tools/paths.js';
+
+function safeTokenEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 const MAX_BODY = 12 * 1024 * 1024;
 
@@ -74,9 +82,14 @@ export function createApp(config: Config = loadConfig()): App {
 
   const authorised = (url: URL, req: http.IncomingMessage): boolean => {
     if (!config.authToken) return true;
-    const header = req.headers['x-whatif-token'];
+    const header = String(req.headers['x-whatif-token'] ?? '');
     const bearer = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
-    return url.searchParams.get('token') === config.authToken || header === config.authToken || bearer === config.authToken;
+    const qToken = url.searchParams.get('token') ?? '';
+    return (
+      (header.length > 0 && safeTokenEqual(header, config.authToken)) ||
+      (bearer.length > 0 && safeTokenEqual(bearer, config.authToken)) ||
+      (qToken.length > 0 && safeTokenEqual(qToken, config.authToken))
+    );
   };
 
   const server = http.createServer(async (req, res) => {
@@ -100,9 +113,14 @@ export function createApp(config: Config = loadConfig()): App {
   // ---------------------------------------------------------------- static
   function serveStatic(pathname: string, res: http.ServerResponse): void {
     const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    let abs = path.join(config.webDir, rel);
-    if (!abs.startsWith(config.webDir)) return json(res, 403, { error: 'forbidden' });
-    if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) abs = path.join(config.webDir, 'index.html');
+    const webRoot = path.resolve(config.webDir);
+    let abs = path.resolve(webRoot, rel);
+    if (abs !== webRoot && !abs.startsWith(webRoot + path.sep)) return json(res, 403, { error: 'forbidden' });
+    if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) {
+      // Return 404 for missing asset extensions (.js, .css, .png, etc.), only SPA-fallback extensionless routes
+      if (path.extname(rel)) return json(res, 404, { error: 'not found' });
+      abs = path.join(webRoot, 'index.html');
+    }
     if (!fs.existsSync(abs)) return json(res, 404, { error: 'not found' });
     const data = fs.readFileSync(abs);
     res.writeHead(200, { 'content-type': `${mimeOf(abs)}; charset=utf-8`, 'cache-control': 'no-cache' });

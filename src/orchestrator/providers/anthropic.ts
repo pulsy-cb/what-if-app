@@ -10,7 +10,13 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
     label: `anthropic (${cfg.model})`,
     model: cfg.model,
     async chat(req: ChatRequest): Promise<ChatResult> {
-      const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+      const sysMsgs = req.messages.filter((m) => m.role === 'system');
+      // Mark the stable system prefix (first 3 system blocks: SYSTEM_PROMPT, ENGINE_CHEAT, engineDigest) with cache_control
+      const system = sysMsgs.map((m, i) => ({
+        type: 'text',
+        text: m.content,
+        ...(i === Math.min(2, sysMsgs.length - 1) ? { cache_control: { type: 'ephemeral' } } : {}),
+      }));
       const body: Record<string, unknown> = {
         model: cfg.model,
         max_tokens: cfg.maxTokens ?? 8192,
@@ -19,7 +25,12 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
         messages: toAnthropic(req.messages.filter((m) => m.role !== 'system')),
       };
       if (req.tools.length) {
-        body.tools = req.tools.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }));
+        body.tools = req.tools.map((t, i) => ({
+          name: t.function.name,
+          description: t.function.description,
+          input_schema: t.function.parameters,
+          ...(i === req.tools.length - 1 ? { cache_control: { type: 'ephemeral' } } : {}),
+        }));
       }
       const res = await fetchWithRetry(`${base}/v1/messages`, {
         method: 'POST',
@@ -37,6 +48,7 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
       }
 
       let text = '';
+      let finishReason: string | undefined;
       const calls: { id: string; name: string; args: string }[] = [];
       let open: { id: string; name: string; args: string } | null = null;
       for await (const data of sseData(res.body)) {
@@ -58,14 +70,24 @@ export function anthropicProvider(cfg: { baseURL: string; apiKey: string; model:
           }
         } else if (evt.type === 'content_block_stop') {
           open = null;
+        } else if (evt.type === 'message_delta' && evt.delta?.stop_reason) {
+          finishReason = evt.delta.stop_reason === 'max_tokens' ? 'length' : String(evt.delta.stop_reason);
         } else if (evt.type === 'error') {
           throw new Error(`anthropic stream error: ${JSON.stringify(evt.error)}`);
         }
       }
-      const toolCalls: ToolCall[] = calls
-        .filter((c) => c.name)
-        .map((c) => ({ id: c.id, name: c.name, args: safeJson(c.args || '{}') ?? {} }));
-      return { text, toolCalls };
+      let truncatedToolCall: string | undefined;
+      const toolCalls: ToolCall[] = [];
+      for (const c of calls) {
+        if (!c.name) continue;
+        const parsed = c.args.trim() ? safeJson(c.args) : {};
+        if (parsed === null || typeof parsed !== 'object') {
+          truncatedToolCall = c.name;
+          continue;
+        }
+        toolCalls.push({ id: c.id, name: c.name, args: parsed as Record<string, unknown> });
+      }
+      return { text, toolCalls, finishReason, truncatedToolCall };
     },
   };
 }

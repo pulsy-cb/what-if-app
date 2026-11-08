@@ -18,7 +18,16 @@ import sys
 from typing import Any, Dict, List, Optional
 
 import proj
-from nouveau_client import ELEVENLABS_MODEL, ELEVENLABS_SPEED, ELEVENLABS_VOICE, FISH_MODEL, FISH_VOICE, Nouveau, NouveauError
+from nouveau_client import (
+    ELEVENLABS_MODEL,
+    ELEVENLABS_SPEED,
+    ELEVENLABS_VOICE,
+    FISH_MODEL,
+    FISH_VOICE,
+    Nouveau,
+    NouveauError,
+    detect_narrator_voice,
+)
 
 MAX_BLOCK_WORDS = 22
 
@@ -92,8 +101,17 @@ def main(argv: List[str]) -> int:
 
     want = proj.arg(argv, "--pick") or proj.arg(argv, "--proposal") or "hook"
     script_mode = proj.arg(argv, "--script-mode", "elevenlabs") or "elevenlabs"
-    # nouveau picks its own default provider, which may have no quota: default to agy/gemini-3.8-flash-medium
-    model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or "agy/gemini-3.8-flash-medium"
+    # Try the requested model first, then fallback models on :8005 if a provider is temporarily out of quota
+    primary_model = proj.arg(argv, "--model") or os.environ.get("WHATIF_NARRATION_MODEL") or "deepseek/deepseek-v4-flash-0731"
+    fallback_models = [
+        m
+        for m in [primary_model, "deepseek/deepseek-v4-flash-0731", "agy/gemini-3.8-flash-medium", "gemma4:cloud"]
+        if m
+    ]
+    model_candidates: List[str] = []
+    for m in fallback_models:
+        if m not in model_candidates:
+            model_candidates.append(m)
     # By default, apply the chosen server translation proposal directly to episode.json.script so it is never shortened
     apply_script = "--no-apply" not in argv
     want_generate = "--generate" in argv
@@ -133,16 +151,29 @@ def main(argv: List[str]) -> int:
     if not usable(proposals):
         want_generate = True
     if want_generate or not proposals:
-        print(f"[source] asking nouveau for 2 French narration proposals ({script_mode}, model={model})", flush=True)
-        try:
-            fresh = list(nv.proposals(str(video_id), script_mode=script_mode, model=model).get("proposals") or [])
-            proposals = fresh + [p for p in proposals if p not in fresh]
-        except NouveauError as e:
-            print(f"[source] translate/generate failed ({e}); falling back to English transcript", file=sys.stderr)
+        last_err: Optional[Exception] = None
+        for cand_model in model_candidates:
+            print(f"[source] asking nouveau for French narration proposals ({script_mode}, model={cand_model})", flush=True)
             try:
-                tr_data = nv.transcript(str(video_id), lang="en")
-                segs = tr_data.get("transcript") or tr_data.get("segments") or []
-                en_text = " ".join(str(s.get("text") or "").strip() for s in segs if str(s.get("text") or "").strip())
+                fresh = list(nv.proposals(str(video_id), script_mode=script_mode, model=cand_model).get("proposals") or [])
+                if fresh:
+                    proposals = fresh + [p for p in proposals if p not in fresh]
+                    last_err = None
+                    break
+            except NouveauError as e:
+                last_err = e
+                print(f"[source] translate/generate with {cand_model} failed ({e}); trying next model...", file=sys.stderr)
+        if not proposals and last_err is not None:
+            print(f"[source] all translation models failed ({last_err}); falling back to transcript", file=sys.stderr)
+            try:
+                segs = nv.transcript(str(video_id), lang="en")
+                if isinstance(segs, dict):
+                    segs = segs.get("transcript") or segs.get("segments") or []
+                en_text = " ".join(
+                    str(s.get("text") or "").strip()
+                    for s in (segs or [])
+                    if isinstance(s, dict) and str(s.get("text") or "").strip()
+                )
                 if en_text:
                     proposals = [
                         {
@@ -153,10 +184,10 @@ def main(argv: List[str]) -> int:
                             "translation": en_text,
                         }
                     ]
-            except NouveauError:
+            except Exception:
                 pass
             if not proposals:
-                proj.result(ok=False, error=f"translation failed: {e}", videoId=video_id)
+                proj.result(ok=False, error=f"translation failed: {last_err}", videoId=video_id)
                 return 5
 
     pool = usable(proposals)
@@ -201,6 +232,12 @@ def main(argv: List[str]) -> int:
         text = str(chosen.get("translation") or "").strip()
         out = proj.out_dir(slug)
         (out / "source.fr.md").write_text(text + "\n", encoding="utf-8")
+        voice_det = detect_narrator_voice(text, str(chosen.get("title") or title))
+        print(
+            f"[source] narrator gender analysis -> {voice_det['gender']} ({voice_det['voiceName']} {voice_det['voiceId']}, "
+            f"F={voice_det['femaleScore']} M={voice_det['maleScore']})",
+            flush=True,
+        )
         source.update(
             {
                 "provider": "nouveau",
@@ -213,15 +250,30 @@ def main(argv: List[str]) -> int:
                 "model": chosen.get("model_name"),
                 "chars": len(text),
                 "words": len(text.split()),
+                "narratorGender": voice_det["gender"],
+                "recommendedVoiceId": voice_det["voiceId"],
+                "recommendedVoiceName": voice_det["voiceName"],
                 "updatedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
             }
         )
         ep["source"] = source
-        voice_cfg = ep.get("voice") or {}
-        if not voice_cfg or (voice_cfg.get("provider") == "fish" and voice_cfg.get("voiceId") == FISH_VOICE):
+        voice_cfg = dict(ep.get("voice") or {})
+        if not voice_cfg.get("locked") and voice_cfg.get("provider", "elevenlabs") != "fish":
+            ep["voice"] = {
+                **voice_cfg,
+                "provider": "elevenlabs",
+                "voiceId": voice_det["voiceId"],
+                "voiceName": voice_det["voiceName"],
+                "narratorGender": voice_det["gender"],
+                "modelId": voice_cfg.get("modelId") or ELEVENLABS_MODEL,
+                "speakingRate": voice_cfg.get("speakingRate") or ELEVENLABS_SPEED,
+            }
+        elif not voice_cfg or (voice_cfg.get("provider") == "fish" and voice_cfg.get("voiceId") == FISH_VOICE):
             ep["voice"] = {
                 "provider": "elevenlabs",
-                "voiceId": ELEVENLABS_VOICE,
+                "voiceId": voice_det["voiceId"],
+                "voiceName": voice_det["voiceName"],
+                "narratorGender": voice_det["gender"],
                 "modelId": ELEVENLABS_MODEL,
                 "speakingRate": ELEVENLABS_SPEED,
             }
@@ -239,10 +291,11 @@ def main(argv: List[str]) -> int:
             if isinstance(sci, list) and any("TODO" in str(s) for s in sci):
                 ep["science"] = []
         proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
-        proj.save_json(out / "source.json", {**payload, "selected": source, "text": text})
+        proj.save_json(out / "source.json", {**payload, "selected": source, "text": text, "narratorVoice": voice_det})
         payload["scriptWords"] = source["words"]
         payload["applied"] = bool(apply_script)
         payload["blocks"] = len(ep.get("script") or [])
+        payload["narratorVoice"] = voice_det
     else:
         proj.save_json(proj.out_dir(slug) / "source.json", payload)
 

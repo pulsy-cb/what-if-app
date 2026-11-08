@@ -34,6 +34,7 @@ from nouveau_client import (
     FISH_VOICE,
     Nouveau,
     NouveauError,
+    detect_narrator_voice,
     words_of,
 )
 
@@ -290,6 +291,31 @@ def main(argv: List[str]) -> int:
     if not text:
         proj.result(ok=False, error="episode.json has no script text")
         return 2
+
+    # Auto-detect narrator gender & voice from script phrasing (and source.fr.md fallback)
+    # unless --voice was passed explicitly or episode.json voice.locked is true.
+    voice_det: Optional[Dict[str, Any]] = None
+    if provider == "elevenlabs" and not proj.arg(argv, "--voice") and not ep_voice.get("locked"):
+        title_str = " ".join(ep.get("title") or []) if isinstance(ep.get("title"), list) else str(ep.get("topic") or "")
+        voice_det = detect_narrator_voice(text, title_str)
+        if voice_det["femaleScore"] == 0 and voice_det["maleScore"] == 0:
+            src_md = proj.out_dir(slug) / "source.fr.md"
+            if src_md.exists():
+                voice_det = detect_narrator_voice(src_md.read_text(encoding="utf-8", errors="ignore"), title_str)
+        if voice_det["femaleScore"] > 0 or voice_det["maleScore"] > 0 or not ep_voice.get("narratorGender"):
+            V["voiceId"] = voice_det["voiceId"]
+            if ep_voice.get("voiceId") != voice_det["voiceId"] or ep_voice.get("narratorGender") != voice_det["gender"]:
+                ep_voice["voiceId"] = voice_det["voiceId"]
+                ep_voice["voiceName"] = voice_det["voiceName"]
+                ep_voice["narratorGender"] = voice_det["gender"]
+                ep["voice"] = ep_voice
+                proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
+                print(
+                    f"[voice] auto-selected {voice_det['voiceName']} ({voice_det['gender']}, {voice_det['voiceId']}) "
+                    f"[F={voice_det['femaleScore']} M={voice_det['maleScore']}]",
+                    flush=True,
+                )
+
     script = proj.split_words(text)
     sig = hashlib.sha1(
         (proj.STUDIO.name + json_dumps([text, V, video_id])).encode("utf-8")

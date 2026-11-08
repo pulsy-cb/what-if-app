@@ -4,7 +4,7 @@ import path from 'node:path';
 export const SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist', '.whatif', '.cache', '__pycache__']);
 const BINARY_EXT = new Set([
   '.mp4', '.mov', '.mp3', '.wav', '.png', '.jpg', '.jpeg', '.webp', '.gif',
-  '.zip', '.gz', '.woff', '.woff2', '.ttf', '.otf', '.ico', '.pdf', '.mp4',
+  '.zip', '.gz', '.woff', '.woff2', '.ttf', '.otf', '.ico', '.pdf',
 ]);
 
 /** Resolve a project-relative path, refusing anything that escapes the project root. */

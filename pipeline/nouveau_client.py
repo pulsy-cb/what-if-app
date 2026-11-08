@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -274,3 +275,238 @@ def words_of(transcript: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 continue
             out.append({"w": text, "s": float(w.get("start") or 0.0), "e": float(w.get("end") or 0.0)})
     return out
+
+
+_ADV_OPT = (
+    r"(?:toujours\s+|jamais\s+|pas\s+|plus\s+|vite\s+|enfin\s+|vraiment\s+|"
+    r"très\s+|si\s+|trop\s+|toute\s+|tout\s+|complètement\s+|totalement\s+|"
+    r"extrêmement\s+|absolument\s+|immédiatement\s+|aussitôt\s+|presque\s+|"
+    r"encore\s+|déjà\s+|bien\s+|mal\s+|vite\s+|tellement\s+)*"
+)
+
+_FEM_REFL_PP = (
+    r"(?:remise|assise|levée|rendue|sentie|retrouvée|mariée|fiancée|habillée|"
+    r"maquillée|installée|approchée|échappée|trompée|souvenue|aperçue|inscrite|"
+    r"mise|tournée|retournée|arrêtée|penchée|précipitée|cachée|réveillée|"
+    r"endormie|évanouie|enfuie|battue|défendue|plainte|servie|occupée|"
+    r"inquiétée|habituée|effondrée|énervée|fâchée|décidée|lancée|faite\s+avoir)"
+)
+
+_MASC_REFL_PP = (
+    r"(?:remis|assis|levé|rendu|senti|retrouvé|marié|fiancé|habillé|"
+    r"installé|approché|échappé|trompé|souvenu|aperçu|inscrit|"
+    r"mis|tourné|retourné|arrêté|penché|précipité|caché|réveillé|"
+    r"endormi|évanoui|enfui|battu|défendu|plaint|servi|occupé|"
+    r"inquiété|habitué|effondré|énervé|fâché|décidé|lancé)"
+)
+
+_FEM_ADJ_PP = (
+    r"(?:seule|sûre|certaine|prête|fatiguée|épuisée|choquée|terrifiée|effrayée|"
+    r"heureuse|contente|surprise|enceinte|petite|grande|folle|amoureuse|jalouse|"
+    r"furieuse|désolée|inquiète|perdue|bloquée|coincée|habituée|obligée|forcée|"
+    r"confuse|sidérée|bouleversée|dégoûtée|soulagée|"
+    r"gênée|embarrassée|humiliée|vexée|blessée|touchée|émue|stressée|angoissée|"
+    r"paniquée|paralysée|figée|tétanisée|fière|naïve|impatiente|curieuse|"
+    r"nerveuse|sérieuse|malheureuse|chanceuse|convaincue|persuadée|déterminée|"
+    r"censée|supposée|invitée|virée|embauchée|acceptée|refusée|amusée|intriguée)"
+)
+
+_MASC_ADJ_PP = (
+    r"(?:seul|sûr|certain|prêt|fatigué|épuisé|choqué|terrifié|effrayé|"
+    r"heureux|content|surpris|petit|grand|fou|amoureux|jaloux|"
+    r"furieux|désolé|inquiet|perdu|bloqué|coincé|habitué|obligé|forcé|"
+    r"confus|sidéré|bouleversé|dégoûté|soulagé|"
+    r"gêné|embarrassé|humilié|vexé|blessé|touché|ému|stressé|angoissé|"
+    r"paniqué|paralysé|figé|tétanisé|fier|naïf|impatient|curieux|"
+    r"nerveux|sérieux|malheureux|chanceux|convaincu|persuadé|déterminé|"
+    r"censé|supposé|invité|viré|embauché|accepté|refusé|amusé|intrigué)"
+)
+
+_FEM_STATE_OR_MOTION_PP = (
+    rf"(?:{_FEM_ADJ_PP}|arrivée|allée|venue|sortie|partie|entrée|restée|tombée|passée|retournée|montée|descendue|née|morte)"
+)
+
+_MASC_STATE_OR_MOTION_PP = (
+    rf"(?:{_MASC_ADJ_PP}|arrivé|allé|venu|sorti|parti|entré|resté|tombé|passé|retourné|monté|descendu|né|mort)"
+)
+
+_STATE_VERB_FEM = (
+    r"(?:j['’](?:étais|avais\s+l['’]air)|"
+    r"je\s+(?:ne\s+|n['’])?(?:étais|suis|serais|deviens|reste|me\s+sens|me\s+sentais|paraissais|semblais)"
+    r"(?:\s+(?:pas|plus|jamais|toujours|encore|vraiment))?"
+    r"(?:\s+(?:devenue|restée|tombée))?)"
+)
+
+_STATE_VERB_MASC = (
+    r"(?:j['’](?:étais|avais\s+l['’]air)|"
+    r"je\s+(?:ne\s+|n['’])?(?:étais|suis|serais|deviens|reste|me\s+sens|me\s+sentais|paraissais|semblais)"
+    r"(?:\s+(?:pas|plus|jamais|toujours|encore|vraiment))?"
+    r"(?:\s+(?:devenu|resté|tombé))?)"
+)
+
+_FEM_PATTERNS: List[Tuple[re.Pattern[str], int, str]] = [
+    (
+        re.compile(rf"\bje\s+(?:ne\s+)?me\s+suis\s+{_ADV_OPT}{_FEM_REFL_PP}\b", re.IGNORECASE),
+        3,
+        "accord réfléchi 1re pers. fém.",
+    ),
+    (
+        re.compile(
+            rf"\b{_STATE_VERB_FEM}\s+{_ADV_OPT}{_FEM_STATE_OR_MOTION_PP}\b",
+            re.IGNORECASE,
+        ),
+        3,
+        "attribut/participe 1re pers. fém.",
+    ),
+    (
+        re.compile(
+            rf"\b(?:j['’]ai\s+\w+|je\s+\w+)[^.!?«»\"“”]{{0,45}},\s*{_ADV_OPT}{_FEM_ADJ_PP}\b",
+            re.IGNORECASE,
+        ),
+        3,
+        "adjectif apposé 1re pers. fém.",
+    ),
+    (
+        re.compile(
+            rf"(?:^|[.!?…]\s+){_ADV_OPT}{_FEM_ADJ_PP},\s*(?:je\b|j['’])",
+            re.IGNORECASE,
+        ),
+        3,
+        "adjectif détaché en tête 1re pers. fém.",
+    ),
+    (
+        re.compile(
+            r"\b(?:je\s+suis\s+une\s+(?:femme|fille|mère|maman|épouse|cliente|patiente|étudiante|serveuse|infirmière|enseignante|voisine)|"
+            r"en\s+tant\s+que\s+(?:femme|mère|maman|fille|épouse)|"
+            r"une\s+(?:femme|fille)\s+comme\s+moi)\b",
+            re.IGNORECASE,
+        ),
+        4,
+        "auto-identification fém.",
+    ),
+    (
+        re.compile(
+            r"\b(?:mon\s+(?:mari|petit\s+ami|copain|ex-mari|ex-copain|fiancé|chéri|petit\s+copain)|"
+            r"me\s+suis\s+fait\s+faire\s+les\s+ongles|faire\s+mes\s+ongles|ma\s+manucure|ma\s+pédicure|"
+            r"ma\s+technicienne|ma\s+robe|ma\s+jupe|mon\s+sac\s+à\s+main|mon\s+maquillage|ma\s+grossesse|mon\s+accouchement)\b",
+            re.IGNORECASE,
+        ),
+        2,
+        "contexte narratrice fém.",
+    ),
+]
+
+_MASC_PATTERNS: List[Tuple[re.Pattern[str], int, str]] = [
+    (
+        re.compile(rf"\bje\s+(?:ne\s+)?me\s+suis\s+{_ADV_OPT}{_MASC_REFL_PP}\b", re.IGNORECASE),
+        3,
+        "accord réfléchi 1re pers. masc.",
+    ),
+    (
+        re.compile(
+            rf"\b{_STATE_VERB_MASC}\s+{_ADV_OPT}{_MASC_STATE_OR_MOTION_PP}\b",
+            re.IGNORECASE,
+        ),
+        3,
+        "attribut/participe 1re pers. masc.",
+    ),
+    (
+        re.compile(
+            rf"\b(?:j['’]ai\s+\w+|je\s+\w+)[^.!?«»\"“”]{{0,45}},\s*{_ADV_OPT}{_MASC_ADJ_PP}\b",
+            re.IGNORECASE,
+        ),
+        3,
+        "adjectif apposé 1re pers. masc.",
+    ),
+    (
+        re.compile(
+            rf"(?:^|[.!?…]\s+){_ADV_OPT}{_MASC_ADJ_PP},\s*(?:je\b|j['’])",
+            re.IGNORECASE,
+        ),
+        3,
+        "adjectif détaché en tête 1re pers. masc.",
+    ),
+    (
+        re.compile(
+            r"\b(?:je\s+suis\s+un\s+(?:homme|gars|mec|père|papa|mari|client|patient|étudiant|serveur|infirmier|voisin)|"
+            r"en\s+tant\s+qu['’]homme|en\s+tant\s+que\s+(?:père|papa|mari|garçon)|"
+            r"un\s+(?:homme|gars|mec)\s+comme\s+moi)\b",
+            re.IGNORECASE,
+        ),
+        4,
+        "auto-identification masc.",
+    ),
+    (
+        re.compile(
+            r"\b(?:ma\s+(?:femme|petite\s+amie|copine|ex-femme|ex-copine|fiancée|chérie|petite\s+copine|meuf)|"
+            r"ma\s+barbe|mon\s+costume|ma\s+cravate)\b",
+            re.IGNORECASE,
+        ),
+        2,
+        "contexte narrateur masc.",
+    ),
+]
+
+
+def detect_narrator_voice(text: str, title: str = "") -> Dict[str, Any]:
+    """Analyze French phrasing and 1st-person agreements to choose Léa (female) or Hugo (male).
+
+    Strips quoted dialogue (« ... », “...”, "...") first so a secondary character speaking in
+    direct quotes does not override the narrator's own grammatical gender.
+    """
+    raw = f"{title or ''}\n{text or ''}".strip()
+    # Strip quoted speech where other characters may speak in first person.
+    unquoted = re.sub(r"«[^»]*»|“[^”]*”|\"[^\"\n]*\"", " ", raw)
+
+    fem_score = 0
+    masc_score = 0
+    reasons: List[str] = []
+
+    for pat, weight, label in _FEM_PATTERNS:
+        for m in pat.finditer(unquoted):
+            fem_score += weight
+            snippet = re.sub(r"\s+", " ", m.group(0)).strip()
+            reasons.append(f"+{weight}F ({label}: '{snippet}')")
+
+    for pat, weight, label in _MASC_PATTERNS:
+        for m in pat.finditer(unquoted):
+            masc_score += weight
+            snippet = re.sub(r"\s+", " ", m.group(0)).strip()
+            reasons.append(f"+{weight}M ({label}: '{snippet}')")
+
+    # Fallback for 2nd/3rd person scripts when there are no 1st-person cues:
+    if fem_score == 0 and masc_score == 0:
+        fem_23 = re.findall(
+            r"\b(?:tu\s+es\s+" + _ADV_OPT + _FEM_ADJ_PP + r"|repartirais\s+avec\s+lui|sortirais\s+avec\s+lui|ton\s+(?:mari|copain|petit\s+ami|fiancé))\b",
+            unquoted,
+            flags=re.IGNORECASE,
+        )
+        masc_23 = re.findall(
+            r"\b(?:tu\s+es\s+" + _ADV_OPT + _MASC_ADJ_PP + r"|repartirais\s+avec\s+elle|sortirais\s+avec\s+elle|ta\s+(?:femme|copine|petite\s+amie|fiancée))\b",
+            unquoted,
+            flags=re.IGNORECASE,
+        )
+        if fem_23:
+            fem_score += len(fem_23) * 2
+            reasons.append(f"+{len(fem_23)*2}F (2e pers. fém.: {fem_23[:2]})")
+        if masc_23:
+            masc_score += len(masc_23) * 2
+            reasons.append(f"+{len(masc_23)*2}M (2e pers. masc.: {masc_23[:2]})")
+
+        if fem_score == 0 and masc_score == 0:
+            # Check sentence-leading Elle vs Il if a 3rd-person story clearly follows "Elle"
+            elle_starts = len(re.findall(r"(?:^|[.!?…]\s+)Elle\b", unquoted))
+            il_starts = len(re.findall(r"(?:^|[.!?…]\s+)Il\b", unquoted))
+            if elle_starts >= 4 and elle_starts >= il_starts * 1.5:
+                fem_score += 2
+                reasons.append(f"+2F (protagoniste 3e pers. Elle: {elle_starts} vs Il: {il_starts})")
+
+    is_female = fem_score > masc_score
+    return {
+        "gender": "female" if is_female else "male",
+        "voiceId": ELEVENLABS_VOICE_LEA if is_female else ELEVENLABS_VOICE,
+        "voiceName": "Léa" if is_female else "Hugo",
+        "femaleScore": fem_score,
+        "maleScore": masc_score,
+        "reasons": reasons[:8],
+    }

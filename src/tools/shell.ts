@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Tool } from './types.js';
 import { exec, splitCommand } from './exec.js';
 import { checkCommand } from './shell-policy.js';
-import { relOf } from './paths.js';
+import { relOf, safeJoin } from './paths.js';
 
 const shell: Tool = {
   name: 'shell',
@@ -82,8 +82,14 @@ const git: Tool = {
       }
       case 'restore': {
         if (!input.path) return { ok: false, summary: 'restore needs a path' };
-        const r = await run(['restore', '--source=HEAD~1', '--', input.path]);
-        return { ok: r.code === 0, summary: r.code === 0 ? `restored ${relOf(ctx.projectRoot, path.join(ctx.projectRoot, input.path))}` : r.stderr };
+        const rel = relOf(ctx.projectRoot, safeJoin(ctx.projectRoot, input.path));
+        // Since checkpoints are taken BEFORE mutating tools, uncommitted edits on `rel` can be restored from HEAD;
+        // if the working copy is already clean and HEAD~1 exists, restore from HEAD~1.
+        const dirty = await run(['status', '--porcelain', '--', rel]);
+        const hasPrev = (await run(['rev-parse', '--verify', '-q', 'HEAD~1'])).code === 0;
+        const source = dirty.stdout.trim() || !hasPrev ? 'HEAD' : 'HEAD~1';
+        const r = await run(['restore', `--source=${source}`, '--', rel]);
+        return { ok: r.code === 0, summary: r.code === 0 ? `restored ${rel} from ${source}` : r.stderr };
       }
       default:
         return { ok: false, summary: `unknown git action ${input.action}` };

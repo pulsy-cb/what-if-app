@@ -73,6 +73,7 @@ export async function layoutReport(dir: string): Promise<string> {
   const lines: string[] = [];
   const warn: string[] = [];
   const empty: string[] = [];
+  const failedIds: string[] = [];
   for (const name of names) {
     const box = await inkBox(path.join(dir, name));
     if (!box) continue;
@@ -81,16 +82,20 @@ export async function layoutReport(dir: string): Promise<string> {
       `${id}: ink x ${box.x0.toFixed(2)}-${box.x1.toFixed(2)}, y ${box.y0.toFixed(2)}-${box.y1.toFixed(2)}, covers ${(box.fill * 100).toFixed(0)}% (L ${(box.leftFill * 100).toFixed(0)}% / R ${(box.rightFill * 100).toFixed(0)}%)`,
     );
     if (box.fill < 0.06) {
+      failedIds.push(id);
       empty.push(
         `${id} is nearly blank (${(box.fill * 100).toFixed(1)}% ink): check that keyframes fire before the shot's key/len (t is in frames, not seconds) and camera zoom is 1.0–2.4`,
       );
     } else if (box.x1 - box.x0 < 0.35) {
+      failedIds.push(id);
       empty.push(`${id} only spans x ${box.x0.toFixed(2)}-${box.x1.toFixed(2)}: drawing is crushed into a strip`);
     } else if (box.x1 < 0.65 || box.rightFill < 0.04) {
+      failedIds.push(id);
       empty.push(
         `${id} leaves the right half dead (x ends at ${box.x1.toFixed(2)}, right ink ${(box.rightFill * 100).toFixed(0)}%): centre elements around x=960 (1920x1080 canvas), not x=640`,
       );
     } else if (box.x0 > 0.35 || box.leftFill < 0.04) {
+      failedIds.push(id);
       empty.push(
         `${id} leaves the left half dead (x starts at ${box.x0.toFixed(2)}, left ink ${(box.leftFill * 100).toFixed(0)}%): centre elements around x=960`,
       );
@@ -100,6 +105,6 @@ export async function layoutReport(dir: string): Promise<string> {
   }
   if (!lines.length) return '';
   return `layout (measured on the stills):\n${lines.join('\n')}${warn.length ? `\nWARNING: ${warn.join('; ')}` : ''}${
-    empty.length ? `\nEMPTY: ${empty.join('; ')}` : ''
+    empty.length ? `\nEMPTY: ${empty.join('; ')}\nFAILED_SHOTS: ${failedIds.join(', ')}` : ''
   }`;
 }

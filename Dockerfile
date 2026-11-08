@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 RUN npm install --no-audit --no-fund
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build
 
 FROM node:22-bookworm-slim
 

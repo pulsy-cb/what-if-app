@@ -54,14 +54,20 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
   try {
     let ranPipeline = false;
     let nudges = 0;
+    let lastTodoKey = '';
     let emptyTurns = 0;
+    let lastFailSig = '';
+    let consecutiveFails = 0;
+    let checkpointedThisTurn = false;
+
     for (let step = 0; step < config.maxSteps; step++) {
       if (signal.aborted) {
         bus.emit(threadId, 'turn_end', { steps: step, aborted: true });
         return;
       }
       bus.emit(threadId, 'thinking', { step: step + 1 });
-      const messages = buildMessages({ projectRoot: project.root, history: db.listMessages(threadId), maxChars: config.contextChars });
+      const history = db.listMessages(threadId);
+      const messages = buildMessages({ projectRoot: project.root, history, maxChars: config.contextChars });
       const res = await provider.chat({
         messages,
         tools: registry.schemas(),
@@ -74,11 +80,11 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         // assistant row; nudge the model to write large files (like shots.tsx with 15-36 shots) in smaller batches.
         emptyTurns++;
         const note = res.truncatedToolCall
-          ? `L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Pour écrire shots.tsx sur un épisode long, écris d'abord l'en-tête et les 6-8 premiers plans avec write_file ({ path, content }), puis ajoute les plans suivants par lots de 6-8 avec write_file ({ path, content, append: true }). Reprends immédiatement.`
-          : `Réponse coupée par le budget de tokens (${provider.model}, WHATIF_MAX_TOKENS=${config.maxTokens}). Ne réfléchis pas trop longtemps avant d'agir : écris shots.tsx par lots de 6-8 plans avec write_file (puis append: true pour la suite).`;
+          ? `[orchestrateur] L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Pour écrire shots.tsx sur un épisode long, écris d'abord l'en-tête et les 6-8 premiers plans avec write_file ({ path, content }), puis ajoute les plans suivants par lots de 6-8 avec write_file ({ path, content, append: true }). Reprends immédiatement.`
+          : `[orchestrateur] Réponse coupée par le budget de tokens (${provider.model}, WHATIF_MAX_TOKENS=${config.maxTokens}). Ne réfléchis pas trop longtemps avant d'agir : écris shots.tsx par lots de 6-8 plans avec write_file (puis append: true pour la suite).`;
         bus.emit(threadId, 'notice', { text: note });
-        db.addMessage(threadId, 'system', note);
-        if (emptyTurns <= 6) continue;
+        db.addMessage(threadId, 'user', note);
+        if (emptyTurns <= 5) continue;
         bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false });
         return;
       }
@@ -92,15 +98,25 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       bus.emit(threadId, 'assistant_message', { id: assistantId, text: res.text, toolCalls: res.toolCalls });
 
       if (!res.toolCalls.length) {
-        // An episode with remaining pipeline steps (whether started in this turn or resumed via "continue")
-        // should not stop halfway just because the model printed a transitional sentence ("Now the shots file...").
-        const todo = pipelineTodo(project.root);
-        if ((ranPipeline || todo.length > 0) && todo.length && nudges < 10) {
+        const todo = pipelineTodo(project.root, history);
+        const todoKey = todo.join(',');
+        if (todoKey !== lastTodoKey) {
+          lastTodoKey = todoKey;
+          nudges = 0;
+        }
+        const firstUserMsg = [...history].reverse().find((m) => m.role === 'user' && !m.content.startsWith('[orchestrateur]'));
+        const isPureQuestion =
+          !ranPipeline &&
+          firstUserMsg &&
+          /\?\s*$/.test(firstUserMsg.content.trim()) &&
+          !/\b(continue|lance|fais|crée|creer|génère|genere|run|render|stills|épisode|episode|vidéo|video)\b/i.test(firstUserMsg.content);
+
+        if (!isPureQuestion && (ranPipeline || todo.length > 0) && todo.length && nudges < 6) {
           nudges++;
           const nudge =
-            `La chaîne n'est pas terminée (étapes restantes : ${todo.join(', ')}). ` +
+            `[orchestrateur] La chaîne n'est pas terminée (étapes restantes : ${todo.join(', ')}). ` +
             `Appelle directement l'outil suivant maintenant (pour un shots.tsx de plus de 10 plans, écris-le par lots de 6-8 plans avec write_file puis write_file { append: true }).`;
-          db.addMessage(threadId, 'system', nudge);
+          db.addMessage(threadId, 'user', nudge);
           bus.emit(threadId, 'notice', { text: nudge });
           continue;
         }
@@ -109,71 +125,153 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       }
 
       emptyTurns = 0;
-      nudges = 0;
+      const curTodoKey = pipelineTodo(project.root, history).join(',');
+      if (curTodoKey !== lastTodoKey) {
+        lastTodoKey = curTodoKey;
+        nudges = 0;
+      }
 
       const producedImages: string[] = [];
-      for (const call of res.toolCalls) {
-        const tool = registry.get(call.name);
-        const started = Date.now();
-        bus.emit(threadId, 'tool_call', {
-          id: call.id,
-          name: call.name,
-          input: call.args,
-          policy: tool?.policy ?? 'deny',
-          mustAsk: tool?.policy === 'ask' && config.approvalsMode !== 'off',
+
+      // Check if all tool calls in this step are read-only auto tools so we can run them in parallel
+      const allReadOnlyAuto =
+        res.toolCalls.length > 1 &&
+        res.toolCalls.every((c) => {
+          const t = registry.get(c.name);
+          return t && t.policy === 'auto' && !t.mutating;
         });
 
-        let result: ToolResult;
-        if (!tool) {
-          result = { ok: false, summary: `unknown tool "${call.name}"` };
-        } else if (tool.policy === 'deny') {
-          result = { ok: false, summary: `tool "${call.name}" is disabled by policy` };
-        } else {
-          let decision: string = 'approved';
-          const gated =
-            config.approvalsMode === 'all' || (config.approvalsMode === 'pipeline' && tool.policy === 'ask');
-          if (tool.policy === 'ask' && gated) {
-            decision = await deps.approvals.request(threadId, call.name, call.args, config.approvalTimeoutMs, signal);
-          }
-          if (decision !== 'approved') {
-            result = {
-              ok: false,
-              summary:
-                decision === 'timeout'
-                  ? `no answer from the user, ${call.name} was not run`
-                  : `the user refused ${call.name}; propose another approach or ask why`,
-            };
-          } else {
-            if (tool.mutating) {
-              const checkpoint = await registry.run('git', { action: 'checkpoint', message: `agent: before ${call.name}` }, ctx);
-              bus.emit(threadId, 'checkpoint', { tool: call.name, ok: checkpoint.ok, summary: checkpoint.summary });
-            }
-            if (call.name === 'whatif_run') ranPipeline = true;
-            result = await registry.run(call.name, call.args, ctx);
+      if (allReadOnlyAuto) {
+        const started = Date.now();
+        for (const call of res.toolCalls) {
+          bus.emit(threadId, 'tool_call', {
+            id: call.id,
+            name: call.name,
+            input: call.args,
+            policy: 'auto',
+            mustAsk: false,
+          });
+        }
+        const results = await Promise.all(res.toolCalls.map((call) => registry.run(call.name, call.args, ctx)));
+        const durationMs = Date.now() - started;
+        for (let i = 0; i < res.toolCalls.length; i++) {
+          const call = res.toolCalls[i]!;
+          const result = results[i]!;
+          db.addMessage(threadId, 'tool', toolMessageContent(result), {
+            toolCallId: call.id,
+            name: call.name,
+            ok: result.ok,
+            artifacts: result.artifacts ?? [],
+            credits: result.credits ?? 0,
+          });
+          bus.emit(threadId, 'tool_result', {
+            id: call.id,
+            name: call.name,
+            ok: result.ok,
+            summary: result.summary,
+            artifacts: result.artifacts ?? [],
+            credits: result.credits ?? 0,
+            durationMs,
+          });
+          for (const a of result.artifacts ?? []) {
+            if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
           }
         }
+      } else {
+        for (const call of res.toolCalls) {
+          const tool = registry.get(call.name);
+          const started = Date.now();
+          bus.emit(threadId, 'tool_call', {
+            id: call.id,
+            name: call.name,
+            input: call.args,
+            policy: tool?.policy ?? 'deny',
+            mustAsk: tool?.policy === 'ask' && config.approvalsMode !== 'off',
+          });
 
-        const durationMs = Date.now() - started;
-        db.addMessage(threadId, 'tool', toolMessageContent(result), {
-          toolCallId: call.id,
-          name: call.name,
-          ok: result.ok,
-          artifacts: result.artifacts ?? [],
-          credits: result.credits ?? 0,
-        });
-        if (result.credits) db.addCredits(project.id, threadId, call.name, result.credits);
-        bus.emit(threadId, 'tool_result', {
-          id: call.id,
-          name: call.name,
-          ok: result.ok,
-          summary: result.summary,
-          artifacts: result.artifacts ?? [],
-          credits: result.credits ?? 0,
-          durationMs,
-        });
+          let result: ToolResult;
+          if (!tool) {
+            result = { ok: false, summary: `unknown tool "${call.name}"` };
+          } else if (tool.policy === 'deny') {
+            result = { ok: false, summary: `tool "${call.name}" is disabled by policy` };
+          } else {
+            let decision: string = 'approved';
+            const gated =
+              config.approvalsMode === 'all' || (config.approvalsMode === 'pipeline' && tool.policy === 'ask');
+            if (tool.policy === 'ask' && gated) {
+              decision = await deps.approvals.request(threadId, call.name, call.args, config.approvalTimeoutMs, signal);
+            }
+            if (decision !== 'approved') {
+              result = {
+                ok: false,
+                summary:
+                  decision === 'timeout'
+                    ? `no answer from the user, ${call.name} was not run`
+                    : `the user refused ${call.name}; propose another approach or ask why`,
+              };
+            } else {
+              // Take one git checkpoint per turn (or before pipeline runs) instead of on every chunked write_file append
+              const isAppendChunk = call.name === 'write_file' && call.args?.append === true;
+              if (tool.mutating && !isAppendChunk && !checkpointedThisTurn) {
+                checkpointedThisTurn = true;
+                const checkpoint = await registry.run('git', { action: 'checkpoint', message: `agent: before ${call.name}` }, ctx);
+                bus.emit(threadId, 'checkpoint', { tool: call.name, ok: checkpoint.ok, summary: checkpoint.summary });
+              }
+              if (call.name === 'whatif_run') {
+                ranPipeline = true;
+                checkpointedThisTurn = false;
+              }
+              result = await registry.run(call.name, call.args, ctx);
+            }
+          }
 
-        for (const a of result.artifacts ?? []) {
-          if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
+          const durationMs = Date.now() - started;
+          db.addMessage(threadId, 'tool', toolMessageContent(result), {
+            toolCallId: call.id,
+            name: call.name,
+            ok: result.ok,
+            artifacts: result.artifacts ?? [],
+            credits: result.credits ?? 0,
+          });
+          if (result.credits) db.addCredits(project.id, threadId, call.name, result.credits);
+          bus.emit(threadId, 'tool_result', {
+            id: call.id,
+            name: call.name,
+            ok: result.ok,
+            summary: result.summary,
+            artifacts: result.artifacts ?? [],
+            credits: result.credits ?? 0,
+            durationMs,
+          });
+
+          // Loop-breaker: track repeated identical tool failures
+          if (!result.ok) {
+            const sig = `${call.name}:${JSON.stringify(call.args ?? {}).slice(0, 240)}`;
+            if (sig === lastFailSig) {
+              consecutiveFails++;
+            } else {
+              lastFailSig = sig;
+              consecutiveFails = 1;
+            }
+            if (consecutiveFails >= 3) {
+              const loopNote =
+                `[orchestrateur] L'appel "${call.name}" a échoué ${consecutiveFails} fois de suite avec la même erreur. ` +
+                `Ne relance PAS le même appel tel quel : corrige d'abord la cause exacte indiquée dans le message d'erreur (ou lis le fichier concerné).`;
+              db.addMessage(threadId, 'user', loopNote);
+              bus.emit(threadId, 'notice', { text: loopNote });
+              if (consecutiveFails >= 5) {
+                bus.emit(threadId, 'turn_end', { steps: step + 1, aborted: false, limitReached: true });
+                return;
+              }
+            }
+          } else {
+            lastFailSig = '';
+            consecutiveFails = 0;
+          }
+
+          for (const a of result.artifacts ?? []) {
+            if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
+          }
         }
       }
 

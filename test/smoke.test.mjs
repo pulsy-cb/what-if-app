@@ -207,3 +207,55 @@ test('whatif audits: episode formula/language and shots animation/framing checks
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('context compaction: compacts old write_file payloads, drops orphan tool messages, and protects scripts/package.json', async () => {
+  const { buildMessages, countScriptWords } = await import('../dist/orchestrator/context.js');
+  const { checkCommand } = await import('../dist/tools/shell-policy.js');
+
+  assert.equal(countScriptWords([{ text: '[excited] Bonjour <break/> le monde !' }]), 4);
+  assert.equal(checkCommand('find . -name "*.ts" -delete').ok, false);
+  assert.equal(checkCommand('cat /etc/passwd').ok, false);
+  assert.equal(checkCommand('cat .env').ok, false);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ctx-'));
+  try {
+    const registry = new ToolRegistry(fsTools);
+    const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: null, log: () => {} };
+    const blockedScript = await registry.run('write_file', { path: 'scripts/evil.py', content: 'print(1)' }, ctx);
+    assert.equal(blockedScript.ok, false);
+    assert.match(blockedScript.summary, /refused by security policy/);
+
+    const blockedPkg = await registry.run('write_file', { path: 'package.json', content: '{}' }, ctx);
+    assert.equal(blockedPkg.ok, false);
+
+    const bigContent = Array.from({ length: 120 }, (_, i) => `export const line${i} = ${i};`).join('\n');
+    const history = [
+      {
+        id: 1,
+        thread_id: 't',
+        role: 'assistant',
+        content: 'writing shots batch 1',
+        payload: JSON.stringify({ toolCalls: [{ id: 'c1', name: 'write_file', args: { path: 'src/episodes/ep/shots.tsx', content: bigContent } }] }),
+        created_at: '',
+      },
+      {
+        id: 2,
+        thread_id: 't',
+        role: 'tool',
+        content: 'ok\ncreated shots.tsx',
+        payload: JSON.stringify({ toolCallId: 'c1', name: 'write_file', ok: true }),
+        created_at: '',
+      },
+      { id: 3, thread_id: 't', role: 'user', content: 'continue step 1', payload: null, created_at: '' },
+      { id: 4, thread_id: 't', role: 'assistant', content: 'step 1 done', payload: null, created_at: '' },
+      { id: 5, thread_id: 't', role: 'user', content: 'continue step 2', payload: null, created_at: '' },
+      { id: 6, thread_id: 't', role: 'assistant', content: 'step 2 done', payload: null, created_at: '' },
+    ];
+    const msgs = buildMessages({ projectRoot: dir, history, maxChars: 90_000 });
+    const oldAssistant = msgs.find((m) => m.role === 'assistant' && m.toolCalls?.length);
+    assert.ok(oldAssistant, 'old assistant tool call should be present');
+    assert.match(String(oldAssistant.toolCalls[0].args.content), /\[compacted:/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

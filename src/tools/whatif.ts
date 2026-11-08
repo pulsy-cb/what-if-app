@@ -1,10 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { layoutReport } from '../orchestrator/layout.js';
+import { countScriptWords } from '../orchestrator/context.js';
 import { fileURLToPath } from 'node:url';
 import { exec } from './exec.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
+
+/** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
+function hexLuminance(hex: string): number | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1]!, 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
 
 const PY = process.platform === 'win32' ? 'python' : 'python3';
 /** This app's own pipeline scripts (source import, voice, Modal render), next to the skill's. */
@@ -244,11 +256,7 @@ export function episodeAudit(episode: any, slug: string): string | null {
     return `episode.json.script still contains "TODO": write the complete narration (or run whatif_run { step: "source", args: ["--pick", "hook", "--apply"] }) before running the pipeline.`;
   }
 
-  const scriptWords = fullText
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/<[^>]*>/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean).length;
+  const scriptWords = countScriptWords(script);
   const sourceWords = Number(episode?.source?.words ?? 0);
   if (hasSourceVideo && sourceWords >= 40 && scriptWords < Math.floor(sourceWords * 0.75)) {
     return (
@@ -344,28 +352,48 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
 
   const errors: string[] = [];
   let heroShots = 0;
-  const ROOM_SETS = new Set([
-    'study',
-    'kitchen',
-    'restaurant',
-    'cafe',
-    'bistro',
-    'classroom',
-    'stairwell',
-    'rooftop',
-    'bedroom',
-    'outdoor',
-    'vehicle',
-    'car',
-    'street',
-    'park',
-    'bus',
-    'train',
-  ]);
   const fullScriptText = `${slug} ${episode?.topic ?? ''} ${(episode?.script ?? []).map((b: any) => `${b?.text ?? ''} ${b?.set ?? ''}`).join(' ')}`;
   const isSchoolStory = /\b(prof|professeur|classe|ecole|école|eleve|élève|tableau|cours|examen|interro|college|collège|lycee|lycée|math|teacher|school|classroom)\b/i.test(
     fullScriptText,
   );
+
+  // Check custom character looks defined via makeLook({ ... }): distinct silhouettes/jackets and dark-on-dark contrast
+  const lookDefs: { name: string; jacket?: string; extra?: string; skin?: string }[] = [];
+  for (const lm of shotsSource.matchAll(/const\s+([A-Za-z0-9_$]+)\s*=\s*makeLook\s*\(\s*\{([\s\S]*?)\}/g)) {
+    const name = lm[1]!;
+    const props = lm[2]!;
+    const jacket = /jacket\s*:\s*['"]([^'"]+)['"]/.exec(props)?.[1];
+    const extra = /extra\s*:\s*['"]([^'"]+)['"]/.exec(props)?.[1];
+    const skin = /skin\s*:\s*['"]([^'"]+)['"]/.exec(props)?.[1];
+    lookDefs.push({ name, jacket, extra, skin });
+    if (jacket) {
+      const lum = hexLuminance(jacket);
+      const skinLum = skin ? hexLuminance(skin) : 0.8;
+      if (lum !== null && lum < 0.06 && skinLum !== null && skinLum < 0.12) {
+        errors.push(
+          `Character look "${name}" has both near-black jacket (${jacket}) and dark skin (${skin}) which vanish against dark walls (traps.md: "Dark limbs vanish on dark sets"): use a lighter skin/jacket or bright accent.`,
+        );
+      }
+    }
+  }
+  if (lookDefs.length >= 2) {
+    for (let i = 0; i < lookDefs.length; i++) {
+      for (let j = i + 1; j < lookDefs.length; j++) {
+        const a = lookDefs[i]!;
+        const b = lookDefs[j]!;
+        if (
+          a.jacket &&
+          b.jacket &&
+          a.jacket.toLowerCase() === b.jacket.toLowerCase() &&
+          (a.extra ?? '') === (b.extra ?? '')
+        ) {
+          errors.push(
+            `Characters "${a.name}" and "${b.name}" have identical jacket (${a.jacket}) and hair/hat extra ("${a.extra ?? 'default'}"): give each character a distinct silhouette (extra) and colour palette.`,
+          );
+        }
+      }
+    }
+  }
 
   for (const sh of tlShots) {
     const id = String(sh.id ?? '');
@@ -378,20 +406,23 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const size = String(epShot.size ?? sh.size ?? '').toLowerCase();
     const isTitle = size.includes('title') || /<TitleCard\b/.test(body);
     const isInsert = size.includes('insert') || size.includes('macro');
+    const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
     const hasHero = /<(Hero|Actor)\b/.test(body);
     if (hasHero) heroShots++;
 
-    if (ROOM_SETS.has(set) && !isTitle && !isInsert && !hasHero) {
-      errors.push(`${id} (set "${set}", size "${size || 'medium'}") has no <Hero>: scene shots must show a character (<Hero look={...} pose={...} />)`);
+    if (!isTitle && !isInsert && !isSchematic && !hasHero) {
+      errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no <Hero>: scene shots must show a character (<Hero look={...} pose={...} />)`);
     }
     if (!isSchoolStory && /<Classroom\b/.test(body)) {
       errors.push(
-        `${id} renders <Classroom> (with "7 × 8" on a blackboard) in a story that has nothing to do with school! Use a set that matches the story (<Bedroom>, <Study>, <CustomRoom>, <Outdoor>, or <Vehicle>).`,
+        `${id} renders <Classroom> (with "7 × 8" on a blackboard) in a story that has nothing to do with school! Build a custom set that matches the story (<CustomRoom>, <RoomShell>, <Box>, <Outdoor>, <Vehicle>, or custom SVG).`,
       );
     }
 
     // Check that the shot actually uses its frame clock `t`
-    const hasMotion = /\b(poseAt|faceAt|actPose|walkPose|kf|DrawOn|CountUp|TitleCard|Arrow|PlantIcon|easeOut|clamp)\b/.test(body) || /\bt\s*[*+-]/.test(body);
+    const hasMotion =
+      /\b(poseAt|faceAt|actPose|walkPose|talkAt|camPush|camPan|parallax|kf|DrawOn|CountUp|TitleCard|Arrow|PlantIcon|easeOut|clamp)\b/.test(body) ||
+      /\bt\s*[*+-]/.test(body);
     if (!hasMotion) {
       errors.push(`${id} is static: animate with kf(t, ...), poseAt(t, ...), actPose('...', t), faceAt(t, ...) or DrawOn`);
     }
@@ -422,13 +453,20 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       );
     }
 
-    // Catch absurd camera zoom in camT (3rd argument of camT(cx, cy, zoom), e.g. zoom 8.0 in mobius S4)
+    // Catch absurd camera zoom in camT (direct number or kf) or camPush
     for (const cz of body.matchAll(
       /\bcamT\s*\([^;]*?,\s*kf\s*\(\s*t\s*,\s*\[\s*\[\s*[^,\]]+\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*,\s*\[\s*[^,\]]+\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*\]\s*\)\s*\)/g,
     )) {
       const z = Math.max(Number(cz[1]), Number(cz[2]));
-      if (z > 3.2 || z < 0.7) {
-        errors.push(`${id} animates camT zoom to ${z} (must be <= 2.5; zoom ${z} shows an empty wall/window)`);
+      const zMin = Math.min(Number(cz[1]), Number(cz[2]));
+      if (z > 3.0 || zMin < 0.7) {
+        errors.push(`${id} animates camT zoom to ${z} (keep zoom in 0.7..3.0; extreme zoom shows an empty wall/window)`);
+      }
+    }
+    for (const cd of body.matchAll(/\bcamT\s*\(\s*[^,]+,\s*[^,]+,\s*(\d+(?:\.\d+)?)\s*\)/g)) {
+      const z = Number(cd[1]);
+      if (z > 3.0 || z < 0.7) {
+        errors.push(`${id} sets camT zoom to ${z} (keep zoom in 0.7..3.0; zoom ${z} shows an empty wall/window)`);
       }
     }
 
@@ -480,10 +518,7 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
   const episode = readJson(episodePath);
   if (!fs.existsSync(episodePath)) return `no src/episodes/${slug}/episode.json: scaffold the episode with whatif_new first`;
   if (!episode) return `src/episodes/${slug}/episode.json is not valid JSON (${broken}): repair it before running ${step}`;
-  const scriptWords = (episode.script ?? []).reduce(
-    (n: number, b: any) => n + String(b.text ?? '').split(/\s+/).filter(Boolean).length,
-    0,
-  );
+  const scriptWords = countScriptWords(episode.script);
   const wordsFile = path.join(src, 'words.json');
   const words = readJson(wordsFile);
   const timeline = readJson(path.join(src, 'timeline.json'));
@@ -625,6 +660,33 @@ const newProject: Tool = {
     const episodesDir = path.join(ctx.projectRoot, 'src', 'episodes');
     for (const legacy of ['rewind', 'copy-paste']) {
       fs.rmSync(path.join(episodesDir, legacy), { recursive: true, force: true });
+    }
+
+    // 2b. keep git checkpoints fast & small: ignore build/output and generated audio/video binaries,
+    // and symlink node_modules from the skill studio when available so local tsc works out of the box without 250MB copies
+    fs.writeFileSync(
+      path.join(ctx.projectRoot, '.gitignore'),
+      'node_modules/\nout/\npublic/*/*.wav\npublic/*/*.mp3\n*.mp4\n',
+    );
+    const projNodeModules = path.join(ctx.projectRoot, 'node_modules');
+    if (!fs.existsSync(projNodeModules)) {
+      const candidates = [path.join(studio, 'node_modules')];
+      const projectsParent = path.dirname(ctx.projectRoot);
+      try {
+        for (const d of fs.readdirSync(projectsParent, { withFileTypes: true })) {
+          if (d.isDirectory()) candidates.push(path.join(projectsParent, d.name, 'node_modules'));
+        }
+      } catch {
+        /* ignore */
+      }
+      const existingNm = candidates.find((c) => fs.existsSync(path.join(c, '@types', 'react')));
+      if (existingNm) {
+        try {
+          fs.symlinkSync(existingNm, projNodeModules, 'junction');
+        } catch {
+          /* ignore if symlink fails */
+        }
+      }
     }
 
     // 3. the episode skeleton
@@ -844,7 +906,12 @@ const runStep: Tool = {
     }
     const visible = lines.filter((l) => !l.startsWith('RESULT_JSON:') && !l.startsWith('PROGRESS_JSON:'));
     const tail = (s: string[]) => s.slice(-25).join('\n');
-    const credits = /credits?[^0-9]{0,12}(\d+)/i.exec(res.stdout);
+    const credits =
+      typeof payload?.credits === 'number'
+        ? payload.credits
+        : typeof payload?.character_count === 'number'
+          ? payload.character_count
+          : undefined;
     let failed = payload ? payload.ok === false : res.code !== 0;
 
     // After rendering the video, automatically build the motion grids (`out/<slug>/motion/*.jpg`) so motion is inspected
@@ -858,7 +925,17 @@ const runStep: Tool = {
     let layoutFailure = '';
     if (layout.includes('\nEMPTY:')) {
       failed = true;
-      layoutFailure = 'One or more shots failed the layout/ink check (see EMPTY above): fix shots.tsx and run stills again.';
+      const failedMatch = /FAILED_SHOTS:\s*([^\n]+)/.exec(layout);
+      const failedArgs = failedMatch
+        ? failedMatch[1]!
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      const rerunHint = failedArgs.length
+        ? `whatif_run { episode: "${slug}", step: "stills", args: ${JSON.stringify(failedArgs)} } then { episode: "${slug}", step: "board" }`
+        : `whatif_run { episode: "${slug}", step: "stills" }`;
+      layoutFailure = `One or more shots failed the layout/ink check (see EMPTY above): fix ONLY those shots in shots.tsx and re-render them with ${rerunHint}.`;
     }
     let planWarning = '';
     if (input.step === 'plan' && !failed) {
@@ -895,7 +972,7 @@ const runStep: Tool = {
         layout ? `\n\n${layout}` : ''
       }${layoutFailure ? `\n\n${layoutFailure}` : ''}${extraNotes.length ? `\n\n${extraNotes.join('\n\n')}` : ''}${planWarning ? `\n\n${planWarning}` : ''}`,
       artifacts,
-      credits: credits ? Number(credits[1]) : undefined,
+      credits,
       data: { step: input.step, code: res.code, result: payload },
     };
   },
