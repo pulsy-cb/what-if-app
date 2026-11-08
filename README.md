@@ -59,9 +59,10 @@ SQLite, checkpoints git), `../what-if-animation:/skill:ro` et `~/.modal.toml`.
 
 > **Le TTS passe par `nouveau`.** `whatif_run source` et `whatif_run voice` appellent
 > `http://127.0.0.1:8005` (`WHATIF_NOUVEAU_URL` pour changer) : la transcription anglaise (Deepgram), les
-> propositions de narration française et la prise Fish Audio restent attachées au `video_id` d'origine,
-> donc visibles dans l'UI de `nouveau` à côté de la vidéo source. Fish `s2.1-pro-free` est gratuit ;
-> ElevenLabs ne sert plus qu'aux SFX.
+> propositions de narration française (conservées intégralement dans `episode.json.script`) et la prise
+> **ElevenLabs v4** (`eleven_v4`, vitesse `1.15`, choix automatique de la voix **Léa** ou **Hugo** selon les accords
+> grammaticaux du texte) restent attachées au `video_id` d'origine, visibles dans l'UI de `nouveau`. Fish Audio
+> reste disponible avec `provider: "fish"`.
 
 ## Ce qui existe dans cette v0.1
 
@@ -73,17 +74,18 @@ src/tools/           le contrat d'outil et les outils (aucune dépendance runtim
   fs.ts              repo_map, read_file, write_file, edit_file, glob, grep, view_image
   shell.ts           shell (allowlist), git (status/diff/checkpoint/log/restore)
   shell-policy.ts    la liste blanche des commandes — le vrai rempart
-  whatif.ts          whatif_new, whatif_run, whatif_status, whatif_sync_engine
+  whatif.ts          whatif_new, whatif_run, whatif_status, whatif_sync_engine + audits statiques
 src/orchestrator/
-  main.ts            HTTP + routes + SSE + fichiers (Range pour la vidéo) + auth par token
-  agent.ts           la boucle : modèle → outils → résultats → modèle, checkpoint avant mutation
-  context.ts         compilation du contexte : prompt système, PROJECT.md, fichiers, historique compacté
+  main.ts            HTTP + routes + SSE + fichiers (Range pour la vidéo) + auth par token + minuteur
+  agent.ts           la boucle : modèle → outils → résultats → reviewer → modèle, checkpoint avant mutation
+  context.ts         compilation du contexte : prompt système, épinglage de continuité (DIRECTOR.md, bible.json, en-tête shots.tsx), historique compacté
+  reviewer.ts        agent Reviewer indépendant (contexte vierge) après l'étape board -> out/<slug>/review.json
   approvals.ts       porte "ask" : le run se bloque jusqu'au clic, timeout = refus
-  db.ts              SQLite (node:sqlite) : projets, fils, messages, approbations, crédits
+  db.ts              SQLite (node:sqlite) : projets, fils, messages, approbations, crédits, durées d'exécution
   bus.ts             bus d'événements par fil + buffer de rejeu (le SSE survit à un reload)
   providers/         openai-compatible (streaming + tool calls + vision), anthropic, mock
-web/public/          l'UI : chat, cartes d'outils, images/vidéos, approbations, réglages
-test/                smoke tests (outils, allowlist, boucle complète en HTTP avec le provider mock)
+web/public/          l'UI : chat, minuteur temps réel, cartes d'outils, images/vidéos, approbations, réglages
+test/                smoke tests (outils, allowlist, audits, compaction, reviewer, boucle complète HTTP)
 ```
 
 Zéro dépendance runtime : `node:http`, `node:sqlite`, `fetch` natif. Seul TypeScript est en dev.
@@ -116,9 +118,12 @@ Ce qui rend un tour non surveillé tenable, et qui se règle :
 | variable | défaut | rôle |
 | --- | --- | --- |
 | `WHATIF_APPROVALS` | `off` | `off`, `pipeline` ou `all` |
-| `WHATIF_MAX_STEPS` | `48` | appels modèle par tour ; 150 pour un épisode complet |
-| `WHATIF_MAX_TOKENS` | `8000` | budget de sortie ; les modèles de raisonnement (Kimi, GLM) y pensent d'abord, trop bas = réponse vide |
-| `WHATIF_CONTEXT_CHARS` | `90000` | au-delà, les vieux résultats d'outils sont compactés |
+| `WHATIF_MAX_STEPS` | `1000` | appels modèle par tour |
+| `WHATIF_MAX_TOKENS` | `24000` | budget de sortie ; les modèles de raisonnement/Flash y pensent d'abord |
+| `WHATIF_CONTEXT_CHARS` | `90000` | au-delà, les vieux résultats d'outils sont compactés (tandis que `DIRECTOR.md`, `bible.json` et l'en-tête de `shots.tsx` restent épinglés) |
+| `WHATIF_REVIEWER_ENABLED` | `true` | active un second agent Reviewer indépendant au contexte vierge après `board` |
+| `WHATIF_REVIEW_MODEL` | *(hérite)* | modèle du Reviewer (ex: un modèle vision rapide comme `google/gemini-2.5-flash`) |
+| `WHATIF_REVIEW_MAX_ROUNDS` | `2` | tours max de correction demandés par le Reviewer par épisode |
 
 Le prompt système porte l'ordre du pipeline, le budget de mots (50-60 pour 15-25 s), la grammaire des
 cues `episode.json` (`f:120`, `s:4.2`, `S1+2`, `franchir+3` — **pas** de `w:`), et la liste générée de
