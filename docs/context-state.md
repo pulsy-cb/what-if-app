@@ -29,3 +29,6 @@
 - **Run réel de `crush`** sur la machine qui a Docker et les clés : `docs/feature-plans/protocole-run-reel.md` (ce poste n'a pas l'environnement).
 - En attendant, sans service payant : gabarits `Bedroom`/`Kitchen`/`Study`, ou expérience du langage déclaratif (lot 6).
 - Le message de création d'épisode (`web/public/app.js`) a été aligné sur le guide (plus de `<DiningTable>` imposé).
+
+## Conception en cours (2026-11-09)
+- Personnages, garde-robe, actions, profondeur 2.5D : `docs/feature-plans/personnages-et-profondeur.md`. Décisions prises : style conservé, ados et adultes d'abord, coiffures et traits du visage ajoutés. Étapes A (`Stage`) et B (`Person`, corps `teen`/`adult`) intégrées au calque, **non commitées** ; 15/15 tests. Prochaine étape : C (garde-robe, coiffures, visages) ; décors `Bedroom`/`Kitchen` après.
