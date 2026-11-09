@@ -7,7 +7,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, toolMessageContent } from './context.js';
-import { formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
+import { clearReviewBlock, formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -171,6 +171,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       }
 
       const producedImages: string[] = [];
+      // a user message between two tool results of one assistant turn is rejected by OpenAI-style APIs: hold them until all results are in
+      const heldNotes: string[] = [];
       // shots the model just asked to re-render (stills S3 S7): those are the images worth showing back
       const askedShots = res.toolCalls.flatMap((c) => (Array.isArray(c.args?.args) ? (c.args.args as unknown[]) : []).map(String).filter((a) => /^S\d+$/i.test(a)));
 
@@ -298,9 +300,10 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               const loopNote =
                 `[orchestrateur] L'appel "${call.name}" a échoué ${consecutiveFails} fois de suite avec la même erreur. ` +
                 `Ne relance PAS le même appel tel quel : corrige d'abord la cause exacte indiquée dans le message d'erreur (ou lis le fichier concerné).`;
-              db.addMessage(threadId, 'user', loopNote);
+              heldNotes.push(loopNote);
               bus.emit(threadId, 'notice', { text: loopNote });
               if (consecutiveFails >= 5) {
+                for (const n of heldNotes) db.addMessage(threadId, 'user', n);
                 finishTurn(step + 1, false, true);
                 return;
               }
@@ -318,11 +321,11 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           if (
             call.name === 'whatif_run' &&
             String(call.args?.step ?? '') === 'board' &&
-            result.ok &&
-            reviewRounds < config.reviewMaxRounds
+            result.ok
           ) {
-            const reviewer = deps.reviewProvider ? deps.reviewProvider() : null;
+            const reviewer = reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;
             const epSlug = String(call.args?.episode ?? '').trim();
+            if (epSlug && !reviewer) clearReviewBlock(project.root, epSlug);
             if (reviewer && epSlug) {
               reviewRounds++;
               const revId = `review-${step}-${reviewRounds}`;
@@ -335,7 +338,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
                 mustAsk: false,
               });
               try {
-                const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal);
+                const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal, { final: reviewRounds >= config.reviewMaxRounds });
                 const feedback = formatReviewFeedback(report, epSlug);
                 bus.emit(threadId, 'tool_result', {
                   id: revId,
@@ -346,8 +349,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
                   credits: 0,
                   durationMs: Date.now() - revStart,
                 });
-                db.addMessage(threadId, 'user', feedback);
+                heldNotes.push(feedback);
               } catch (revErr) {
+                clearReviewBlock(project.root, epSlug);
                 bus.emit(threadId, 'tool_result', {
                   id: revId,
                   name: 'reviewer',
@@ -362,6 +366,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           }
         }
       }
+
+      for (const n of heldNotes) db.addMessage(threadId, 'user', n);
 
       if (producedImages.length) {
         // Multimodal feedback: the model gets the images it just produced on the next step.

@@ -22,6 +22,26 @@ type PatchGroup = { file: string; marker: string; ops: Op[] };
 
 const PATCHES: PatchGroup[] = [
   {
+    // an older engine draws every shot in a 1920 x 1080 viewBox: a 9:16 episode would fill only the top of its frame
+    file: 'src/engine/episode.tsx',
+    marker: 'IS_PORTRAIT',
+    ops: [
+      {
+        kind: 'after',
+        anchor: "from 'remotion';\n",
+        insert:
+          "import { STUDIO } from '../studio.config';\n\n" +
+          "// World space is always centred at (960, 540). A 9:16 frame shows 900 x 1600 of it, framing the room's back wall.\n" +
+          'const IS_PORTRAIT = STUDIO.height > STUDIO.width;\n' +
+          'const VB = IS_PORTRAIT ? { x: 510, y: -260, w: 900, h: 1600 } : { x: 0, y: 0, w: 1920, h: 1080 };\n' +
+          'const VIEW_BOX = `${VB.x} ${VB.y} ${VB.w} ${VB.h}`;\n',
+      },
+      { kind: 'replace', find: '<svg width={1920} height={1080} viewBox="0 0 1920 1080"', replace: '<svg width={STUDIO.width} height={STUDIO.height} viewBox={VIEW_BOX}', count: 3 },
+      { kind: 'replace', find: '<rect width="1920" height="1080" fill="url(#epVig)" />', replace: '<rect x={VB.x} y={VB.y} width={VB.w} height={VB.h} fill="url(#epVig)" />', count: 1 },
+      { kind: 'replace', find: '<rect width="1920" height="1080" filter="url(#epGrain)" />', replace: '<rect x={VB.x} y={VB.y} width={VB.w} height={VB.h} filter="url(#epGrain)" />', count: 1 },
+    ],
+  },
+  {
     // a tall 9:16 frame reaches below the room's near plane: keep the floor darkening there (no light band)
     file: 'src/engine/furnish.tsx',
     marker: 'below the near plane (only a tall 9:16 frame reaches it)',
@@ -88,6 +108,16 @@ const PATCHES: PatchGroup[] = [
     file: 'src/engine/index.ts',
     marker: "export * from './actions';",
     ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './actions';\n" }],
+  },
+  {
+    file: 'src/engine/index.ts',
+    marker: "export * from './rooms';",
+    ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './rooms';\n" }],
+  },
+  {
+    file: 'src/engine/index.ts',
+    marker: "export * from './shot';",
+    ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './shot';\n" }],
   },
   {
     file: 'src/engine/index.ts',

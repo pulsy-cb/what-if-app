@@ -4,7 +4,7 @@ import type { ChatMessage, ImagePart, ToolCall } from './providers/types.js';
 import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { engineDigest } from './engine-digest.js';
-import { DIRECTOR_GUIDE, STAGE_GUIDE } from './director-guide.js';
+import { DIRECTOR_GUIDE, SHOT_GUIDE, STAGE_GUIDE, modernDirectorGuide } from './director-guide.js';
 
 /** Count spoken words in an episode script, stripping [audio tags] and <xml> markers consistently everywhere. */
 export function countScriptWords(script: unknown): number {
@@ -129,6 +129,29 @@ commands for a human to paste: you call the tools.
   container, so never try to render locally.
 - Answer in the user's language (French if they write French). Be concrete and short: what you did, what it
   cost, what you need next.`;
+
+/** Replace everything from `from` up to (not including) `to`. Unchanged when a marker is gone: the smoke test watches for that. */
+function swapBlock(text: string, from: string, to: string, replacement: string): string {
+  const a = text.indexOf(from);
+  const b = text.indexOf(to, a + from.length);
+  return a < 0 || b < 0 ? text : text.slice(0, a) + replacement + text.slice(b);
+}
+
+/** The prompt for a project whose engine has shot(): same pipeline, but the shots are described, not drawn with Hero and poseAt. */
+export function modernSystemPrompt(): string {
+  let p = SYSTEM_PROMPT;
+  p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Le lieu**: une recette \`place()\` (catalogue, ambiance et palette propres à cette histoire) ou des pièces à toi, en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
+   - **2. Casting, silhouettes distinctes & objet-clé (\`cast()\`)**: une ligne par personnage, chacun sa silhouette (\`hair\`, \`body\`, \`outfit\`), genre du narrateur aligné sur \`episode.json.voice.narratorGender\`. **Règle d'objet/vêtement-clé** : si l'histoire porte sur un objet ou un vêtement, donne-lui une couleur et une forme **distinctes**, et respecte la chronologie du récit (porté ou tenu seulement à partir du plan où le texte le dit).
+`);
+  p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus**: passe l'objet à \`handRProp\` / \`handLProp\` ; il suit la main. Un objet posé va dans un slot ou dans \`extra\`. Jamais d'objet flottant loin des mains.
+`);
+  p = p.replace('with imports, `makeLook` cast, shared custom set components, and shots', 'with imports, the cast(), the place() constants, and shots');
+  p = swapBlock(p, '   - **Custom Characters', '   - **Clock `t`', `   - **Write the shots with \`shot({...})\`** (see the shot() section): place, cam, people with an act and a face. A hand-written <Stage> or camT shot is the way out for what shot() cannot do; both mix in one episode.
+`);
+  p = swapBlock(p, '- Sets and characters: define ONE', '- Framing.', `- Places and characters: define each place once with place() and each character once with cast(), at the top of \`shots.tsx\`, and reuse them in every shot. Never invent external image/audio file paths.
+`);
+  return p;
+}
 
 function fileList(projectRoot: string, cap = 260): string {
   const all = walk(projectRoot, { maxFiles: 2000 });
@@ -473,7 +496,7 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
     const header = shotsRaw.slice(0, firstIdx).trim();
     if (header) {
       parts.push(
-        `### Shared header in shots.tsx (reuse these exact makeLook constants & set components in subsequent batches):\n\`\`\`tsx\n${header.slice(0, 2_800)}\n\`\`\``,
+        `### Shared header in shots.tsx (reuse these exact characters and places in subsequent batches):\n\`\`\`tsx\n${header.slice(0, 2_800)}\n\`\`\``,
       );
     }
     const lastMatch = exportMatches[exportMatches.length - 1]!;
@@ -539,11 +562,14 @@ function messageCharCost(msg: ChatMessage): number {
 export function buildMessages(opts: BuildOptions): ChatMessage[] {
   const pin = episodePin(opts.projectRoot, opts.history);
   // Put static instructions and engine signatures first so LLM prompt caches hit on every step of a turn
+  const engineHas = (file: string) => fs.existsSync(path.join(opts.projectRoot, 'src', 'engine', file));
+  const modern = engineHas('shot.tsx');
   const head: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'system', content: ENGINE_CHEAT },
-    { role: 'system', content: DIRECTOR_GUIDE },
-    ...(fs.existsSync(path.join(opts.projectRoot, 'src', 'engine', 'stage.tsx')) ? [{ role: 'system' as const, content: STAGE_GUIDE }] : []),
+    { role: 'system', content: modern ? modernSystemPrompt() : SYSTEM_PROMPT },
+    ...(modern ? [] : [{ role: 'system' as const, content: ENGINE_CHEAT }]),
+    { role: 'system', content: modern ? modernDirectorGuide() : DIRECTOR_GUIDE },
+    ...(modern ? [{ role: 'system' as const, content: SHOT_GUIDE }] : []),
+    ...(engineHas('stage.tsx') ? [{ role: 'system' as const, content: STAGE_GUIDE }] : []),
     {
       role: 'system',
       content: `## Every engine export and its props (generated from src/engine)\n${engineDigest(opts.projectRoot)}\n\nThis listing is the contract: do not read src/engine/*.tsx again unless a typecheck or a render error names a specific line.`,

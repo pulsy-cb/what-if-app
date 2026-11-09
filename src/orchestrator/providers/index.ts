@@ -75,7 +75,7 @@ export function reviewProviderConfig(db: Db): ProviderConfig | null {
     baseURL: s.reviewBaseURL || env.WHATIF_REVIEW_BASE_URL || (sameProviderAsPrimary ? primary.baseURL : preset.baseURL),
     apiKey: s.reviewApiKey || env.WHATIF_REVIEW_API_KEY || primary.apiKey || '',
     model: s.reviewModel || env.WHATIF_REVIEW_MODEL || (sameProviderAsPrimary ? primary.model : preset.model),
-    maxTokens: Number(env.WHATIF_REVIEW_MAX_TOKENS || 4_000),
+    maxTokens: Number(env.WHATIF_REVIEW_MAX_TOKENS || 12_000),
   };
 }
 

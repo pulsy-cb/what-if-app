@@ -172,7 +172,7 @@ test('whatif audits: episode formula/language and shots animation/framing checks
     const ep = { shots: [{ id: 'S1', set: 'study', size: 'medium' }, { id: 'S2', set: 'schematic', size: 'schematic' }] };
     const tl = { shots: [{ id: 'S1', len: 50 }, { id: 'S2', len: 50 }] };
     const err = shotsAudit(dir, 'fold', ep, tl) ?? '';
-    assert.match(err, /has no <Hero>/);
+    assert.match(err, /has no character/);
     assert.match(err, /FRAMES at 30 fps/);
     assert.match(err, /x≈640–660/);
     assert.match(err, /schedules animation at frame\(s\) 90/);
@@ -387,10 +387,10 @@ test('shots audit: establishing shots may hold no character, zoom range is 0.6-4
   try {
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), shots(4.0));
     const ok = shotsAudit(dir, 'room', ep('establishing'), tl) ?? '';
-    assert.doesNotMatch(ok, /has no <Hero>/, 'an establishing shot needs no character');
+    assert.doesNotMatch(ok, /has no character/, 'an establishing shot needs no character');
     assert.doesNotMatch(ok, /zoom/, 'zoom 4.0 is a valid close-up');
     const plain = shotsAudit(dir, 'room', ep('wide'), tl) ?? '';
-    assert.match(plain, /S1 .*has no <Hero>/, 'a plain wide still needs a character');
+    assert.match(plain, /S1 .*has no character/, 'a plain wide still needs a character');
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), shots(4.8));
     assert.match(shotsAudit(dir, 'room', ep('establishing'), tl) ?? '', /zoom to 4\.8|zoom to 4\.80/);
   } finally {
@@ -519,6 +519,12 @@ test('engine overlay: adds the template classroom and the character views, patch
     fs.mkdirSync(path.join(dir, 'src', 'engine', 'sets'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'furnish.tsx'), furnish);
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'rig.tsx'), rig);
+    fs.writeFileSync(
+      path.join(dir, 'src', 'engine', 'episode.tsx'),
+      "import { AbsoluteFill } from 'remotion';\n" +
+        '<svg width={1920} height={1080} viewBox="0 0 1920 1080" a /><svg width={1920} height={1080} viewBox="0 0 1920 1080" b /><svg width={1920} height={1080} viewBox="0 0 1920 1080" c />\n' +
+        '<rect width="1920" height="1080" fill="url(#epVig)" /><rect width="1920" height="1080" filter="url(#epGrain)" />\n',
+    );
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './rig';\nexport * from './furnish';\nexport * from './ui';\n");
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'sets', 'classroom.tsx'), 'export const Classroom = () => null; // the old one\n');
     return dir;
@@ -535,10 +541,14 @@ test('engine overlay: adds the template classroom and the character views, patch
     assert.match(overlaySummary(dry, false), /would be added/);
 
     const first = applyEngineOverlay(dir);
-    assert.deepEqual(first.patched.sort(), ['src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
+    assert.deepEqual(first.patched.sort(), ['src/engine/episode.tsx', 'src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
+    const framed = read(dir, 'src/engine/episode.tsx');
+    assert.equal(framed.split('viewBox={VIEW_BOX}').length - 1, 3, 'every svg of an older engine follows the 9:16 frame');
+    assert.doesNotMatch(framed, /viewBox="0 0 1920 1080"|width="1920"/);
+    assert.match(framed, /^import \{ AbsoluteFill \} from 'remotion';\nimport \{ STUDIO \} from '\.\.\/studio\.config';\n/);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/shot';\nexport \* from '\.\/rooms';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
     assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
     assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
     assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
@@ -610,9 +620,9 @@ test('stage: the audit counts <Staged> as a character, checks ground positions, 
   try {
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), shot(0.5));
     const ok = shotsAudit(dir, 'room', ep, tl) ?? '';
-    assert.doesNotMatch(ok, /has no <Hero>/, 'a <Staged> is a character');
+    assert.doesNotMatch(ok, /has no character/, 'a <Staged> is a character');
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), 'export const S1 = ({ t, len }) => <g><Person look={A} body="teen" pose={poseAt(t, [{ f: 0, p: {} }])} /></g>;\n');
-    assert.doesNotMatch(shotsAudit(dir, 'room', ep, tl) ?? '', /has no <Hero>/, 'a <Person> is a character');
+    assert.doesNotMatch(shotsAudit(dir, 'room', ep, tl) ?? '', /has no character/, 'a <Person> is a character');
     assert.doesNotMatch(ok, /places something at/);
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), shot(1.4));
     assert.match(shotsAudit(dir, 'room', ep, tl) ?? '', /places something at u 0\.4, w 1\.4/);
@@ -725,6 +735,175 @@ test('actions: clips go from their first pose to their last, the near arm gestur
     assert.equal(act('explain', 5).talk !== undefined, true, 'act resolves a gesture');
     assert.ok(act('walk', 5).legL, 'and a clip');
     assert.throws(() => act('moonwalk', 0), /unknown action "moonwalk".*explain.*stand-up/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shot(): the audit sees its people and its motion, and a wrong name at the top of shots.tsx is reported', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const { staticMetrics } = await import('../dist/orchestrator/reviewer.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-shot-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const room = defineEpisode("Room", { timeline, shots: { S1, S2, S3, S4 } });\n');
+  const ids = ['S1', 'S2', 'S3', 'S4'];
+  const ep = { shots: ids.map((id) => ({ id, set: 'room', size: 'wide' })) };
+  const tl = { shots: ids.map((id) => ({ id, len: 60 })) };
+  const write = (body) => fs.writeFileSync(path.join(epDir, 'shots.tsx'), ids.map((id) => `export const ${id} = shot({ place: ROOM, ${body} });\n`).join(''));
+  const audit = () => shotsAudit(dir, 'room', ep, tl) ?? '';
+  try {
+    write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 0.5 }, yaw: 0.45, act: 'talk' }]`);
+    assert.equal(audit(), '', 'a described shot passes as it is');
+    write(`cam: 'wide', duo: { a: { who: A, at: { u: 0.3, w: 0.5 } }, b: { who: B, at: { u: 0.6, w: 0.5 } }, action: 'hug' }`);
+    assert.equal(audit(), '', 'so does a duo');
+    write(`cam: 'wide', people: []`);
+    assert.match(audit(), /S1 .*has no character/, 'an empty cast is no character');
+    write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 0.5 } }]`);
+    assert.doesNotMatch(audit(), /is static/, 'the default slow push-in is motion');
+    write(`cam: 'wide', move: 'still', people: [{ who: A, at: { u: 0.4, w: 0.5 } }]`);
+    assert.match(audit(), /S1 is static/, 'held camera and nobody acting is static');
+    write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 1.6 }, act: 'talk' }]`);
+    assert.match(audit(), /places something at u 0\.4, w 1\.6/, 'floor positions are checked inside shot() too');
+
+    assert.match(staticMetrics(`export const S1 = shot({ people: [{ who: A, yaw: 0.5 }, { who: B }, { who: C }] });\n`), /1\/1 plans avec un personnage orienté.*1 plans à 3 personnages/);
+    assert.match(staticMetrics(`export const S1 = () => <Stage><Staged yaw={-1} /></Stage>;\n`), /1\/1 plans avec un personnage orienté/);
+    assert.match(staticMetrics(`export const S1 = shot({ focus: 0.6, people: [{ who: A }] });\n`), /1\/1 plans avec amorce floue/);
+
+    // the crash test runs when the project has react-dom: a stand-in is enough to reach the module load
+    const nm = path.join(dir, 'node_modules');
+    for (const [name, body] of [['typescript', "module.exports = require(process.env.TS_PATH);"], ['react', 'module.exports = { createElement: () => null };'], ['react-dom', 'module.exports = {};'], ['react-dom/server', 'module.exports = { renderToStaticMarkup: () => "" };'], ['react/jsx-runtime', 'module.exports = { jsx: () => null, jsxs: () => null };']]) {
+      fs.mkdirSync(path.join(nm, name), { recursive: true });
+      fs.writeFileSync(path.join(nm, name, 'index.js'), body);
+    }
+    process.env.TS_PATH = path.resolve('node_modules/typescript');
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), ids.map((id) => `export const ${id} = shot({ place: ROOM, people: [{ who: A, at: { u: 0.4, w: 0.5 }, act: 'talk' }] });\n`).join('').replace(/^/, `const ROOM = 1;\nconst A = (() => { throw new Error('cast: unknown garment "cape"'); })();\nconst shot = (x) => () => null;\n`));
+    assert.match(audit(), /shots\.tsx crashes when it loads: cast: unknown garment "cape"/);
+  } finally {
+    delete process.env.TS_PATH;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reviewer: an unreadable answer is never a validation, a text-only model is still heard, a refusal holds the render back', async () => {
+  const { reviewEpisodeBoard, formatReviewFeedback, clearReviewBlock } = await import('../dist/orchestrator/reviewer.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rev2-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'e');
+  const outDir = path.join(dir, 'out', 'e');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'shots.tsx'), 'export const S1 = () => null;\n');
+  fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ script: [{ text: 'Bonjour.' }], shots: [] }));
+  fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'strip');
+  const replies = (list) => {
+    const calls = [];
+    return { calls, provider: { model: 'fake', label: 'fake', chat: async (o) => {
+      calls.push(o.messages);
+      const next = list.shift();
+      if (next instanceof Error) throw next;
+      return { text: next ?? '', toolCalls: [] };
+    } } };
+  };
+  const refused = '{"pass":false,"summary":"non","issues":[{"shot":"S1","severity":"error","problem":"p","fix":"f"}]}';
+  try {
+    const twice = replies(['', 'toujours pas du json']);
+    const unread = await reviewEpisodeBoard(twice.provider, dir, 'e');
+    assert.equal(twice.calls.length, 2, 'asks a second time');
+    assert.equal(unread.ok, false);
+    const text = formatReviewFeedback(unread, 'e');
+    assert.match(text, /NON VÉRIFIÉ/);
+    assert.doesNotMatch(text, /VALIDÉ ✓/);
+    assert.equal(unread.blocking, false);
+
+    const second = replies(['', '{"pass":true,"summary":"ok","issues":[]}']);
+    assert.equal((await reviewEpisodeBoard(second.provider, dir, 'e')).ok, true, 'the second answer counts');
+
+    const textOnly = replies([new Error('400 image input not supported'), '{"pass":true,"summary":"ok","issues":[]}']);
+    const code = await reviewEpisodeBoard(textOnly.provider, dir, 'e');
+    assert.equal(code.sawImages, false);
+    assert.ok(textOnly.calls[0][1].images?.length, 'first with the images');
+    assert.equal(textOnly.calls[1][1].images, undefined, 'then without');
+    assert.match(formatReviewFeedback(code, 'e'), /code seul/);
+
+    const down = replies([new Error('503'), new Error('503')]);
+    await assert.rejects(reviewEpisodeBoard(down.provider, dir, 'e'), /503/);
+
+    const first = await reviewEpisodeBoard(replies([refused]).provider, dir, 'e');
+    assert.equal(first.blocking, true, 'a refusal with rounds left holds the render');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(outDir, 'review.json'), 'utf8')).blocking, true);
+    clearReviewBlock(dir, 'e');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(outDir, 'review.json'), 'utf8')).blocking, false);
+    assert.equal((await reviewEpisodeBoard(replies([refused]).provider, dir, 'e', undefined, { final: true })).blocking, false, 'the last round never holds it');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent loop: the reviewer speaks after every tool result of the step, a refused board stops the render', async () => {
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { reviewRefusal } = await import('../dist/tools/whatif.js');
+  const { clearReviewBlock } = await import('../dist/orchestrator/reviewer.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-loop-'));
+  const root = path.join(dir, 'p');
+  const epDir = path.join(root, 'src', 'episodes', 'e');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.mkdirSync(path.join(root, 'out', 'e'), { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'shots.tsx'), 'export const S1 = () => null;\n');
+  fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ script: [{ text: 'Bonjour.' }], shots: [] }));
+  fs.writeFileSync(path.join(root, 'out', 'e', 'storyboard.jpg'), 'strip');
+  const db = new Db(path.join(dir, 'app.db'));
+  const ok = (name) => ({ name, description: name, policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: name }) });
+  const registry = new ToolRegistry([{ ...ok('whatif_run'), policy: 'ask' }, ok('whatif_status'), ok('git')]);
+  try {
+    db.createProject('p', 'p', root);
+    const th = db.createThread('p', 't');
+    db.addMessage(th.id, 'user', 'go');
+    let step = 0;
+    const provider = { id: 'x', label: 'x', model: 'm', chat: async () => {
+      step++;
+      if (step === 1) return { text: '', toolCalls: [{ id: 'a', name: 'whatif_run', args: { episode: 'e', step: 'board' } }, { id: 'b', name: 'whatif_status', args: { episode: 'e' } }] };
+      return { text: 'fini', toolCalls: [] };
+    } };
+    const reviewer = { model: 'r', label: 'r', chat: async () => ({ text: '{"pass":false,"summary":"non","issues":[{"shot":"S1","severity":"error","problem":"p","fix":"f"}]}', toolCalls: [] }) };
+    const bus = { emit() {} };
+    const config = { ...loadConfig(), maxSteps: 6, reviewMaxRounds: 2, approvalsMode: 'off', contextChars: 90_000 };
+    await runTurn({ db, bus, config, registry, approvals: null, provider: () => provider, reviewProvider: () => reviewer }, th.id, new AbortController().signal);
+    const rows = db.listMessages(th.id).map((m) => m.role);
+    const firstTool = rows.indexOf('tool');
+    assert.deepEqual(rows.slice(firstTool, firstTool + 3), ['tool', 'tool', 'user'], 'no user message between the two tool results');
+
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'out', 'e', 'review.json'), 'utf8')).blocking, true);
+    assert.match(reviewRefusal(root, 'e'), /independent reviewer refused this board[\s\S]*\[S1\] p/);
+    clearReviewBlock(root, 'e');
+    assert.equal(reviewRefusal(root, 'e'), null);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('modern prompt: a project with shot() is never told to draw with Hero and poseAt', async () => {
+  const { buildMessages, modernSystemPrompt, SYSTEM_PROMPT } = await import('../dist/orchestrator/context.js');
+  const modern = modernSystemPrompt();
+  for (const legacy of ['makeLook', '<Hero', 'grabAt', 'tableSit', '<CustomRoom>', 'actPose']) assert.equal(modern.includes(legacy), false, `${legacy} left in the modern prompt`);
+  assert.match(modern, /Write the shots with `shot\(/);
+  for (const kept of ['whatif_run voice', 'Batching rule', 'Clock `t`', 'Framing.']) assert.ok(modern.includes(kept), `${kept} must stay`);
+  assert.ok(SYSTEM_PROMPT.includes('makeLook'), 'older engines keep their instructions');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-prompt-'));
+  const engine = path.join(dir, 'src', 'engine');
+  fs.mkdirSync(engine, { recursive: true });
+  const sys = () => buildMessages({ projectRoot: dir, history: [], maxChars: 90_000 }).map((m) => m.content).join('\n');
+  try {
+    assert.doesNotMatch(sys(), /## shot\(\): describe/);
+    fs.writeFileSync(path.join(engine, 'shot.tsx'), 'export const shot = 1;\n');
+    const text = sys();
+    assert.match(text, /## shot\(\): describe/);
+    assert.doesNotMatch(text, /Engine cheat sheet/, 'the Hero cheat sheet is gone');
+    assert.match(text, /### Choosing the place/);
+    assert.doesNotMatch(text, /### Choosing the set/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

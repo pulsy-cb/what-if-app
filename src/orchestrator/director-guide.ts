@@ -4,6 +4,41 @@
  * skill (references/look.md, kit.md, traps.md), plus the 9:16 geometry measured from engine/episode.tsx.
  * Keep it short: it is paid for on every step of every turn.
  */
+/** The default way to write a shot. Sent only when the project's engine has src/engine/shot.tsx (the overlay). */
+export const SHOT_GUIDE = `## shot(): describe a shot, the engine draws it (the default in this project)
+import { shot, place, cast, definePiece } from '../../engine';
+
+const ROOM = place('classroom', { mood: 'day', slots: { board: <text y={20} textAnchor="middle" fontSize={64} fill="#EDE8DE">x = 2y + 3</text> } });
+const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'] });
+const PROF = cast({ seed: 'prof', kind: 'masc', hair: 'buzz', outfit: ['shirt:cream', 'pants:navy', 'tie:red'], acc: ['glasses:square'] });
+
+export const S1 = shot({ place: ROOM, cam: 'establishing' });
+export const S2 = shot({ place: ROOM, cam: 'wide', people: [
+  { who: PROF, at: { u: 0.22, w: 0.3 }, yaw: 0.45, act: 'explain', face: 'happy' },
+  { who: LOU, on: 'd4', yaw: -2 },
+] });
+export const S3 = shot({ place: ROOM, cam: 'close', on: 0, people: [{ who: LOU, on: 'd4', yaw: 0.45, act: 'think', face: [[0, 'neutral'], [18, 'shock']] }] });
+export const S4 = shot({ place: ROOM, cam: 'wide', duo: { a: { who: LOU, at: { u: 0.36, w: 0.55 } }, b: { who: PROF, at: { u: 0.62, w: 0.55 } }, action: 'handshake', from: 10 } });
+
+Every shot of a place reuses the same \`place(...)\` constant, so layout and props stay identical from shot to shot. Register S1, S2... in index.tsx as usual.
+**shot({...})**
+- \`place\`: the result of place(). \`cam\`: establishing | wide | medium | close, computed for 16:9 and 9:16 from the person it is on; or a literal { x, y, zoom }. Make it match the shot's "size" in episode.json: insert or macro = a literal camera on the object (zoom 2.4-4), with no people if the line is about the object; a high or low angle = a literal camera, or a hand-written shot.
+- \`on\`: index in \`people\` the camera follows (default 0). \`move\`: 'push' (default slow push-in) | 'pull' | 'still'. \`focus\`: depth kept sharp, the rest softens; use it in about one shot in three (or a foreground amorce: \`extra: () => <Foreground blur={16}>…</Foreground>\`).
+- \`people\`: [{ who, at or on, seat, yaw, act, from, dur, stance, face, pose, rimId, headGear, torsoGear, handLProp, handRProp }]. at = { u, w } on the floor, or (t, len) => ({ u, w }) to walk across with act: 'walk'. on = a piece's id (or name): sits there, \`seat\` picks which place.
+- \`face\`: one expression, or [frame, expression] pairs. \`pose\`: any pose field, or (t, len) => ({...}) for keyframes; it overrides \`act\`.
+- \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
+**place(name, { mood, palette, add, remove, pieces, slots, lights })**
+- Names: classroom bedroom kitchen living office restaurant blank. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.
+- Pieces (use the name as \`p\`): desk table chair sofa coffee-table bed nightstand wardrobe bookshelf counter fridge plant bin floor-lamp rug / on the back wall: window board whiteboard pinboard frame clock tv door.
+  add: [{ p: 'sofa', id: 'couch', at: { u: 0.3, w: 0.4 }, len: 0.3, color: '#B0463A' }]. remove: ['clock', 'd3']. id is how \`on\` and \`slots\` refer to a piece; seats: desk table chair sofa bed. Ready recipes name their desks d1 d2 d3 d4 (classroom), d1 d2 (office), t1 t2 (restaurant), c1 c2 (kitchen).
+- slots: what is on a piece by id (board, whiteboard, tv, table). A slot's origin (0, 0) is the centre of that piece.
+- In 9:16 keep important pieces within u 0.2-0.8 at mid-depth: the frame shows 1058 units across.
+**Not in the catalogue? Nothing blocks you, in this order:**
+1. place('blank', { pieces: [...] }): any room from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
+2. definePiece('arcade', { kind: 'floor', len: 0.12, deep: 0.08, draw }) at the top of shots.tsx when several shots use it.
+3. Not a room at all (a street, a car, space, a diagram) or a staging shot() cannot do: write that shot by hand with <Stage>, or with camT and engine sets (Outdoor, Rooftop, Vehicle, Schematic). Hand-written and shot() shots mix freely in one episode.
+Something the list above does not have is never a reason to give up on the place the story needs.`;
+
 /** How to place people in depth. Sent only when the project's engine has src/engine/stage.tsx (the overlay). */
 export const STAGE_GUIDE = `## Stage: place people on the ground (this project's engine has it)
 Prefer <Stage> to literal x / y / scale for every shot with people in a room or outdoors: it computes position, size,
@@ -145,3 +180,15 @@ Fix, re-render only the shots that fail (stills with their ids), rebuild the boa
 - Mid-ground characters must sit inside the crop of EVERY shot that uses the set, not only the wide.
 - Focus rings scale with the camera: wrap them in scale(0.4) about the head.
 - Never cut to an empty frame: something is already on at the shot's first frame.`;
+
+
+const SET_CHOICE_MODERN = `### Choosing the place
+Use place() (see the shot() section): a recipe from the catalogue with this story's mood and palette, or pieces of your own. Never copy a set or a shot from another episode, and define each place once at the top of shots.tsx.
+`;
+
+/** The guide for a project that has shot(): the choice of a set is place(), not the older sets' props. */
+export const modernDirectorGuide = (): string => {
+  const a = DIRECTOR_GUIDE.indexOf('### Choosing the set');
+  const b = DIRECTOR_GUIDE.indexOf('### On-screen text');
+  return a < 0 || b < a ? DIRECTOR_GUIDE : `${DIRECTOR_GUIDE.slice(0, a)}${SET_CHOICE_MODERN}\n${DIRECTOR_GUIDE.slice(b)}`;
+};

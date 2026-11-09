@@ -390,7 +390,9 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       const directorMd = fs.readFileSync(directorPath, 'utf8');
       const dirHex = [...new Set((directorMd.match(/#[0-9A-Fa-f]{6}\b/g) ?? []).map((h) => h.toUpperCase()))];
       const shotsHex = new Set((shotsSource.match(/#[0-9A-Fa-f]{6}\b/g) ?? []).map((h) => h.toUpperCase()));
-      if (dirHex.length >= 3) {
+      // an episode built only from named colours (cast, place) has no hex to match
+      const namedOnly = shotsHex.size === 0 && /\b(cast|place)\s*\(/.test(shotsSource);
+      if (dirHex.length >= 3 && !namedOnly) {
         const matchedHex = dirHex.filter((h) => shotsHex.has(h));
         if (matchedHex.length === 0) {
           errors.push(
@@ -462,11 +464,11 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const hasHero = /<(Hero|Actor|Staged|Person)\b/.test(body);
+    const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*:\s*\[\s*\{|\bduo\s*:\s*\{/.test(body);
     if (hasHero) heroShots++;
 
     if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
-      errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no <Hero>: show a character (<Hero look={...} pose={...} />), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
+      errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no character: show one (people: [...] in shot(), <Staged> or <Hero>), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
     }
     if (!isSchoolStory && /<Classroom\b/.test(body)) {
       errors.push(
@@ -495,9 +497,12 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // Check that the shot actually uses its frame clock `t`
     const hasMotion =
       /\b(poseAt|faceAt|actPose|walkPose|talkAt|camPush|camPan|parallax|kf|DrawOn|CountUp|TitleCard|Arrow|PlantIcon|easeOut|clamp)\b/.test(body) ||
-      /\bt\s*[*+-]/.test(body);
+      /\bt\s*[*+-]/.test(body) ||
+      /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
+      // shot() pushes in slowly unless told to hold
+      (/\bshot\s*\(/.test(body) && !/\bmove\s*:\s*['"]still['"]/.test(body));
     if (!hasMotion) {
-      errors.push(`${id} is static: animate with kf(t, ...), poseAt(t, ...), actPose('...', t), faceAt(t, ...) or DrawOn`);
+      errors.push(`${id} is static: give someone an act, let shot() move the camera (no move: 'still'), or animate with kf(t, ...), poseAt(t, ...), faceAt(t, ...) or DrawOn`);
     }
 
     // Catch the "t in seconds instead of frames" bug: e.g. `t - 0.8`, `t + 0.3`, `t - 1.1`
@@ -544,7 +549,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     }
 
     // Catch stage positions off the ground: u is across the floor, w runs from the back wall (0) to the camera (1)
-    for (const at of body.matchAll(/\bat=\{\{\s*u:\s*(-?\d*\.?\d+)\s*,\s*w:\s*(-?\d*\.?\d+)/g)) {
+    for (const at of body.matchAll(/\bat(?:=\{\{|\s*:\s*\{)\s*u:\s*(-?\d*\.?\d+)\s*,\s*w:\s*(-?\d*\.?\d+)/g)) {
       const [u, w] = [Number(at[1]), Number(at[2])];
       if (u < -0.1 || u > 1.1 || w < 0 || w > 1) {
         errors.push(`${id} places something at u ${u}, w ${w}: u runs across the floor (0..1) and w from the back wall (0) to the camera (1)`);
@@ -608,7 +613,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
         new Function('exports', 'require', 'module', transpiled)(mod.exports, localReq, mod);
         return mod.exports;
       };
-      const exportedShots = loadMod(`src/episodes/${slug}/shots.tsx`);
+      let exportedShots: any = null;
+      try {
+        exportedShots = loadMod(`src/episodes/${slug}/shots.tsx`);
+      } catch (err) {
+        // a wrong name at the top of shots.tsx (cast, place) fails here; a package missing from the sandbox is not the episode's fault
+        const message = (err as Error).message;
+        if (!/Cannot find module/.test(message)) errors.push(`shots.tsx crashes when it loads: ${message}`);
+      }
       for (const sh of tlShots) {
         const id = String(sh.id ?? '');
         const Comp = exportedShots?.[id];
@@ -632,14 +644,16 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
   if (heroShots < minHeroShots) {
     errors.push(
-      `Only ${heroShots}/${tlShots.length} shots include <Hero>: at least ${minHeroShots} shots must feature Pip/Mo/cast on screen so the episode is character-driven, not a slide deck.`,
+      `Only ${heroShots}/${tlShots.length} shots show a character: at least ${minHeroShots} shots must feature Pip/Mo/cast on screen so the episode is character-driven, not a slide deck.`,
     );
   }
-  const totalPoseFaceCalls = (shotsSource.match(/\b(poseAt|faceAt|actPose|walkPose)\s*\(/g) ?? []).length;
+  const totalPoseFaceCalls =
+    (shotsSource.match(/\b(poseAt|faceAt|actPose|walkPose|turnAt)\s*\(/g) ?? []).length +
+    (shotsSource.match(/\bact\s*[:=]\s*[{'"]|<Duo\b|\bduo\s*:\s*\{|\bface\s*:\s*[\['"]/g) ?? []).length;
   const minPoseFaceCalls = Math.max(4, Math.ceil(tlShots.length * 0.85));
   if (totalPoseFaceCalls < minPoseFaceCalls) {
     errors.push(
-      `shots.tsx only has ${totalPoseFaceCalls} poseAt()/faceAt()/actPose() call(s) across ${tlShots.length} shots (need at least ${minPoseFaceCalls}): animate the characters' poses and expressions across the shots.`,
+      `shots.tsx only animates people ${totalPoseFaceCalls} time(s) across ${tlShots.length} shots (need at least ${minPoseFaceCalls}): give them an act and a face in shot() or <Staged>, or use poseAt()/faceAt().`,
     );
   }
 
@@ -647,6 +661,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     return `shots.tsx failed the animation & composition check:\n- ${errors.slice(0, 10).join('\n- ')}`;
   }
   return null;
+}
+
+/** Why the render must wait for the independent reviewer, or null. */
+export function reviewRefusal(projectRoot: string, slug: string): string | null {
+  const review = readJsonFile(path.join(projectRoot, 'out', slug, 'review.json'));
+  if (!review?.blocking) return null;
+  const todo = (review.issues ?? []).filter((i: any) => i.severity === 'error').map((i: any) => `[${i.shot}] ${i.problem}`);
+  return `the independent reviewer refused this board. Fix these shots in shots.tsx, then re-run stills for them and board (the reviewer looks again):\n- ${todo.slice(0, 8).join('\n- ')}`;
 }
 
 /**
@@ -697,8 +719,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
       return (
         `src/episodes/${slug}/DIRECTOR.md is missing or incomplete (${directorText.length} chars): before rendering stills or video, write a real Réalisation & Mise en Scène document in src/episodes/${slug}/DIRECTOR.md (>= 200 chars) covering:\n` +
         `1. Architecture des décors en profondeur (arrière-plan, plan moyen mobilier/table <DiningTable>/<Desk>, premier plan),\n` +
-        `2. Casting & looks des personnages (makeLook),\n` +
-        `3. Découpage plan par plan : cadrage (plans à deux avec tableSit quand deux personnages discutent à table), placement, et chorégraphie physique des bras/mains quand un personnage tient, prend ou pose un objet (handRProp, handWorld, reachPose, grabAt — jamais d'objet flottant loin des mains).`
+        `2. Casting & looks des personnages (cast() ou makeLook),\n` +
+        `3. Découpage plan par plan : cadrage, placement, et chorégraphie physique des bras/mains quand un personnage tient, prend ou pose un objet (jamais d'objet flottant loin des mains).`
       );
     }
     const auditErr = shotsAudit(projectRoot, slug, episode, timeline);
@@ -712,6 +734,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     if (!fs.existsSync(path.join(projectRoot, 'out', slug, 'storyboard.jpg'))) {
       return `out/${slug}/storyboard.jpg does not exist yet: run whatif_run { step: "stills" } and { step: "board" } and inspect the storyboard before rendering the full video`;
     }
+    const refusal = reviewRefusal(projectRoot, slug);
+    if (refusal) return refusal;
   }
   if (step === 'master' && !fs.existsSync(path.join(projectRoot, 'out', slug, `${slug}-raw.mp4`))) {
     return `out/${slug}/${slug}-raw.mp4 does not exist: run whatif_run { step: "render" } first`;
@@ -719,6 +743,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
   return null;
 }
 
+
+const forwardLineEarly = (ctx: { log: (line: string) => void }) => (line: string) => ctx.log(line);
 
 const readJsonFile = (file: string): any => {
   try {
@@ -931,6 +957,11 @@ const runStep: Tool = {
     const extra = input.args ?? [];
     const slug = input.episode;
     syncStudioAspect(ctx.projectRoot, slug);
+    // the audit's crash test needs react-dom in the project: the first episode of a machine has no node_modules yet
+    if (input.step === 'stills' && !fs.existsSync(path.join(ctx.projectRoot, 'node_modules', 'react-dom'))) {
+      ctx.log('node_modules missing: running npm install once');
+      await exec(['npm', 'install', '--include=dev'], { cwd: ctx.projectRoot, timeoutMs: 900_000, signal: ctx.signal, onLine: forwardLineEarly(ctx) }).catch(() => null);
+    }
     const blocked = prerequisite(ctx.projectRoot, slug, input.step);
     if (blocked) throw new Error(`cannot run ${input.step} yet — ${blocked}`);
     const before = snapshot(ctx.projectRoot);

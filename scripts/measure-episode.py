@@ -18,8 +18,8 @@ SHOT_RE = re.compile(r"(?=export\s+(?:const|function)\s+S\d+\b)")
 EXPORT_RE = re.compile(r"export\s+(?:const|function)\s+(S\d+)\b")
 CAMT_RE = re.compile(r"camT\(\s*[^,()]+,\s*[^,()]+,\s*(\d+(?:\.\d+)?)\s*\)")
 CAMPUSH_RE = re.compile(r"camPush\(\s*t\s*,\s*len\s*,\s*[^,()]+,\s*[^,()]+,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)")
-YAW_RE = re.compile(r"\byaw\s*:\s*(-?\d*\.?\d+)")
-BLUR_RE = re.compile(r"<Foreground\b|url\(#blur(?:3|6|10|16)\)|\bblur16\b|\bfocus=")
+YAW_RE = re.compile(r"\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)")
+BLUR_RE = re.compile(r"<Foreground\b|url\(#blur(?:3|6|10|16)\)|\bblur16\b|\bfocus\s*[=:]")
 ORIENTED_HELPERS = ("tableSit(", "walkPose(", "carSit(", "bedSit(")
 
 
@@ -44,7 +44,7 @@ def measure(project: Path, slug: str) -> dict:
     zooms = []
     yaws = []
     for body in bodies.values():
-        n = len(re.findall(r"<(?:Hero|Staged|Person)\b", body))
+        n = len(re.findall(r"<(?:Hero|Staged|Person)\b|\bwho\s*:", body))
         staged += 1 if "<Staged" in body else 0
         heroes["3+" if n >= 3 else str(n)] += 1
         ys = [float(y) for y in YAW_RE.findall(body)]

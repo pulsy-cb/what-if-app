@@ -18,6 +18,10 @@ export type ReviewReport = {
   summary: string;
   issues: ReviewIssue[];
   createdAt: string;
+  /** false when the model could not take the contact sheets: the verdict comes from the code alone */
+  sawImages?: boolean;
+  /** true while the board is refused and another review round is still allowed: render waits for it */
+  blocking?: boolean;
 };
 
 const MAX_REVIEW_IMAGES = 6;
@@ -48,6 +52,8 @@ Vérifie particulièrement ces 9 points critiques :
 7. **Lisibilité du lieu** : le lieu se reconnaît-il sans la voix ? Une salle de classe a un tableau plat collé au mur du fond (pas une planche suspendue au milieu de la pièce), des pupitres d'élèves (pas des tables de restaurant), une fenêtre ; une chambre a un lit, etc. Les éléments du décor d'origine sans rapport avec l'histoire (démo « 7 × 8 », rideaux et ciel de crépuscule dans une scène de jour) sont des défauts.
 8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ? Une source de lumière visible par plan ?
 9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
+
+Le code peut décrire les plans au lieu de les dessiner : \`shot({ place, cam, people, duo })\`. \`place('classroom', …)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression), \`duo\` une interaction à deux. Tes correctifs doivent employer ces mêmes champs quand le plan est écrit ainsi.
 
 Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un bloc \`\`\`json) respectant exactement ce schéma :
 {
@@ -91,10 +97,10 @@ export function staticMetrics(shotsRaw: string): string {
   let blur = 0;
   let group3 = 0;
   for (const body of parts) {
-    const yaws = [...body.matchAll(/\byaw\s*:\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
-    if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(/.test(body)) oriented++;
-    if (/<Foreground\b|blur16|\bfocus=/.test(body)) blur++;
-    if ((body.match(/<(Hero|Staged|Person)\b/g) ?? []).length >= 3) group3++;
+    const yaws = [...body.matchAll(/\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
+    if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{/.test(body)) oriented++;
+    if (/<Foreground\b|blur16|\bfocus\s*[=:]/.test(body)) blur++;
+    if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*:/g) ?? []).length >= 3) group3++;
   }
   return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus`;
 }
@@ -147,6 +153,7 @@ export async function reviewEpisodeBoard(
   projectRoot: string,
   slug: string,
   signal?: AbortSignal,
+  opts: { final?: boolean } = {},
 ): Promise<ReviewReport> {
   const epDir = path.join(projectRoot, 'src', 'episodes', slug);
   const outDir = path.join(projectRoot, 'out', slug);
@@ -206,8 +213,23 @@ export async function reviewEpisodeBoard(
     { role: 'user', content: userPrompt, ...(images.length ? { images } : {}) },
   ];
 
-  const res = await provider.chat({ messages, tools: [], signal });
-  const report = parseReviewJson(res.text, provider.model, slug);
+  const ask = async (msgs: ChatMessage[]): Promise<ReviewReport> =>
+    parseReviewJson((await provider.chat({ messages: msgs, tools: [], signal })).text, provider.model, slug);
+  let sawImages = images.length > 0;
+  let sent = messages;
+  let report: ReviewReport;
+  try {
+    report = await ask(sent);
+  } catch (err) {
+    if (!images.length) throw err;
+    // a text-only model refuses the request outright: judging the code alone is still worth it
+    sawImages = false;
+    sent = [messages[0]!, { role: 'user', content: userPrompt }];
+    report = await ask(sent);
+  }
+  if (!report.ok) report = await ask(sent);
+  report.sawImages = sawImages;
+  report.blocking = report.ok && !report.pass && !opts.final;
 
   try {
     fs.mkdirSync(outDir, { recursive: true });
@@ -219,7 +241,21 @@ export async function reviewEpisodeBoard(
   return report;
 }
 
+/** A board that was not reviewed cannot stay refused: the reviewer failed, is off, or has no round left. */
+export function clearReviewBlock(projectRoot: string, slug: string): void {
+  const file = path.join(projectRoot, 'out', slug, 'review.json');
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (report.blocking) fs.writeFileSync(file, JSON.stringify({ ...report, blocking: false }, null, 2) + '\n');
+  } catch {
+    /* no review yet */
+  }
+}
+
 export function formatReviewFeedback(report: ReviewReport, slug: string): string {
+  if (!report.ok) {
+    return `[reviewer indépendant · ${report.model}] Audit de "${slug}" : NON VÉRIFIÉ (réponse illisible, deux essais). ${report.summary}\nContinue la chaîne : vérifie toi-même les planches de contact.`;
+  }
   const errors = report.issues.filter((i) => i.severity === 'error');
   const warns = report.issues.filter((i) => i.severity === 'warn');
   const affectedShots = [
@@ -233,6 +269,7 @@ export function formatReviewFeedback(report: ReviewReport, slug: string): string
   const lines: string[] = [
     `[reviewer indépendant · ${report.model}] Audit de "${slug}" : ${report.pass ? 'VALIDÉ ✓' : 'CORRECTIONS REQUISES ✗'}`,
     `Résumé : ${report.summary}`,
+    ...(report.sawImages === false ? ["(Ce modèle n'accepte pas les images : verdict établi sur le code seul.)"] : []),
   ];
   if (errors.length) {
     lines.push(`\nProblèmes bloquants à corriger dans src/episodes/${slug}/shots.tsx :`);
