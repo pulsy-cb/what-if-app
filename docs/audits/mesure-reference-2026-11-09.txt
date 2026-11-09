@@ -1,0 +1,48 @@
+=== crush
+slug                               crush
+shots                              36
+heroes_per_shot                    {'0': 4, '1': 17, '2': 11, '3+': 4}
+shots_oriented_not_frontal         2
+yaw_values_written                 0
+yaw_abs_ge_0_6                     0
+shots_with_foreground_blur         0
+distinct_sets_in_episode_json      1
+sizes                              {'wide': 8, 'close': 12, 'insert': 7, 'medium': 9}
+zoom_min                           1.05
+zoom_max                           2.05
+median_shot_seconds                3.35
+tool_results                       501
+tool_errors                        112
+models_recorded                    []
+=== not-father
+slug                               not-father
+shots                              36
+heroes_per_shot                    {'0': 5, '1': 6, '2': 16, '3+': 9}
+shots_oriented_not_frontal         31
+yaw_values_written                 66
+yaw_abs_ge_0_6                     38
+shots_with_foreground_blur         0
+distinct_sets_in_episode_json      4
+sizes                              {'wide': 6, 'insert': 9, 'medium': 10, 'close': 10, 'title': 1}
+zoom_min                           1.05
+zoom_max                           2.4
+median_shot_seconds                3.23
+tool_results                       226
+tool_errors                        47
+models_recorded                    []
+=== poudre
+slug                               poudre
+shots                              22
+heroes_per_shot                    {'0': 2, '1': 11, '2': 9, '3+': 0}
+shots_oriented_not_frontal         0
+yaw_values_written                 0
+yaw_abs_ge_0_6                     0
+shots_with_foreground_blur         0
+distinct_sets_in_episode_json      6
+sizes                              {'wide': 6, 'insert': 4, 'medium': 7, 'close': 4, 'title': 1}
+zoom_min                           1.12
+zoom_max                           2.32
+median_shot_seconds                3.2
+tool_results                       146
+tool_errors                        32
+models_recorded                    []
