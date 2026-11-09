@@ -58,6 +58,13 @@ export class Db {
     this.raw = new DatabaseSync(dbPath);
     this.raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.raw.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Additive migrations for databases created by an older version of the schema. */
+  private migrate(): void {
+    const cols = this.raw.prepare('PRAGMA table_info(project_runs)').all() as unknown as { name: string }[];
+    if (!cols.some((c) => c.name === 'model')) this.raw.exec('ALTER TABLE project_runs ADD COLUMN model TEXT');
   }
 
   close(): void {
@@ -172,10 +179,10 @@ export class Db {
   }
 
   // ---------------------------------------------------------------- run timings
-  addRunDuration(projectId: string, threadId: string, elapsedMs: number, steps = 0): void {
+  addRunDuration(projectId: string, threadId: string, elapsedMs: number, steps = 0, model: string | null = null): void {
     this.raw
-      .prepare('INSERT INTO project_runs (project_id, thread_id, elapsed_ms, steps, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(projectId, threadId, Math.max(0, Math.round(elapsedMs)), steps, this.now());
+      .prepare('INSERT INTO project_runs (project_id, thread_id, elapsed_ms, steps, created_at, model) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(projectId, threadId, Math.max(0, Math.round(elapsedMs)), steps, this.now(), model);
   }
 
   projectTiming(projectId: string): { totalMs: number; lastRunMs: number } {

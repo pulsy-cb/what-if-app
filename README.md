@@ -117,11 +117,14 @@ src/orchestrator/
   main.ts            HTTP + routes + SSE + fichiers (Range pour la vidéo) + auth par token + minuteur
   agent.ts           la boucle : modèle → outils → résultats → reviewer → modèle, checkpoint avant mutation
   context.ts         compilation du contexte : prompt système, épinglage de continuité (DIRECTOR.md, bible.json, en-tête shots.tsx), historique compacté
-  reviewer.ts        agent Reviewer indépendant (contexte vierge) après l'étape board -> out/<slug>/review.json
+  reviewer.ts        agent Reviewer indépendant (contexte vierge) après l'étape board : lit les planches de contact + des mesures du code -> out/<slug>/review.json
+  director-guide.ts  le guide du réalisateur injecté dans le prompt (cadrage 16:9/9:16, orientation, groupes, amorces, choix du décor)
+  image-pick.ts      quelles images l'agent revoit après un outil (plans re-rendus, planches, échantillon)
   approvals.ts       porte "ask" : le run se bloque jusqu'au clic, timeout = refus
   db.ts              SQLite (node:sqlite) : projets, fils, messages, approbations, crédits, durées d'exécution
   bus.ts             bus d'événements par fil + buffer de rejeu (le SSE survit à un reload)
   providers/         openai-compatible (streaming + tool calls + vision), anthropic, mock
+engine-overlay/     améliorations du moteur que l'app possède (gabarit `Classroom` à jetons + slots, pièces murales, sol 9:16) : appliquées à `whatif_new` et à `whatif_sync_engine { apply: true }` (voir son README)
 web/public/          l'UI : chat, minuteur temps réel, cartes d'outils, images/vidéos, approbations, réglages
 test/                smoke tests (outils, allowlist, audits, compaction, reviewer, boucle complète HTTP)
 ```
@@ -162,6 +165,7 @@ Ce qui rend un tour non surveillé tenable, et qui se règle :
 | `WHATIF_REVIEWER_ENABLED` | `true` | active un second agent Reviewer indépendant au contexte vierge après `board` |
 | `WHATIF_REVIEW_MODEL` | *(hérite)* | modèle du Reviewer (ex: un modèle vision rapide comme `google/gemini-2.5-flash`) |
 | `WHATIF_REVIEW_MAX_ROUNDS` | `2` | tours max de correction demandés par le Reviewer par épisode |
+| `WHATIF_ALLOW_ENGINE_WRITES` | *(vide)* | `1` autorise l'agent à écrire dans `src/engine/` ; sinon `write_file` / `edit_file` sont limités à `src/episodes/`, aux notes racine (`PROJECT.md`) et à `out/` |
 
 Le prompt système porte l'ordre du pipeline, le budget de mots (50-60 pour 15-25 s), la grammaire des
 cues `episode.json` (`f:120`, `s:4.2`, `S1+2`, `franchir+3` — **pas** de `w:`), et la liste générée de
@@ -235,8 +239,9 @@ Tu vois donc toujours *ce que tu as changé* avant de le perdre, et `git restore
 ## Tests
 
 ```bash
-npm test        # build + 3 tests : outils, allowlist shell, boucle agent complète en HTTP (mock)
+npm test        # build + 14 tests : outils, allowlist shell, boucle agent HTTP (mock), audits, droits d'écriture, contexte, Reviewer, base, calque moteur
 bash scripts/demo.sh "fais un tour du projet"   # contre un serveur déjà lancé
+python3 scripts/measure-episode.py data/projects/<projet> <slug> --db data/app.db   # variété visuelle : orientation, amorces, zooms, erreurs d'outils
 ```
 
 ## Dépannage

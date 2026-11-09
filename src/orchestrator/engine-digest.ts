@@ -11,7 +11,10 @@ import path from 'node:path';
  *   export function stand(r: Room, u: number, w: number)                 ->  stand(r: Room, u: number, w: number)
  *   export type Pose = {...}                                            ->  type Pose
  */
-export function engineDigest(projectRoot: string, cap = 11_500): string {
+/** Types whose fields the agent needs to write a shot (the digest shows their body, not just their name). */
+const INLINE_TYPES = new Set(['Pose', 'Limb', 'Expr', 'ActKind', 'HandKind', 'ClassTokens', 'DeskRow', 'KidLook', 'Furniture']);
+
+export function engineDigest(projectRoot: string, cap = 16_500): string {
   const root = path.join(projectRoot, 'src', 'engine');
   const files: string[] = [];
   const walk = (dir: string): void => {
@@ -68,12 +71,41 @@ export function engineDigest(projectRoot: string, cap = 11_500): string {
     }
 
     const parts = [...entries];
-    if (named.length) parts.push(`types: ${named.join(', ')}`);
+    for (const name of named) {
+      if (!INLINE_TYPES.has(name!)) continue;
+      const body = typeBody(src, name!);
+      if (body) parts.push(`type ${name} = ${body}`);
+    }
+    const others = named.filter((n) => !INLINE_TYPES.has(n!));
+    if (others.length) parts.push(`types: ${others.join(', ')}`);
     if (parts.length) lines.push(`${path.relative(root, file).replace(/\.tsx?$/, '')}: ${parts.join('  |  ')}`);
   }
 
   const body = lines.join('\n');
   return body.length > cap ? `${body.slice(0, cap)}\n… (truncated)` : body;
+}
+
+/** The right-hand side of `export type <name> = ...;` with comments stripped and whitespace collapsed, or null. */
+function typeBody(src: string, name: string): string | null {
+  const m = new RegExp(`^export type ${name}\\s*=`, 'm').exec(src);
+  if (!m) return null;
+  let depth = 0;
+  let end = -1;
+  for (let i = m.index + m[0].length; i < src.length; i++) {
+    const c = src[i];
+    if (c === '{' || c === '(' || c === '<') depth++;
+    else if (c === '}' || c === ')' || c === '>') depth--;
+    else if (c === ';' && depth <= 0) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return null;
+  const body = src
+    .slice(m.index + m[0].length, end)
+    .replace(/\/\/[^\n]*/g, '')
+    .trim();
+  return squash(body).slice(0, 900);
 }
 
 /** The text between an opening bracket and its match, or null. */

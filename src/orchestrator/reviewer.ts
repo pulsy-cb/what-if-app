@@ -20,10 +20,12 @@ export type ReviewReport = {
   createdAt: string;
 };
 
-const REVIEWER_SYSTEM_PROMPT = `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
-Tu n'as PAS écrit le code : ton rôle est d'auditer en toute indépendance la cohérence entre le récit (script FR), la note de mise en scène (DIRECTOR.md), le code des plans (shots.tsx) et la planche storyboard (storyboard.jpg).
+const MAX_REVIEW_IMAGES = 6;
 
-Vérifie particulièrement ces 5 points critiques :
+const REVIEWER_SYSTEM_PROMPT = `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
+Tu n'as PAS écrit le code : ton rôle est d'auditer en toute indépendance la cohérence entre le récit (script FR), la note de mise en scène (DIRECTOR.md), le code des plans (shots.tsx) et les planches de contact du storyboard (images jointes, 8 à 9 plans chacune).
+
+Vérifie particulièrement ces 9 points critiques :
 1. **Fidélité décor & accessoires (DIRECTOR.md ↔ shots.tsx / storyboard)** :
    - Le décor codé et visible correspond-il au lieu de l'histoire et à DIRECTOR.md (murs, ambiance jour/nuit, mobilier comme canapé, table, bol, miroir, fenêtre) ?
    - Si le récit dit qu'un personnage bondit d'un canapé ou pose des Doritos sur une table, ces éléments existent-ils vraiment dans la scène ?
@@ -37,6 +39,15 @@ Vérifie particulièrement ces 5 points critiques :
    - Aucun texte en anglais ("YOU PUT ITCHING...", "WHAT IF...") coupé ou laissé dans un épisode en français.
 5. **Cadrage & placement (16:9 ou 9:16)** :
    - Les personnages et objets tenus (handRProp / grabAt / handWorld) sont-ils bien cadrés, sans objet flottant loin des mains ni moitié d'écran vide ?
+   - En 9:16 : un tiers ou plus du cadre vide (plafond ou sol sombre), un personnage coupé par le bord sans raison, trois personnages qui ne tiennent pas dans 900/zoom unités de large.
+6. **Mise en scène** :
+   - Les personnages sont-ils presque tous de face (les « Mesures automatiques » donnent le nombre de plans orientés) ? Deux personnes qui se parlent doivent se faire face (yaw opposés), pas regarder la caméra.
+   - Un groupe de 3 est-il aligné à la même hauteur et à la même échelle, en rang ? Il doit être étagé en profondeur.
+   - Les cadrages varient-ils (deux plans voisins de même taille et même angle sont un défaut) ? Y a-t-il au moins un plan large, un gros plan et un angle haut ou bas ?
+   - Une amorce floue (Foreground) donne-t-elle de la profondeur dans environ un plan sur trois ?
+7. **Lisibilité du lieu** : le lieu se reconnaît-il sans la voix ? Une salle de classe a un tableau plat collé au mur du fond (pas une planche suspendue au milieu de la pièce), des pupitres d'élèves (pas des tables de restaurant), une fenêtre ; une chambre a un lit, etc. Les éléments du décor d'origine sans rapport avec l'histoire (démo « 7 × 8 », rideaux et ciel de crépuscule dans une scène de jour) sont des défauts.
+8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ? Une source de lumière visible par plan ?
+9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
 
 Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un bloc \`\`\`json) respectant exactement ce schéma :
 {
@@ -53,7 +64,7 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un blo
 }
 Règles de décision :
 - Mets "pass": false UNIQUEMENT s'il y a au moins une issue avec "severity": "error" qui nuit vraiment à la cohérence du récit ou du cadrage.
-- Limite-toi aux problèmes réels et vérifiables (maximum 5 issues ciblées). S'il n'y a rien de bloquant, retourne "pass": true et "issues": [].`;
+- Limite-toi aux problèmes réels et vérifiables (maximum 8 issues ciblées, les plus graves d'abord). Les défauts de mise en scène (point 6) et de lisibilité du lieu (point 7) sont "error" quand ils touchent plus de la moitié des plans, sinon "warn". S'il n'y a rien de bloquant, retourne "pass": true et "issues": [].`;
 
 function summarizeShotsCode(shotsRaw: string): string {
   if (!shotsRaw) return '(shots.tsx missing)';
@@ -70,6 +81,22 @@ function summarizeShotsCode(shotsRaw: string): string {
     perShot.push(`- ${id}: ${body.slice(0, 380)}`);
   }
   return `### En-tête partagé (shots.tsx)\n\`\`\`tsx\n${header}\n\`\`\`\n\n### Résumé du code par plan (${matches.length} plans)\n${perShot.join('\n')}`;
+}
+
+/** Counts read straight from shots.tsx, handed to the Reviewer so it does not have to guess from thumbnails. */
+export function staticMetrics(shotsRaw: string): string {
+  const parts = shotsRaw.split(/(?=export\s+(?:const|function)\s+S\d+\b)/).filter((p) => /^export\s+(?:const|function)\s+S\d+\b/.test(p));
+  if (!parts.length) return '(shots.tsx has no exported shot)';
+  let oriented = 0;
+  let blur = 0;
+  let group3 = 0;
+  for (const body of parts) {
+    const yaws = [...body.matchAll(/\byaw\s*:\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
+    if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(/.test(body)) oriented++;
+    if (/<Foreground\b|blur16/.test(body)) blur++;
+    if ((body.match(/<Hero\b/g) ?? []).length >= 3) group3++;
+  }
+  return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus`;
 }
 
 export function parseReviewJson(raw: string, model: string, episode: string): ReviewReport {
@@ -142,18 +169,22 @@ export async function reviewEpisodeBoard(
     .map((s: any) => `- ${s.id} [${s.size ?? 'medium'}, set=${s.set ?? 'custom'}]: "${s.note ?? ''}"`)
     .join('\n');
 
+  // contact sheets (8-9 shots each) are readable; the single storyboard.jpg is a tall strip of thumbnails
   const images: ImagePart[] = [];
-  const boardPath = path.join(outDir, 'storyboard.jpg');
-  if (fs.existsSync(boardPath)) {
+  const addImage = (file: string, mime: string): void => {
     try {
-      const st = fs.statSync(boardPath);
-      if (st.size > 0 && st.size <= 4_000_000) {
-        images.push({ mime: 'image/jpeg', data: fs.readFileSync(boardPath).toString('base64') });
-      }
+      const st = fs.statSync(file);
+      if (st.size > 0 && st.size <= 4_000_000) images.push({ mime, data: fs.readFileSync(file).toString('base64') });
     } catch {
-      /* ignore */
+      /* missing file: skip */
     }
-  }
+  };
+  const sheetsDir = path.join(outDir, 'sheets');
+  const sheetFiles = fs.existsSync(sheetsDir)
+    ? fs.readdirSync(sheetsDir).filter((n) => /^sheet-\d+\.jpe?g$/i.test(n)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
+    : [];
+  for (const n of sheetFiles.slice(0, MAX_REVIEW_IMAGES)) addImage(path.join(sheetsDir, n), 'image/jpeg');
+  if (!images.length) addImage(path.join(outDir, 'storyboard.jpg'), 'image/jpeg');
 
   const userPrompt = [
     `# Audit indépendant de l'épisode "${slug}" (orientation: ${ep?.aspect ?? '16:9'}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})`,
@@ -162,8 +193,9 @@ export async function reviewEpisodeBoard(
     bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 2_000)}` : '',
     `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 3_500)}`,
     `## 5. Code des plans (shots.tsx)\n${summarizeShotsCode(shotsRaw)}`,
+    `## 6. Mesures automatiques (lues dans shots.tsx)\n${staticMetrics(shotsRaw)}`,
     images.length
-      ? `\nLa planche storyboard (out/${slug}/storyboard.jpg) est jointe en image. Compare chaque vignette et le code des plans au récit et à DIRECTOR.md, puis renvoie ton verdict JSON.`
+      ? `\n${images.length} planche(s) de contact jointe(s) (plans dans l'ordre, légende = numéro du plan, taille, début du texte)${sheetFiles.length > MAX_REVIEW_IMAGES ? `, les ${MAX_REVIEW_IMAGES} premières sur ${sheetFiles.length}` : ''}. Compare chaque vignette et le code des plans au récit et à DIRECTOR.md, puis renvoie ton verdict JSON.`
       : `\nInspecte la cohérence entre le récit, DIRECTOR.md et le code de shots.tsx, puis renvoie ton verdict JSON.`,
   ]
     .filter(Boolean)

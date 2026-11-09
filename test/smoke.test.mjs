@@ -16,7 +16,8 @@ function tmpApp() {
 
 test('tools: schema validation and unique-match editing', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-tools-'));
-  fs.writeFileSync(path.join(dir, 'a.ts'), 'export const A = 1;\nexport const B = 2;\n');
+  fs.mkdirSync(path.join(dir, 'src', 'episodes', 'e'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'episodes', 'e', 'a.ts'), 'export const A = 1;\nexport const B = 2;\n');
   const registry = new ToolRegistry(fsTools);
   const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: null, log: () => {} };
 
@@ -24,15 +25,15 @@ test('tools: schema validation and unique-match editing', async () => {
   assert.equal(bad.ok, false);
   assert.match(bad.summary, /invalid arguments/);
 
-  const read = await registry.run('read_file', { path: 'a.ts' }, ctx);
+  const read = await registry.run('read_file', { path: 'src/episodes/e/a.ts' }, ctx);
   assert.equal(read.ok, true);
   assert.match(read.summary, /export const A/);
 
-  const edit = await registry.run('edit_file', { path: 'a.ts', edits: [{ oldText: 'A = 1', newText: 'A = 42' }] }, ctx);
+  const edit = await registry.run('edit_file', { path: 'src/episodes/e/a.ts', edits: [{ oldText: 'A = 1', newText: 'A = 42' }] }, ctx);
   assert.equal(edit.ok, true);
-  assert.match(fs.readFileSync(path.join(dir, 'a.ts'), 'utf8'), /A = 42/);
+  assert.match(fs.readFileSync(path.join(dir, 'src', 'episodes', 'e', 'a.ts'), 'utf8'), /A = 42/);
 
-  const ambiguous = await registry.run('edit_file', { path: 'a.ts', edits: [{ oldText: 'export const', newText: 'x' }] }, ctx);
+  const ambiguous = await registry.run('edit_file', { path: 'src/episodes/e/a.ts', edits: [{ oldText: 'export const', newText: 'x' }] }, ctx);
   assert.equal(ambiguous.ok, false);
   assert.match(ambiguous.summary, /not unique/);
 
@@ -346,6 +347,246 @@ test('context compaction: compacts old write_file payloads, drops orphan tool me
     const report = await reviewEpisodeBoard(fakeReviewer, dir, 'ep');
     assert.equal(report.pass, true);
     assert.ok(fs.existsSync(path.join(dir, 'out', 'ep', 'review.json')), 'review.json should be saved');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write policy: the agent writes in episodes, root notes and out/, never in the engine', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-write-'));
+  const registry = new ToolRegistry(fsTools);
+  const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: null, log: () => {} };
+  const write = (p) => registry.run('write_file', { path: p, content: 'x' }, ctx);
+  try {
+    assert.equal((await write('src/episodes/crush/shots.tsx')).ok, true);
+    assert.equal((await write('PROJECT.md')).ok, true);
+    assert.equal((await write('out/probe.txt')).ok, true);
+    for (const bad of ['src/engine/rig.tsx', 'src/exports/motiongrid.tsx', 'src/episode/shots.tsx', 'src/studio.config.ts', '.gitignore', 'package.json']) {
+      const r = await write(bad);
+      assert.equal(r.ok, false, `${bad} must be refused`);
+    }
+    process.env.WHATIF_ALLOW_ENGINE_WRITES = '1';
+    assert.equal((await write('src/engine/rig.tsx')).ok, true, 'engine writes open only with the explicit switch');
+    assert.equal((await write('package.json')).ok, false, 'the switch never opens the manifests');
+  } finally {
+    delete process.env.WHATIF_ALLOW_ENGINE_WRITES;
+  }
+});
+
+test('shots audit: establishing shots may hold no character, zoom range is 0.6-4.5', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-estab-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const room = defineEpisode("Room", { timeline, shots: { S1, S2 } });\n');
+  const shots = (z) =>
+    `export const S1 = ({ t, len }) => <g transform={camT(960, 540, 1.0)}><Study t={t} />{kf(t, [[0, 1], [10, 2]])}</g>;\n` +
+    `export const S2 = ({ t, len }) => <g transform={camT(960, 540, ${z})}><Hero look={N} pose={poseAt(t, [{ f: 0, p: {} }])} /></g>;\n`;
+  const ep = (size) => ({ shots: [{ id: 'S1', set: 'study', size }, { id: 'S2', set: 'study', size: 'close' }] });
+  const tl = { shots: [{ id: 'S1', len: 60 }, { id: 'S2', len: 60 }] };
+  try {
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shots(4.0));
+    const ok = shotsAudit(dir, 'room', ep('establishing'), tl) ?? '';
+    assert.doesNotMatch(ok, /has no <Hero>/, 'an establishing shot needs no character');
+    assert.doesNotMatch(ok, /zoom/, 'zoom 4.0 is a valid close-up');
+    const plain = shotsAudit(dir, 'room', ep('wide'), tl) ?? '';
+    assert.match(plain, /S1 .*has no <Hero>/, 'a plain wide still needs a character');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shots(4.8));
+    assert.match(shotsAudit(dir, 'room', ep('establishing'), tl) ?? '', /zoom to 4\.8|zoom to 4\.80/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('context: the director guide is injected and the engine digest exposes the Pose fields', async () => {
+  const { buildMessages } = await import('../dist/orchestrator/context.js');
+  const { engineDigest } = await import('../dist/orchestrator/engine-digest.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ctx-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'src', 'engine', 'rig.tsx'),
+      `export type Limb = { a: number; b: number };\nexport type Pose = {\n  x: number;\n  yaw: number; // -1 profile left\n  armL: Limb;\n};\nexport type Other = { z: number };\n`,
+    );
+    const digest = engineDigest(dir);
+    assert.match(digest, /type Pose = \{ x: number; yaw: number; armL: Limb; \}/);
+    assert.match(digest, /type Limb = \{ a: number; b: number \}/);
+    assert.match(digest, /types: Other/);
+    assert.doesNotMatch(digest, /profile left/, 'comments are stripped');
+    const sys = buildMessages({ projectRoot: dir, history: [], maxChars: 90_000 }).filter((m) => m.role === 'system');
+    assert.ok(sys.some((m) => m.content.includes("Director's guide")), 'guide present in the system messages');
+    assert.ok(sys.some((m) => m.content.includes('900/zoom')), 'guide states the 9:16 visible width');
+    assert.ok(sys.some((m) => m.content.includes('seen from behind')), 'guide explains the yaw compass including the back view');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('db: project_runs gains a model column on an old database and records it', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-db-'));
+  const dbPath = path.join(dir, 'old.db');
+  const old = new DatabaseSync(dbPath);
+  old.exec(
+    `CREATE TABLE project_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, thread_id TEXT NOT NULL, elapsed_ms INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);` +
+      `INSERT INTO project_runs (project_id, thread_id, elapsed_ms, steps, created_at) VALUES ('p', 't', 5, 1, 'x');`,
+  );
+  old.close();
+  try {
+    const db = new Db(dbPath);
+    db.addRunDuration('p', 't', 10, 2, 'zai-org/GLM-5.3-Flash');
+    const rows = db.raw.prepare('SELECT model FROM project_runs ORDER BY id').all();
+    assert.deepEqual(rows.map((r) => r.model), [null, 'zai-org/GLM-5.3-Flash']);
+    db.close();
+    new Db(dbPath).close(); // reopening an already-migrated database is a no-op
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('image pick: re-rendered shots first, then contact sheets, then an even spread (never S1, S10, S11)', async () => {
+  const { pickImages } = await import('../dist/orchestrator/image-pick.js');
+  const stills = Array.from({ length: 36 }, (_, i) => `out/e/board/S${i + 1}.png`);
+  const board = 'out/e/storyboard.jpg';
+  const sheets = [1, 2, 3, 4, 5].map((n) => `out/e/sheets/sheet-0${n}.jpg`);
+
+  assert.deepEqual(pickImages([...stills, board], ['S7', 'S3']), ['out/e/board/S7.png', 'out/e/board/S3.png'], 'asked shots, in the asked order');
+  assert.deepEqual(pickImages([...stills, board, ...sheets]), sheets.slice(0, 3), 'sheets win over loose stills');
+  const spread = pickImages([...stills, board]);
+  assert.deepEqual(spread, ['out/e/board/S1.png', 'out/e/board/S19.png', 'out/e/board/S36.png'], 'even spread (indices 0, 18, 35), natural order, no storyboard strip');
+  assert.deepEqual(pickImages(['out/e/board/S2.png', 'out/e/board/S10.png']), ['out/e/board/S2.png', 'out/e/board/S10.png'], 'few images: all, natural order');
+});
+
+test('reviewer: reads the contact sheets and the measured counts, not the tall strip', async () => {
+  const { reviewEpisodeBoard, staticMetrics } = await import('../dist/orchestrator/reviewer.js');
+  const shots =
+    `export const S1 = ({ t }) => <g><Hero look={A} pose={{ yaw: 0.5 }} /></g>;\n` +
+    `export const S2 = ({ t }) => <g><Hero look={A} pose={{}} /><Hero look={B} pose={{}} /><Hero look={C} pose={{}} /></g>;\n` +
+    `export const S3 = ({ t }) => <g><Foreground blur={16}><Hero look={A} pose={tableSit(700)} /></Foreground></g>;\n`;
+  assert.equal(
+    staticMetrics(shots),
+    '2/3 plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · 1/3 plans avec amorce floue · 1 plans à 3 personnages ou plus',
+  );
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rev-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'e');
+    const outDir = path.join(dir, 'out', 'e');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(path.join(outDir, 'sheets'), { recursive: true });
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shots);
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ aspect: '9:16', script: [{ text: 'Bonjour.' }], shots: [] }));
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'strip');
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) fs.writeFileSync(path.join(outDir, 'sheets', `sheet-0${n}.jpg`), `sheet${n}`);
+    let seen;
+    const provider = {
+      model: 'fake',
+      label: 'fake',
+      chat: async (o) => {
+        seen = o.messages;
+        return { text: '{"pass":true,"summary":"ok","issues":[]}', toolCalls: [], finishReason: 'stop' };
+      },
+    };
+    const report = await reviewEpisodeBoard(provider, dir, 'e');
+    assert.equal(report.ok, true);
+    const user = seen.find((m) => m.role === 'user');
+    assert.equal(user.images.length, 6, 'at most 6 sheets');
+    assert.equal(Buffer.from(user.images[0].data, 'base64').toString(), 'sheet1', 'sheets in natural order, not the strip');
+    assert.match(user.content, /2\/3 plans avec un personnage orienté/);
+    assert.match(user.content, /les 6 premières sur 8/);
+
+    fs.rmSync(path.join(outDir, 'sheets'), { recursive: true });
+    await reviewEpisodeBoard(provider, dir, 'e');
+    assert.equal(seen.find((m) => m.role === 'user').images.length, 1, 'falls back to storyboard.jpg when there are no sheets');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('engine overlay: adds the template classroom and the character views, patches once, all or nothing per file', async () => {
+  const { applyEngineOverlay, overlaySummary } = await import('../dist/tools/engine-overlay.js');
+  const rigOf = (opts = {}) =>
+    "import React from 'react';\n" +
+    'export const turnWidth = (yaw: number) => 1 - 0.4 * Math.min(1, Math.abs(yaw));\n' +
+    'export const limbSpread = (yaw: number) => 1 - 0.85 * Math.min(1, Math.abs(yaw));\n' +
+    'const a = { x: -SHOULDER.x * sp + pose.yaw * 6 }; const b = { x: SHOULDER.x * sp + pose.yaw * 6 };\n' +
+    'const t = `translate(${pose.yaw * 6} 0)`; const u = pose.yaw * 6;\n' +
+    '<g>\n          {torso}\n' + (opts.noHead ? '' : '          {head}\n') + '          {children}\n</g>\n';
+  const anchor = "      <polygon points={Q([[0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]])} fill={`url(#${id}F)`} />\n";
+  const mk = (furnish, rig) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ovl-'));
+    fs.mkdirSync(path.join(dir, 'src', 'engine', 'sets'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'furnish.tsx'), furnish);
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'rig.tsx'), rig);
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './rig';\nexport * from './furnish';\nexport * from './ui';\n");
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'sets', 'classroom.tsx'), 'export const Classroom = () => null; // the old one\n');
+    return dir;
+  };
+  const dir = mk(`const RoomShell = () => (\n    <g>\n${anchor}      {fl}\n    </g>\n);\n`, rigOf());
+  const bare = mk('const RoomShell = () => null; // a copy without the anchor\n', 'export const Hero = () => null; // an old rig\n');
+  const partial = mk('x\n', rigOf({ noHead: true }));
+  const read = (d, rel) => fs.readFileSync(path.join(d, rel), 'utf8');
+  try {
+    const dry = applyEngineOverlay(dir, { dryRun: true });
+    assert.ok(dry.added.includes('src/engine/pieces.tsx') && dry.added.includes('src/engine/views.tsx'));
+    assert.ok(dry.replaced.includes('src/engine/sets/classroom.tsx'));
+    assert.equal(fs.existsSync(path.join(dir, 'src', 'engine', 'views.tsx')), false, 'a dry run writes nothing');
+    assert.match(overlaySummary(dry, false), /would be added/);
+
+    const first = applyEngineOverlay(dir);
+    assert.deepEqual(first.patched.sort(), ['src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
+    assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
+    assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    const furnish = read(dir, 'src/engine/furnish.tsx');
+    assert.equal(furnish.split('below the near plane').length, 2, 'the floor patch is inserted once');
+    assert.ok(furnish.indexOf(anchor) < furnish.indexOf('below the near plane') && furnish.indexOf('below the near plane') < furnish.indexOf('{fl}'), 'inserted right after its anchor');
+    const rig = read(dir, 'src/engine/rig.tsx');
+    assert.match(rig, /^import React from 'react';\nimport \{ ViewHead, ViewTorso, foldYaw \} from '\.\/views';\n/);
+    assert.match(rig, /<ViewTorso pose=\{pose\} L=\{L\} torso=\{torso\} \/>/);
+    assert.match(rig, /<ViewHead pose=\{pose\} L=\{L\} head=\{head\} headGear=\{headGear\} \/>\n          \{children\}/);
+    assert.match(rig, /turnWidth = \(yaw: number\) => 1 - 0\.4 \* Math\.min\(1, foldYaw\(yaw\)\)/);
+    assert.equal(rig.split('Math.sign(pose.yaw) * foldYaw(pose.yaw) * 6').length - 1, 4, 'all 4 shoulder shifts follow the folded turn');
+    assert.doesNotMatch(rig, /[^.]pose\.yaw \* 6/);
+
+    const second = applyEngineOverlay(dir);
+    assert.deepEqual([second.added, second.replaced, second.patched], [[], [], []], 'applying twice changes nothing');
+    assert.equal(overlaySummary(second, true), 'engine overlay: already up to date');
+    assert.equal(read(dir, 'src/engine/rig.tsx'), rig);
+
+    const odd = applyEngineOverlay(bare);
+    assert.ok(odd.skipped.some((x) => x.file === 'src/engine/furnish.tsx' && /anchor/.test(x.reason)), 'a patch without its anchor says so');
+    assert.ok(odd.skipped.some((x) => x.file === 'src/engine/rig.tsx'));
+    assert.equal(read(bare, 'src/engine/furnish.tsx'), 'const RoomShell = () => null; // a copy without the anchor\n', 'and changes nothing');
+
+    const part = applyEngineOverlay(partial);
+    assert.ok(part.skipped.some((x) => x.file === 'src/engine/rig.tsx' && /expected 1/.test(x.reason)));
+    assert.equal(read(partial, 'src/engine/rig.tsx'), rigOf({ noHead: true }), 'one missing anchor: the whole rig patch is skipped, not half applied');
+
+    const none = applyEngineOverlay(fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ovl-empty-')));
+    assert.equal(none.skipped[0].file, 'src/engine');
+  } finally {
+    for (const d of [dir, bare, partial]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('engine overlay: whatif_sync_engine applies it without a mounted skill', async () => {
+  const { defaultRegistry } = await import('../dist/tools/index.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-sync-'));
+  fs.mkdirSync(path.join(dir, 'src', 'engine', 'sets'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './furnish';\n");
+  fs.writeFileSync(path.join(dir, 'src', 'engine', 'furnish.tsx'), '// no anchor\n');
+  const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: null, log: () => {} };
+  try {
+    const dry = await defaultRegistry().run('whatif_sync_engine', {}, ctx);
+    assert.equal(dry.ok, true);
+    assert.match(dry.summary, /no skill mounted.*would be added/);
+    assert.equal(fs.existsSync(path.join(dir, 'src', 'engine', 'pieces.tsx')), false);
+    const done = await defaultRegistry().run('whatif_sync_engine', { apply: true }, ctx);
+    assert.equal(done.ok, true);
+    assert.equal(fs.existsSync(path.join(dir, 'src', 'engine', 'pieces.tsx')), true);
+    assert.match(fs.readFileSync(path.join(dir, 'src', 'engine', 'index.ts'), 'utf8'), /pieces/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

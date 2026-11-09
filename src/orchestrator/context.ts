@@ -4,6 +4,7 @@ import type { ChatMessage, ImagePart, ToolCall } from './providers/types.js';
 import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { engineDigest } from './engine-digest.js';
+import { DIRECTOR_GUIDE } from './director-guide.js';
 
 /** Count spoken words in an episode script, stripping [audio tags] and <xml> markers consistently everywhere. */
 export function countScriptWords(script: unknown): number {
@@ -55,7 +56,7 @@ commands for a human to paste: you call the tools.
 5. **Step 5a — Write \`src/episodes/<slug>/DIRECTOR.md\` (Réalisation & Mise en Scène — MANDATORY before \`stills\`, >= 200 chars)**:
    Before writing \`shots.tsx\`, act as a real animation director and write \`src/episodes/<slug>/DIRECTOR.md\` (>= 200 chars) with:
    - **1. Architecture des décors sur mesure en 3 couches de profondeur**:
-     Each episode is unique — build custom sets tailored to the story using \`makeRoom\` / \`RoomShell\` / \`CustomRoom\` / \`Box\` / \`FloorShadow\` or custom SVG environments:
+     Each episode has its own world, but reuse engine parts instead of redrawing them (see "Choosing the set" in the director's guide): start from an engine set (\`Classroom\` is a template: \`tokens\` + story slots; \`Bedroom\`, \`Kitchen\`…) when the place matches and its mood fits the story (clear its demo content through its props), otherwise build it with \`makeRoom\` / \`RoomShell\` / \`CustomRoom\` / \`Box\` / \`FloorShadow\` or custom SVG. Never copy a set from another episode:
      - *Arrière-plan (couche 1)*: murs texturés (\`<CustomRoom>\`, \`<RoomShell>\`, ou décor extérieur/véhicule/SVG sur mesure), fenêtres (\`<BackWindow>\`), cadres (\`<WallFrame>\`), appliques (\`<WallLight>\`), plantes (\`<FloorPlant>\`), éléments architecturaux propres à l'histoire. Give each shot's set a **unique \`id\`** (e.g. \`id="s1"\`, \`id="s2"\`).
      - *Plan moyen (couche 2)*: mobilier structurant (\`<Box>\`, \`<FloorShadow>\`, \`<DiningTable>\`, \`<Desk>\`, canapés, comptoirs, bancs) et personnages assis ou debout (ex: deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} wood="#8C6239" />\` pour que la table masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus du plateau à \`y = 665..688\` ; n'ajoute \`cloth="#9E2A3B" candle plates\` QUE si la scène se passe réellement dans un restaurant ou dîner aux chandelles !).
      - *Premier plan & lumière (couche 3)*: accessoires posés sur la table/meuble (\`y = 675..688\`), éléments d'amorce (\`filter="url(#blur16)"\` en over-the-shoulder), lumière d'ambiance (\`<Pendant>\`, \`<LightVeil>\`, \`<Glow>\`, \`<Dust>\`).
@@ -82,7 +83,7 @@ commands for a human to paste: you call the tools.
      When a character speaks, use \`actPose('talk' | 'explain' | 'question', t)\` or pass \`talk: talkAt(t, len)\` in the pose so their mouth animates naturally with speech!
    - **Clock \`t\` is in FRAMES (0..\`len\` at 30 fps), NEVER in seconds**:
      never write \`t - 0.8\` or \`t + 0.3\` (use frame integers like \`t - 12\`), and never schedule a keyframe past \`len\`.
-   - **Orientation (\`16:9\` vs \`9:16\`) & Framing**: preserve \`"aspect": "16:9"\` or \`"aspect": "9:16"\` in \`episode.json\`. In BOTH orientations, the world canvas centre is \`x = 960, y = 540\` (never \`x = 640\`). Keep \`camT\` zoom inside \`0.7..3.0\` (typically \`1.0–1.35\` for wide/two-shots, \`1.55–2.2\` for medium/close).
+   - **Orientation (\`16:9\` vs \`9:16\`) & Framing**: preserve \`"aspect": "16:9"\` or \`"aspect": "9:16"\` in \`episode.json\`. In BOTH orientations, the world canvas centre is \`x = 960, y = 540\` (never \`x = 640\`). Keep \`camT\` zoom inside \`0.6..4.5\`; the per-format table (wide / medium / close-up) is in the director's guide: in 9:16 only 900/zoom units are visible across.
    - **Targeted re-renders**: if only specific shots fail the layout check (e.g. \`S3\`, \`S7\`), fix them in \`shots.tsx\` and run \`whatif_run { episode, step: "stills", args: ["S3", "S7"] }\` followed by \`board\` instead of re-rendering every still!
    - Inspect \`out/<slug>/storyboard.jpg\` with \`view_image\`: if any shot is blank, lopsided or off-model,
      fix \`shots.tsx\` and re-run \`stills\` (for the changed shot IDs) and \`board\`.
@@ -108,14 +109,16 @@ commands for a human to paste: you call the tools.
 - Every shot is a pure function of its own clock t: no state, no Math.random(), seeded rnd(seed, i) only.
   keyframes via kf(), poses via poseAt(), faces via faceAt(), frames via camT() / camPush() / camPan().
 - The engine (src/engine) belongs to the skill: change it only when the user explicitly asks, and say why.
-- **Do not explore.** No repo_map tours, no ls /skill, no reading src/engine/*.tsx, /skill/references/* or
-  another episode's shots: the cheat sheet and the generated export list are enough, and every file
-  you open costs a step you need for the pipeline. Open the engine only when a typecheck/render error names
-  a line. Write shots.tsx straight from the export list.
-- Build custom sets & characters for every episode: define a reusable episode set component at the top of \`shots.tsx\` (using \`CustomRoom\`, \`RoomShell\`, \`Box\`, \`FloorShadow\`, \`BackWindow\`, \`Pendant\`, \`LightVeil\`, or custom SVG) so the world fits the story, and define distinct character looks with \`makeLook(...)\`. Never invent external image/audio file paths.
-- Framing. camT(cx, cy, scale) puts the world point (cx, cy) at the centre of a 1920x1080 frame. Use three
-  sizes: wide ~ camT(960, 545, 1.0–1.3), medium ~ camT(920, 600, 1.65–1.9), close ~ camT(920, 540, 2.1–2.4).
-  Keep the subject inside x 250–1670 and centre diagrams/props around x = 960 (never x = 640).
+- **Do not explore.** No repo_map tours and no other episode's shots: the director's guide, the cheat sheet and the
+  generated export list (with the full \`Pose\` fields) are enough, and every file you open costs a step you need
+  for the pipeline. Open an engine file only when a typecheck/render error names a line, or once, to read the set you
+  are about to use (\`src/engine/sets/<set>.tsx\`). Write shots.tsx straight from the export list.
+- Sets and characters: define ONE episode set component at the top of \`shots.tsx\` (an engine set with its props, or \`CustomRoom\` /
+  \`RoomShell\` / \`Box\` / \`FloorShadow\` / \`BackWindow\` / \`Pendant\` / \`LightVeil\`) and reuse it in every shot of that place,
+  and define distinct character looks with \`makeLook(...)\`. Never invent external image/audio file paths.
+- Framing. camT(cx, cy, scale) puts the world point (cx, cy) at the centre of the frame, and the frame is 1920/scale wide in
+  16:9 but only 900/scale wide in 9:16: use the per-format zoom table in the director's guide. The subject is
+  not always centred: put it on a third, face the characters toward each other and leave look room.
 - Assets must be referenced through staticFile(), relative to public/.
 - A real number needs a real source. If you don't have one, say so instead of inventing it.
 - Look at what you produced: view_image on stills, the board and motion grids. A tool result is not a
@@ -183,8 +186,8 @@ function imagesFromPayload(payload: any, projectRoot: string, budget: { left: nu
 
 /** A condensed map of the engine API, so a run does not spend 20 steps re-reading src/engine. */
 const ENGINE_CHEAT = `## Engine cheat sheet (src/engine, stable: read the source only when a shot breaks)
-import { Hero, LOOKS, makeLook, basePose, poseAt, actPose, walkPose, faceAt, talkAt, handWorld, ikArm, reachPose, grabAt, tableSit, camT, camPush, camPan, parallax, kf, rnd, ShotProps } from '../../engine';
-import { makeRoom, RoomShell, CustomRoom, Box, FloorShadow, stand, BackWindow, Pendant, WallLight, FloorPlant, WallFrame, DiningTable, MonitorSetup, Tabletop, Study, STUDY, Desk, Bedroom, BEDROOM, bedSit, BedDuvet, Kitchen, KITCHEN, islandTop, Classroom, CLS, Rooftop, Stairwell } from '../../engine';
+import { Hero, LOOKS, makeLook, basePose, poseAt, actPose, walkPose, faceAt, talkAt, handWorld, ikArm, reachPose, grabAt, tableSit, camT, camPush, camPan, parallax, kf, rnd, ShotProps, Foreground } from '../../engine';
+import { makeRoom, RoomShell, CustomRoom, Box, FloorShadow, stand, BackWindow, Pendant, WallLight, FloorPlant, WallFrame, DiningTable, MonitorSetup, Tabletop, Study, STUDY, Desk, Bedroom, BEDROOM, bedSit, BedDuvet, Kitchen, KITCHEN, islandTop, Classroom, CLS, CLASS_MOODS, WallBoard, PinBoard, Rooftop, Stairwell } from '../../engine';
 import { Outdoor, OUTDOOR, Tree, StreetLamp, CarExterior, Vehicle, carSit, VehicleForeground, Schematic, DrawOn, SchLabel, CountUp, Arrow, TitleCard } from '../../engine';
 
 // 1. Custom character looks with distinct silhouettes (extra) and contrasting colours:
@@ -192,6 +195,7 @@ import { Outdoor, OUTDOOR, Tree, StreetLamp, CarExterior, Vehicle, carSit, Vehic
 // accessory: 'headphones'|'headset'|'glasses'|'beard'|'mustache'|'scarf'|'tie'|'badge'|'none'
 const NARRATOR = makeLook({ skin: '#F2D2B6', jacket: '#3A86FF', accent: '#FFBE0B', hair: '#2B1E1A', extra: 'spiky', accessory: 'none' });
 const PARTNER  = makeLook({ skin: '#D89B72', jacket: '#E05780', accent: '#FFE5EC', hair: '#1E1418', extra: 'curls', accessory: 'glasses' });
+const THIRD    = makeLook({ skin: '#C98850', jacket: '#2A9D8F', accent: '#FFE5EC', hair: '#1E1418', extra: 'bunches' });
 
 // 2. Custom episode set in 3 depth layers + Two-Shot + Physical Object Grabbing + Lip-Sync:
 export const S1: React.FC<ShotProps> = ({ t, len }) => {
@@ -224,6 +228,47 @@ export const S1: React.FC<ShotProps> = ({ t, len }) => {
             <rect x={-16} y={-24} width={32} height={24} rx={4} fill="#7BDFF2" stroke="#1E1824" strokeWidth={3} />
           </g>
         </DiningTable>
+      </CustomRoom>
+    </g>
+  );
+};
+
+// 3. Over the shoulder, in profile: the listener is a big dark blurred foreground figure cut by the frame edge
+//    (about a third of the frame), the speaker is sharp, off-centre, facing the listener.
+//    (x values below suit a 9:16 medium: only 900/zoom units are visible across; spread them wider in 16:9.)
+export const S2: React.FC<ShotProps> = ({ t, len }) => {
+  const speaker = poseAt(t, [
+    { f: 0, p: { x: 1130, y: 700, scale: 1.3, yaw: -0.5, facing: -1, ...actPose('talk', t) } },
+    { f: Math.round(len * 0.6), p: { armL: { a: 40, b: 50 } } },
+  ]);
+  const face = faceAt(t, [[0, 'neutral'], [Math.round(len * 0.6), 'worried']]);
+  return (
+    <g transform={camPush(t, len, 1000, 640, 1.5, 1.65)}>
+      <CustomRoom r={STUDY} t={t} id="s2room" wall="#3B2834" side="#2D1E28" floorC="#2A1C18">
+        <Hero look={PARTNER} pose={{ ...basePose, ...speaker, ...face, talk: talkAt(t, len) }} rimId="rimL" />
+      </CustomRoom>
+      <Foreground blur={16}>
+        <Hero look={NARRATOR} pose={{ ...basePose, x: 690, y: 830, scale: 2.3, yaw: 0.85, facing: 1 }} shadow={0} />
+      </Foreground>
+    </g>
+  );
+};
+
+// 4. A group of three: staggered depth (further = smaller and higher), a different yaw each, the speaker in front.
+//    Draw back to front so the near ones overlap the far ones.
+export const S3: React.FC<ShotProps> = ({ t, len }) => {
+  const back = poseAt(t, [{ f: 0, p: { x: 1260, y: 690, scale: 0.85, yaw: -0.7, facing: -1, ...actPose('idle', t) } }]);
+  const mid = poseAt(t, [{ f: 0, p: { x: 1010, y: 725, scale: 1.0, yaw: -0.4, facing: -1, ...actPose('shock', t) } }]);
+  const front = poseAt(t, [
+    { f: 0, p: { x: 760, y: 780, scale: 1.25, yaw: 0.5, facing: 1, ...actPose('talk', t) } },
+    { f: Math.round(len * 0.5), p: { ...actPose('explain', t) } },
+  ]);
+  return (
+    <g transform={camT(1000, 640, 1.15)}>
+      <CustomRoom r={STUDY} t={t} id="s3room" wall="#3B2834" side="#2D1E28" floorC="#2A1C18">
+        <Hero look={THIRD} pose={{ ...basePose, ...back, ...faceAt(t, [[0, 'worried']]) }} rimId="rimL" />
+        <Hero look={PARTNER} pose={{ ...basePose, ...mid, ...faceAt(t, [[0, 'shock']]) }} rimId="rimL" />
+        <Hero look={NARRATOR} pose={{ ...basePose, ...front, ...faceAt(t, [[0, 'happy']]), talk: talkAt(t, len) }} />
       </CustomRoom>
     </g>
   );
@@ -497,6 +542,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
   const head: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'system', content: ENGINE_CHEAT },
+    { role: 'system', content: DIRECTOR_GUIDE },
     {
       role: 'system',
       content: `## Every engine export and its props (generated from src/engine)\n${engineDigest(opts.projectRoot)}\n\nThis listing is the contract: do not read src/engine/*.tsx again unless a typecheck or a render error names a specific line.`,

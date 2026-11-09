@@ -5,6 +5,7 @@ import { layoutReport } from '../orchestrator/layout.js';
 import { countScriptWords } from '../orchestrator/context.js';
 import { fileURLToPath } from 'node:url';
 import { exec } from './exec.js';
+import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 
@@ -453,12 +454,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const note = String(epShot.note ?? '');
     const isTitle = size.includes('title') || /<TitleCard\b/.test(body);
     const isInsert = size.includes('insert') || size.includes('macro');
+    // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
+    const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
     const hasHero = /<(Hero|Actor)\b/.test(body);
     if (hasHero) heroShots++;
 
-    if (!isTitle && !isInsert && !isSchematic && !hasHero) {
-      errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no <Hero>: scene shots must show a character (<Hero look={...} pose={...} />)`);
+    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
+      errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no <Hero>: show a character (<Hero look={...} pose={...} />), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
     }
     if (!isSchoolStory && /<Classroom\b/.test(body)) {
       errors.push(
@@ -524,14 +527,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     )) {
       const z = Math.max(Number(cz[1]), Number(cz[2]));
       const zMin = Math.min(Number(cz[1]), Number(cz[2]));
-      if (z > 3.0 || zMin < 0.7) {
-        errors.push(`${id} animates camT zoom to ${z} (keep zoom in 0.7..3.0; extreme zoom shows an empty wall/window)`);
+      if (z > 4.5 || zMin < 0.6) {
+        errors.push(`${id} animates camT zoom to ${z} (keep zoom in 0.6..4.5; extreme zoom shows an empty wall/window)`);
       }
     }
     for (const cd of body.matchAll(/\bcamT\s*\(\s*[^,]+,\s*[^,]+,\s*(\d+(?:\.\d+)?)\s*\)/g)) {
       const z = Number(cd[1]);
-      if (z > 3.0 || z < 0.7) {
-        errors.push(`${id} sets camT zoom to ${z} (keep zoom in 0.7..3.0; zoom ${z} shows an empty wall/window)`);
+      if (z > 4.5 || z < 0.6) {
+        errors.push(`${id} sets camT zoom to ${z} (keep zoom in 0.6..4.5; zoom ${z} shows an empty wall/window)`);
       }
     }
 
@@ -613,7 +616,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     /* ignore SSR harness load errors when node_modules is incomplete */
   }
 
-  const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.45));
+  const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
   if (heroShots < minHeroShots) {
     errors.push(
       `Only ${heroShots}/${tlShots.length} shots include <Hero>: at least ${minHeroShots} shots must feature Pip/Mo/cast on screen so the episode is character-driven, not a slide deck.`,
@@ -796,6 +799,8 @@ const newProject: Tool = {
     for (const legacy of ['rewind', 'copy-paste']) {
       fs.rmSync(path.join(episodesDir, legacy), { recursive: true, force: true });
     }
+    // 2a. the improvements this app owns on top of the skill's engine (template classroom, wall pieces, 9:16 floor)
+    const overlay = overlaySummary(applyEngineOverlay(ctx.projectRoot), true);
 
     // 2b. keep git checkpoints fast & small: ignore build/output and generated audio/video binaries,
     // and symlink node_modules from the skill studio when available so local tsc works out of the box without 250MB copies
@@ -877,7 +882,7 @@ const newProject: Tool = {
     }
     return {
       ok: true,
-      summary: `scaffolded ${ctx.projectRoot} with episode "${slug}" (id ${ep.id}, aspect ${aspect}). Next: fill src/episodes/${slug}/episode.json, then stream "voice" and "plan".`,
+      summary: `scaffolded ${ctx.projectRoot} with episode "${slug}" (id ${ep.id}, aspect ${aspect}). ${overlay}. Next: fill src/episodes/${slug}/episode.json, then stream "voice" and "plan".`,
       data: { projectRoot: ctx.projectRoot, episode: slug, id: ep.id, aspect },
     };
   },
@@ -1055,6 +1060,24 @@ const runStep: Tool = {
       if (mg.code === 0) extraNotes.push(`motion grids generated in out/${slug}/motion/:\n${mg.text}`);
     }
 
+    // The skill's storyboard.jpg is one tall strip (a 36-shot 9:16 episode is ~2280x10410): cut readable sheets of 8-9 shots
+    // so the agent and the Reviewer can actually see each shot.
+    if (input.step === 'board' && !failed) {
+      const sheets = await exec([PY, path.join(PIPELINE, 'board_sheets.py'), ctx.projectRoot, slug], {
+        cwd: ctx.projectRoot,
+        timeoutMs: 120_000,
+        signal: ctx.signal,
+      }).catch(() => null);
+      if (sheets && sheets.code === 0) {
+        const made = sheets.stdout.split('\n').filter(Boolean);
+        extraNotes.push(
+          `contact sheets (8-9 shots each, readable): ${made.join(', ')}. view_image each sheet and run the board self-check of the director's guide on it; open a single still (out/${slug}/board/S<n>.png) for any shot that looks wrong.`,
+        );
+      } else {
+        extraNotes.push(`contact sheets not built (${sheets ? sheets.stderr.split('\n').filter(Boolean).pop() : 'script did not run'}): the long storyboard.jpg is hard to read, view stills one by one.`);
+      }
+    }
+
     const artifacts = diffArtifacts(ctx.projectRoot, before);
     const layout = input.step === 'stills' || input.step === 'board' ? await layoutReport(path.join(ctx.projectRoot, 'out', slug, 'board')).catch(() => '') : '';
     let layoutFailure = '';
@@ -1176,7 +1199,11 @@ const syncEngine: Tool = {
     },
   },
   async run(input: { apply?: boolean; paths?: string[] }, ctx): Promise<ToolResult> {
-    if (!ctx.skillDir) throw new Error('WHATIF_SKILL_DIR is not set');
+    if (!ctx.skillDir) {
+      // no skill mounted: only the app's own engine overlay can be applied
+      const only = applyEngineOverlay(ctx.projectRoot, { dryRun: !input.apply });
+      return { ok: true, summary: `no skill mounted (WHATIF_SKILL_DIR unset): ${overlaySummary(only, Boolean(input.apply))}`, data: { overlay: only } };
+    }
     const skillStudio = path.join(ctx.skillDir, 'studio');
     const targets = input.paths?.length ? input.paths : ['src/engine', 'src/studio.config.ts'];
     const added: string[] = [];
@@ -1232,10 +1259,12 @@ const syncEngine: Tool = {
       }
     }
     const verb = input.apply ? 'synced' : 'would sync';
+    // the skill's copy was just written over the project's: put the app's improvements back on top
+    const overlay = applyEngineOverlay(ctx.projectRoot, { dryRun: !input.apply });
     return {
       ok: true,
-      summary: `${verb}: ${added.length} new, ${modified.length} locally modified, ${identical.length} up to date.${added.length ? `\nnew: ${added.slice(0, 20).join(', ')}` : ''}${modified.length ? `\n${input.apply ? 'overwritten' : 'to review'}: ${modified.slice(0, 20).join(', ')}` : ''}`,
-      data: { added, modified, identical },
+      summary: `${verb}: ${added.length} new, ${modified.length} locally modified, ${identical.length} up to date.${added.length ? `\nnew: ${added.slice(0, 20).join(', ')}` : ''}${modified.length ? `\n${input.apply ? 'overwritten' : 'to review'}: ${modified.slice(0, 20).join(', ')}` : ''}\n${overlaySummary(overlay, Boolean(input.apply))}`,
+      data: { added, modified, identical, overlay },
     };
   },
 };

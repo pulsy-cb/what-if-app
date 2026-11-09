@@ -9,7 +9,15 @@ import {
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Refuse writing to executable script folders, package manifests, or git internals inside the project. */
+/**
+ * Where the agent may write inside a project: its episodes, notes at the root (PROJECT.md…) and scratch files in out/.
+ * Everything else (the engine, studio config, exports, package manifests, scripts, git internals, .env) is refused: a
+ * model that mis-targets a path used to overwrite studio files (src/exports/, src/engine) and lose them.
+ * Engine edits stay possible when the operator sets WHATIF_ALLOW_ENGINE_WRITES=1 (e.g. to extend a set on request).
+ */
+const WRITABLE_PATHS = [/^src\/episodes\//, /^[^/]+\.md$/, /^out\//];
+const ENGINE_PATHS = /^src\/(engine|exports)\//;
+
 function assertWritableProjectPath(relPath: string): void {
   const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
   if (
@@ -21,6 +29,12 @@ function assertWritableProjectPath(relPath: string): void {
   ) {
     throw new Error(`writing to "${norm}" is refused by security policy`);
   }
+  if (WRITABLE_PATHS.some((re) => re.test(norm))) return;
+  if (process.env.WHATIF_ALLOW_ENGINE_WRITES === '1' && ENGINE_PATHS.test(norm)) return;
+  throw new Error(
+    `writing to "${norm}" is refused: write inside src/episodes/<slug>/ (shots.tsx, index.tsx, DIRECTOR.md…), a root note like PROJECT.md, or out/. ` +
+      `The engine (src/engine) is shared by every episode and is not edited by the agent.`,
+  );
 }
 
 /**

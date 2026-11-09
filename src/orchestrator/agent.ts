@@ -8,6 +8,7 @@ import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, toolMessageContent } from './context.js';
 import { formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
+import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
   db: Db;
@@ -56,7 +57,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
   const turnStartedAt = Date.now();
   const finishTurn = (steps: number, aborted: boolean, limitReached = false) => {
     const elapsedMs = Math.max(0, Date.now() - turnStartedAt);
-    db.addRunDuration(project.id, threadId, elapsedMs, steps);
+    db.addRunDuration(project.id, threadId, elapsedMs, steps, provider.model);
     const timing = db.projectTiming(project.id);
     try {
       const slug = activeEpisodeSlug(project.root, db.listMessages(threadId));
@@ -170,6 +171,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       }
 
       const producedImages: string[] = [];
+      // shots the model just asked to re-render (stills S3 S7): those are the images worth showing back
+      const askedShots = res.toolCalls.flatMap((c) => (Array.isArray(c.args?.args) ? (c.args.args as unknown[]) : []).map(String).filter((a) => /^S\d+$/i.test(a)));
 
       // Check if all tool calls in this step are read-only auto tools so we can run them in parallel
       const allReadOnlyAuto =
@@ -362,7 +365,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
 
       if (producedImages.length) {
         // Multimodal feedback: the model gets the images it just produced on the next step.
-        const unique = [...new Set(producedImages)].slice(0, 3);
+        const unique = pickImages(producedImages, askedShots, 3);
         db.addMessage(threadId, 'user', `Artefacts produits — regarde-les (view_image si besoin): ${unique.join(', ')}`, { images: unique });
         bus.emit(threadId, 'artifacts', { images: unique });
       }
