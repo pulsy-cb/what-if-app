@@ -2,8 +2,8 @@ import React from 'react';
 import type { Room } from './room';
 import { basePose, LOOKS } from './rig';
 import { Person, bodyOf, legDrop } from './person';
-import type { Body, BodyId, PersonPose } from './person';
-import type { Look, Pose } from './rig';
+import type { Body, BodyId, PersonLook, PersonPose } from './person';
+import type { Pose } from './rig';
 
 // A stage knows where the ground is. Things are placed by a ground position (u across, w toward the camera) and it
 // works out where they land on screen, how big they are, what hides what, and how far away they feel.
@@ -104,7 +104,7 @@ export const StageItem: React.FC<{ depth: number; children: React.ReactNode }> =
  */
 export const Staged: React.FC<{
   at: Place;
-  look?: Look;
+  look?: PersonLook;
   pose?: Partial<Pose>;
   body?: Body | BodyId;
   height?: number;
@@ -115,7 +115,7 @@ export const Staged: React.FC<{
   handLProp?: React.ReactNode;
   handRProp?: React.ReactNode;
   children?: React.ReactNode;
-}> = ({ at, look = LOOKS.pipHood, pose = {}, body, height = 1, seated = false, children, ...rest }) => {
+}> = ({ at, look = LOOKS.pipHood as PersonLook, pose = {}, body, height = 1, seated = false, children, ...rest }) => {
   const { ground } = React.useContext(StageCtx);
   let spot: { x: number; y: number; scale: number };
   if ('u' in at) {
@@ -125,7 +125,7 @@ export const Staged: React.FC<{
     spot = { x: at.x, y: at.y, scale: at.scale ?? 1 };
   }
   const scale = spot.scale * height;
-  const b = bodyOf(body);
+  const b = bodyOf(body ?? (look as { cast?: { body?: Body | BodyId } }).cast?.body);
   const y = spot.y - legDrop(b, seated) * scale;
   const seat: Partial<Pose> = seated ? { legL: { a: 78, b: -78 }, legR: { a: 74, b: -74 } } : {};
   return (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hero, makeLook, basePose, actPose, talkAt, camT, ShotProps, ClassroomShell, Classroom, CLS, CLASS_MOODS, FONT, Stage, Staged, roomGround, planeGround, DeskAt, deskSeat, Outdoor, OUTDOOR, Rooftop, walkPose } from '../../engine';
+import { Hero, makeLook, basePose, actPose, talkAt, camT, ShotProps, ClassroomShell, Classroom, CLS, CLASS_MOODS, FONT, Stage, Staged, roomGround, planeGround, DeskAt, deskSeat, Outdoor, OUTDOOR, Rooftop, walkPose, cast } from '../../engine';
 
 const PROF = makeLook({ skin: '#C68A5B', jacket: '#5A3E68', accent: '#F6EFE3', hair: '#3A2A20', extra: 'suit' });
 const LOU = makeLook({ skin: '#F2C9A8', jacket: '#E05780', accent: '#FFE5EC', hair: '#5B3A24', extra: 'bob' });
@@ -45,6 +45,24 @@ export const Depths: React.FC<ShotProps & { focus?: number }> = ({ t, focus }) =
       <Staged at={{ u: 0.47, w: 0.08 }} look={LEO} pose={{ yaw: 0.5 }} />
       <Staged at={{ u: 0.68, w: 0.4 }} look={LEO} pose={{ yaw: -0.5, facing: -1 }} rimId="rimL" />
       <Staged at={{ u: 0.34, w: 0.62 }} look={LEO} pose={{ yaw: 1, ...actPose('explain', t) }} />
+    </Stage>
+  </g>
+);
+
+// the same classroom with characters built by cast(), one seated in a skirt to check it follows the knees
+const C_LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans', 'sneakers:white'], face: { marks: 'freckles', brows: 'thin' } });
+const C_LEO = cast({ seed: 'leo', body: 'teen', kind: 'masc', hair: { style: 'sidepart', color: 'black' }, outfit: ['tshirt:navy', 'pants:khaki', 'backpack:teal'] });
+const C_PROF = cast({ seed: 'prof', body: 'adult', kind: 'masc', skin: 'bronze', hair: { style: 'buzz', color: 'grey' }, outfit: ['shirt:white', 'blazer:plum', 'pants:black', 'formal:black'], acc: ['glasses:square'] });
+const C_NOOR = cast({ seed: 'noor', body: 'teen', kind: 'fem', skin: 'tan', hair: { style: 'braids', color: 'black' }, outfit: ['sweater:mustard', 'skirt:navy', 'boots:brown'] });
+export const Cast: React.FC<ShotProps> = ({ t, len }) => (
+  <g transform={cam}>
+    <Stage ground={G}>
+      <ClassroomShell t={t} id="sk" tokens={CLASS_MOODS.day} board={BOARD} deskProps={false} />
+      <Staged at={{ u: 0.36, w: 0.6 }} look={C_LOU} pose={{ yaw: 0.5, ...actPose('talk', t), talk: talkAt(t, len) }} />
+      <DeskAt at={DESK} tokens={CLASS_MOODS.day} />
+      <Staged at={deskSeat(DESK)} seated look={C_NOOR} pose={{ yaw: 0.45, armL: { a: 30, b: 50 }, armR: { a: 30, b: 50 } }} />
+      <Staged at={{ u: 0.68, w: 0.46 }} look={C_LEO} rimId="rimL" pose={{ yaw: -0.5, ...actPose('idle', t) }} />
+      <Staged at={{ u: 0.4, w: 0.08 }} look={C_PROF} pose={{ yaw: 2, armL: { a: 150, b: 20 } }} />
     </Stage>
   </g>
 );

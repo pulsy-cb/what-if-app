@@ -403,6 +403,11 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     /* ignore */
   }
 
+  // Two characters built from the same seed and nothing else are the same person on screen
+  const seeds = [...shotsSource.matchAll(/\bcast\(\{\s*seed:\s*['"]([^'"]+)['"]\s*\}\)/g)].map((m) => m[1]!);
+  const twice = seeds.filter((s, i) => seeds.indexOf(s) !== i);
+  if (twice.length) errors.push(`cast({ seed: '${twice[0]}' }) is used for two characters: give each one its own seed`);
+
   // Check custom character looks defined via makeLook({ ... }): distinct silhouettes/jackets and dark-on-dark contrast
   const lookDefs: { name: string; jacket?: string; extra?: string; skin?: string }[] = [];
   for (const lm of shotsSource.matchAll(/const\s+([A-Za-z0-9_$]+)\s*=\s*makeLook\s*\(\s*\{([\s\S]*?)\}/g)) {

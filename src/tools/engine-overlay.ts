@@ -81,6 +81,11 @@ const PATCHES: PatchGroup[] = [
   },
   {
     file: 'src/engine/index.ts',
+    marker: "export * from './cast';",
+    ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './cast';\n" }],
+  },
+  {
+    file: 'src/engine/index.ts',
     marker: "export * from './views';",
     ops: [{ kind: 'after', anchor: "export * from './rig';\n", insert: "export * from './views';\n" }],
   },

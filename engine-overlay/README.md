@@ -27,6 +27,10 @@ Behaviour change worth knowing: with the overlay, a `yaw` of 0.72 or more (and `
 
 `person.tsx` is the rig redrawn from measurements: `<Person body="teen" pose={...} />` takes the same pose and slots as `<Hero>`. An adult seen from the front is pixel-identical to `<Hero>`. Bodies are data (`BODIES`, `defineBody`). In profile the arms reach forward, seated legs foreshorten from the front and back, and `yaw` alone gives the direction. Hands and props use `handOf`, `ikArmOf`, `reachOf`, `grabOf`, which take the body. `<Staged>` renders a `Person`.
 
+## cast
+
+`cast({ seed, body, kind, skin, hair, face, outfit, acc })` builds a character in one line (`cast.ts`), drawn by `hair.tsx`, `face-parts.tsx` and `wardrobe.tsx`. What is not given comes from `seed`, reproducibly. Unknown names throw with the list of known ones. A `Person` without `cast` is untouched. `examples/cast-sheets.tsx` renders the review sheets.
+
 ## Stage
 
 `stage.tsx` places things by ground position: `<Stage ground={roomGround(CLS)}>` with `<Staged at={{ u, w }}>` computes position, size, draw order (far to near, whatever order they are written in), contact shadow, a slight dimming with distance and, with `focus`, softness away from the focus. `sets/classroom.tsx` adds `ClassroomShell`, `DeskAt` and `deskSeat` so desks sort with people. Depth is read only from `at` or a numeric `depth` prop: `w` means width on most engine components. `roomGround` covers every `makeRoom` box (indoors and `OUTDOOR`), `planeGround` a flat ground, and `at={{ x, y, scale }}` anything else. `fade={0}` turns the dimming off (it costs about 25% render time).

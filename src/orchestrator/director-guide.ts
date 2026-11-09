@@ -38,7 +38,16 @@ export const S4: React.FC<ShotProps> = ({ t, len }) => (
 - Not a room? planeGround({ x0, x1, far: { y, scale }, near: { y, scale } }) for a deck or a side-on ground, or at={{ x, y, scale, w }} for
   anything else (y is the floor point under the feet). Outside a Stage use <Person body="teen" pose={...}> (same pose as <Hero>, x / y / scale in the pose).
 - Hands and props with a body other than adult: handOf(pose, 'R', body), reachOf(pose, target, 'R', body), grabOf(t, pose, from, to, 10, 28, 'R', body), or simply the handRProp slot.
-- In profile both arms reach forward; yaw alone gives the direction, no need for facing.`;
+- In profile both arms reach forward; yaw alone gives the direction, no need for facing.
+
+### Characters: build them with cast()
+const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'], face: { marks: 'freckles' } }); then look={LOU} (the body comes with it).
+Whatever you leave out is filled from \`seed\`, always the same way, so one name is enough for a varied extra: cast({ seed: 'extra1', body: 'teen' }). One seed per character. kind: fem | masc | any.
+- hair: long braids bun buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white.
+- outfit: tshirt shirt hoodie sweater / blazer labcoat apron coat / jeans pants shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon: rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown, or a hex.
+- face: eyes round almond sleepy wide; brows none thin thick arched; nose none button long wide; marks none freckles mole blush dimples wrinkles; facial none stubble mustache goatee beard.
+- acc: glasses:round glasses:square glasses:sun earrings headband:teal headphones headset. skin: porcelain peach sand tan bronze brown deep.
+Something the list does not have (a uniform, a crown, a costume)? Draw it in the torsoGear or headGear slot, or fall back on makeLook.`;
 
 export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.tsx; this replaces the skill's references)
 

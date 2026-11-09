@@ -5,6 +5,7 @@ import React from 'react';
 type Look = {
   skin: string; skinShade: string; jacket: string; jacketShade: string; accent: string; line: string; face: string; hair: string;
   extra?: string; accessory?: string;
+  cast?: { eyeR?: [number, number]; browW?: number; noseK?: number };
 };
 type Pose = { yaw: number; tilt: number; headTilt: number; expr: string; blink: number; look: number; glasses: number; sway?: number; talk?: number };
 
@@ -130,7 +131,7 @@ const eyeShape = (L: Look, pose: Pose, x: number, y: number): React.ReactNode =>
   const big = e === 'shock';
   return (
     <g>
-      <ellipse cx={x + look} cy={y} rx={big ? 10 : 7} ry={(big ? 12 : 10) * open} fill={L.face} />
+      <ellipse cx={x + look} cy={y} rx={big ? 10 : L.cast?.eyeR?.[0] ?? 7} ry={(big ? 12 : L.cast?.eyeR?.[1] ?? 10) * open} fill={L.face} />
       {big ? <circle cx={x + look + 3} cy={y - 4} r={3.2} fill="#fff" /> : null}
       {e === 'smug' || e === 'cool' ? <path d={`M ${x - 12} ${y - 4} L ${x + 11} ${y - 2}`} stroke={L.face} strokeWidth={4} strokeLinecap="round" /> : null}
     </g>
@@ -192,13 +193,15 @@ const ProfileHead: React.FC<Ctx> = ({ L, pose }) => {
       <circle cx={0} cy={Y} r={HEAD.r} fill={L.skin} {...st} />
       <path d={`M -4 ${Y + 60} A ${HEAD.r} ${HEAD.r} 0 0 0 -58 ${Y + 20} A 70 70 0 0 1 -4 ${Y + 60} Z`} fill={L.skinShade} />
       {/* the nose, in front of the skull */}
-      <path d={`M 54 ${Y - 8} Q 92 ${Y + 6} 54 ${Y + 20} Z`} fill={L.skin} />
-      <path d={`M 57 ${Y - 8} Q 92 ${Y + 6} 57 ${Y + 20}`} fill="none" {...st} />
+      <g transform={`translate(57 ${Y + 6}) scale(${L.cast?.noseK ?? 1}) translate(-57 ${-(Y + 6)})`}>
+        <path d={`M 54 ${Y - 8} Q 92 ${Y + 6} 54 ${Y + 20} Z`} fill={L.skin} />
+        <path d={`M 57 ${Y - 8} Q 92 ${Y + 6} 57 ${Y + 20}`} fill="none" {...st} />
+      </g>
       {/* the ear */}
       <ellipse cx={-12} cy={Y + 10} rx={8} ry={12} fill={L.skinShade} {...st} strokeWidth={3.5} />
       <path d={`M -14 ${Y + 4} Q -8 ${Y + 10} -13 ${Y + 17}`} stroke={L.line} strokeWidth={2.5} fill="none" strokeLinecap="round" opacity={0.6} />
       {hairBehind ? null : <HairProfile L={L} pose={pose} />}
-      {browPath(pose.expr, ex, ey) ? <path d={browPath(pose.expr, ex, ey)} stroke={L.face} strokeWidth={5} fill="none" strokeLinecap="round" /> : null}
+      {browPath(pose.expr, ex, ey) ? <path d={browPath(pose.expr, ex, ey)} stroke={L.face} strokeWidth={L.cast?.browW ?? 5} fill="none" strokeLinecap="round" /> : null}
       {eyeShape(L, pose, ex, ey)}
       <MouthProfile L={L} pose={pose} />
       {L.accessory === 'beard' ? <path d={`M 4 ${Y + 20} Q 6 ${Y + 64} 44 ${Y + 62} Q 62 ${Y + 56} 60 ${Y + 28} Q 40 ${Y + 38} 20 ${Y + 34} Z`} fill={L.hair} opacity={0.92} /> : null}
@@ -232,7 +235,7 @@ const ProfileHead: React.FC<Ctx> = ({ L, pose }) => {
 const BackHead: React.FC<Ctx> = ({ L, pose }) => {
   const st = stroke(L);
   const hair = L.extra === 'hood' ? L.jacket : L.hair;
-  const bowl = `M -62 ${Y + 14} A 62 62 0 1 1 62 ${Y + 14} Q 40 ${Y + 46} 0 ${Y + 48} Q -40 ${Y + 46} -62 ${Y + 14} Z`;
+  const bowl = `M -60 ${Y + 16} A 62 62 0 1 1 60 ${Y + 16} Q 40 ${Y + 46} 0 ${Y + 48} Q -40 ${Y + 46} -60 ${Y + 16} Z`;
   const ears = (
     <g>
       <circle cx={-61} cy={Y + 8} r={11} fill={L.skin} {...st} />
@@ -355,7 +358,7 @@ const Nose: React.FC<{ L: Look; yaw: number }> = ({ L, yaw }) => {
   const a = Math.min(1, Math.abs(yaw) / 0.7);
   const x = yaw * 36 + s * 6;
   const y = Y + 10;
-  const len = 7 + a * 11;
+  const len = (7 + a * 11) * (L.cast?.noseK ?? 1);
   return <path d={`M ${x} ${y - 8} Q ${x + s * len} ${y + 2} ${x + s * 2} ${y + 8}`} stroke={L.line} strokeWidth={4} fill="none" strokeLinecap="round" strokeLinejoin="round" />;
 };
 

@@ -538,7 +538,7 @@ test('engine overlay: adds the template classroom and the character views, patch
     assert.deepEqual(first.patched.sort(), ['src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
     assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
     assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
     assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
@@ -624,6 +624,63 @@ test('stage: the audit counts <Staged> as a character, checks ground positions, 
 
     const three = `export const S1 = () => <Stage focus={0.6}><Staged at={{ u: 0.1, w: 0.2 }} /><Staged at={{ u: 0.5, w: 0.2 }} /><Staged at={{ u: 0.9, w: 0.2 }} /></Stage>;\n`;
     assert.match(staticMetrics(three), /1\/1 plans avec amorce floue · 1 plans à 3 personnages/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('cast: a seed is reproducible, what is given wins, unknown names fail with the list', async () => {
+  const ts = (await import('typescript')).default;
+  const src = fs.readFileSync(new URL('../engine-overlay/files/src/engine/cast.ts', import.meta.url), 'utf8');
+  const out = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-cast-'));
+  const file = path.join(dir, 'cast.mjs');
+  fs.writeFileSync(file, out);
+  try {
+    const { cast, COLORS, HAIR_COLORS } = await import(file);
+    assert.deepEqual(cast({ seed: 'lou', body: 'teen' }), cast({ seed: 'lou', body: 'teen' }), 'same seed, same character');
+    const seen = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((seed) => JSON.stringify(cast({ seed }))));
+    assert.equal(seen.size, 8, 'different seeds give different characters');
+
+    const lou = cast({ seed: 'lou', hair: { style: 'braids', color: 'red' }, outfit: ['hoodie:rose', 'jeans', 'tie:navy', 'backpack:teal'], face: { eyes: 'wide', facial: 'beard' }, skin: 'deep', acc: ['glasses:square', 'earrings', 'headband:teal'] });
+    assert.equal(lou.cast.hairStyle, 'braids');
+    assert.equal(lou.hair, HAIR_COLORS.red);
+    assert.equal(lou.extra, 'bald', 'hair.tsx draws a new style, the rig head stays bald');
+    assert.equal(lou.jacket, COLORS.rose);
+    assert.equal(lou.cast.legs.color, COLORS.denim, 'jeans are denim unless told otherwise');
+    assert.equal(lou.cast.neck.id, 'tie');
+    assert.equal(lou.cast.back.color, COLORS.teal);
+    assert.deepEqual(lou.cast.eyeR, [9, 12]);
+    assert.equal(lou.cast.face.facial, 'beard');
+    assert.equal(lou.cast.eyewear, 'square');
+    assert.equal(lou.cast.earrings, true);
+    assert.equal(lou.cast.headband, COLORS.teal);
+    assert.equal(cast({ seed: 'x', hair: 'spiky' }).extra, 'spiky', 'a rig hairstyle stays with the rig');
+    assert.equal(cast({ seed: 'x', hair: 'hijab' }).cast.newHair, true);
+
+    for (let i = 0; i < 20; i++) assert.equal(cast({ seed: `t${i}`, body: 'teen', kind: 'masc' }).cast.face.facial, 'none', 'no beard picked for a teen');
+
+    assert.throws(() => cast({ outfit: ['toga'] }), /unknown garment "toga".*hoodie/);
+    assert.throws(() => cast({ acc: ['crown'] }), /unknown accessory "crown"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shots audit: two characters cannot share a bare seed', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-seed-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const room = defineEpisode("Room", { timeline, shots: { S1 } });\n');
+  const body = 'export const S1 = ({ t }) => <Staged at={{ u: 0.4, w: 0.5 }} look={A} pose={poseAt(t, [{ f: 0, p: {} }])} />;\n';
+  const ep = { shots: [{ id: 'S1', set: 'study', size: 'wide' }] };
+  const tl = { shots: [{ id: 'S1', len: 60 }] };
+  try {
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const A = cast({ seed: 'x' });\nconst B = cast({ seed: 'x' });\n${body}`);
+    assert.match(shotsAudit(dir, 'room', ep, tl) ?? '', /used for two characters/);
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const A = cast({ seed: 'x' });\nconst B = cast({ seed: 'y' });\n${body}`);
+    assert.doesNotMatch(shotsAudit(dir, 'room', ep, tl) ?? '', /used for two characters/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

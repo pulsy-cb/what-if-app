@@ -12,9 +12,9 @@ import path from 'node:path';
  *   export type Pose = {...}                                            ->  type Pose
  */
 /** Types whose fields the agent needs to write a shot (the digest shows their body, not just their name). */
-const INLINE_TYPES = new Set(['Pose', 'Limb', 'Expr', 'ActKind', 'HandKind', 'ClassTokens', 'DeskRow', 'KidLook', 'Furniture', 'Place', 'Body', 'BodyId']);
+const INLINE_TYPES = new Set(['Pose', 'Limb', 'Expr', 'ActKind', 'HandKind', 'ClassTokens', 'DeskRow', 'KidLook', 'Furniture', 'Place', 'Body', 'BodyId', 'FaceSpec']);
 
-export function engineDigest(projectRoot: string, cap = 18_500): string {
+export function engineDigest(projectRoot: string, cap = 19_500): string {
   const root = path.join(projectRoot, 'src', 'engine');
   const files: string[] = [];
   const walk = (dir: string): void => {
