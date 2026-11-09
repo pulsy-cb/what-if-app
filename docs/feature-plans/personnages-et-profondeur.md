@@ -449,6 +449,10 @@ Défauts trouvés au rendu et corrigés : bras croisés qui partaient en arrièr
 
 **Reste au plan :** étape E (`Bedroom`, `Kitchen`, `Study` en coque + éléments ; catalogue et promotion), étape F (langage déclaratif), et surtout le run réel.
 
+## 16. Étapes E et F (2026-11-09)
+
+`place()` et `shot()` livrés via le calque. Promotion non faite, gabarits `Bedroom`/`Kitchen`/`Study` remplacés par le catalogue. Résultats et limites : `docs/audits/audit-run-reel-2026-11-09.md`.
+
 ## Validation
 
 Mesures issues des 11 épisodes réels (`data/projects/`, lecture seule) par `ast-grep` et comptage de motifs. Le ratio 0,57 suppose la géométrie de la classe et le coefficient de `stand()` : c'est un ordre de grandeur. Le mot « costume » et « gros » n'ont pas été retenus dans le comptage des notes, car ils apparaissent surtout dans « casting et costumes » et « gros plan ». Le §11 repose sur des rendus locaux réels ; aucun run LLM, aucune vidéo complète.

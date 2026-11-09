@@ -32,3 +32,7 @@
 
 ## Conception en cours (2026-11-09)
 - Personnages, garde-robe, actions, profondeur 2.5D : `docs/feature-plans/personnages-et-profondeur.md`. Décisions prises : style conservé, ados et adultes d'abord, coiffures et traits du visage ajoutés. Étapes A (`Stage`) et B (`Person`) commitées (`293d9cb`). Étape C (`cast()`) commitée (`90161fb`). Étape D (actions, `Duo`, sol automatique) intégrée au calque, **non commitée** ; 18/18 tests. Reste : E (décors `Bedroom`/`Kitchen`/`Study`, catalogue), F (langage déclaratif), run réel.
+
+## Point d'arrêt (2026-11-09)
+- Étapes A à F livrées, audit du run fait : `docs/audits/audit-run-reel-2026-11-09.md`. Tests locaux 22/22.
+- Reste : pré-vol puis run réel sur l'autre machine (LLM, Modal, `:8005`, Docker jamais exécutés ici) ; décider de la promotion des pièces.

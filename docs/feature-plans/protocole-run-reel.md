@@ -5,6 +5,8 @@
 
 ## 0. Avant de lancer
 
+**Mis à jour le 2026-11-09 :** lancer d'abord le pré-vol, `docker compose exec studio node pipeline/preflight.mjs`, puis commencer par un épisode court. Les nouveaux projets utilisent `shot()`, `place()` et `cast()`. État et limites : `docs/audits/audit-run-reel-2026-11-09.md`.
+
 1. **Commiter** les changements (par toi) puis les récupérer sur la machine du run. Fichiers : voir « À faire par Pulsy » du plan d'avancement.
 2. **Reconstruire l'image** : `docker compose up --build` (le `Dockerfile` copie maintenant `engine-overlay/`).
 3. **Démarrage** : `data/app.db` sera migrée (colonne `project_runs.model`). Sauvegarde conseillée : `cp data/app.db data/app.db.bak-avant-run`.
