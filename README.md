@@ -25,6 +25,8 @@ navigateur ──► POST /api/threads/:id/messages      (une instruction, en fr
 | *La Bande de Möbius* — ruban continu | *La Bande de Möbius* — carton titre |
 | :---: | :---: |
 | ![Möbius S2](docs/screenshots/shot-mobius-s2.png) | ![Möbius S3](docs/screenshots/shot-mobius-s3.png) |
+| ***Crush* — salle de classe (discussion)** | ***Crush* — retrait du casque VR** |
+| ![Crush S7](docs/screenshots/shot-crush-s7.png) | ![Crush S35](docs/screenshots/shot-crush-s35.png) |
 | ***Doubler une feuille de papier* — classe** | ***Doubler une feuille de papier* — géométrie** |
 | ![Math Teacher S1](docs/screenshots/shot-math-teacher-s1.png) | ![Math Teacher S8](docs/screenshots/shot-math-teacher-s8.png) |
 | ***Et si tu n'avais pas coupé le son ?* — insert UI** | ***Et si ton date était le patron ?* — schématique** |
@@ -33,6 +35,9 @@ navigateur ──► POST /api/threads/:id/messages      (une instruction, en fr
 ### Planches de storyboard automatiques (`whatif_run board`)
 
 Chaque épisode passe par une planche de contact complète (1 image clé par plan + cadrage + timecode + sous-titres alignés au mot près) inspectée par les audits de layout et par l'agent **Reviewer** indépendant avant le rendu vidéo final :
+
+#### *Crush* (`crush` — 36 plans)
+![Storyboard Crush](docs/screenshots/storyboard-crush.jpg)
 
 #### *Et si tu n'avais pas coupé le son ?* (`almost-muted`)
 ![Storyboard Almost Muted](docs/screenshots/storyboard-almost-muted.jpg)
