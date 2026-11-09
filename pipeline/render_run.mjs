@@ -138,7 +138,14 @@ if (opts.mode === 'stills') {
     const id = String(shots[i].id || `shot-${i + 1}`);
     if (onlySet.size > 0 && !onlySet.has(id)) continue;
     const file = path.join(dir, `${id}.png`);
-    await renderStill({ ...base, composition, frame: i, output: file, overwrite: true, scale: opts.scale });
+    try {
+      await renderStill({ ...base, composition, frame: i, output: file, overwrite: true, scale: opts.scale });
+    } catch (err) {
+      const msg = `CRASH rendering still ${id} (shot ${i + 1}/${shots.length}, frame ${i}, key=${shots[i]?.key ?? '?'}): ${err?.stack || err?.message || err}`;
+      process.stderr.write(`${msg}\n`);
+      result({ ok: false, mode: 'stills', failedShot: id, error: msg });
+      process.exit(1);
+    }
     files.push({ id, path: file, bytes: fs.statSync(file).size });
     emit({ done: i + 1, total: shots.length + 1, stage: 'stills', message: `still ${id} (${i + 1}/${shots.length})` });
   }

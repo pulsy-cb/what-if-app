@@ -57,7 +57,7 @@ commands for a human to paste: you call the tools.
    - **1. Architecture des décors sur mesure en 3 couches de profondeur**:
      Each episode is unique — build custom sets tailored to the story using \`makeRoom\` / \`RoomShell\` / \`CustomRoom\` / \`Box\` / \`FloorShadow\` or custom SVG environments:
      - *Arrière-plan (couche 1)*: murs texturés (\`<CustomRoom>\`, \`<RoomShell>\`, ou décor extérieur/véhicule/SVG sur mesure), fenêtres (\`<BackWindow>\`), cadres (\`<WallFrame>\`), appliques (\`<WallLight>\`), plantes (\`<FloorPlant>\`), éléments architecturaux propres à l'histoire. Give each shot's set a **unique \`id\`** (e.g. \`id="s1"\`, \`id="s2"\`).
-     - *Plan moyen (couche 2)*: mobilier structurant (\`<Box>\`, \`<FloorShadow>\`, \`<DiningTable>\`, \`<Desk>\`, canapés, comptoirs, bancs) et personnages assis ou debout (ex: deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} cloth="#9E2A3B" candle plates />\` pour que la nappe masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus de la table à \`y = 665..688\` !).
+     - *Plan moyen (couche 2)*: mobilier structurant (\`<Box>\`, \`<FloorShadow>\`, \`<DiningTable>\`, \`<Desk>\`, canapés, comptoirs, bancs) et personnages assis ou debout (ex: deux personnages assis face à face avec \`tableSit(760, 690, 'left')\` et \`tableSit(1160, 690, 'right')\` placés **AVANT** \`<DiningTable x={960} y={690} w={520} wood="#8C6239" />\` pour que la table masque naturellement leurs jambes pendant que leurs bustes et leurs mains interagissent au-dessus du plateau à \`y = 665..688\` ; n'ajoute \`cloth="#9E2A3B" candle plates\` QUE si la scène se passe réellement dans un restaurant ou dîner aux chandelles !).
      - *Premier plan & lumière (couche 3)*: accessoires posés sur la table/meuble (\`y = 675..688\`), éléments d'amorce (\`filter="url(#blur16)"\` en over-the-shoulder), lumière d'ambiance (\`<Pendant>\`, \`<LightVeil>\`, \`<Glow>\`, \`<Dust>\`).
    - **2. Casting, silhouettes distinctes & objet-clé (\`makeLook\`)**: définir les personnages récurrents avec des silhouettes (\`extra\`), accessoires (\`accessory\`) et palettes de couleurs distincts, aligner le genre du personnage narrateur principal sur \`episode.json.voice.narratorGender\` (ex: coiffure \`'ponytail' | 'bun' | 'long' | 'bob'\` si \`narratorGender === "female"\` avec la voix de Léa), et vérifier le contraste avec les murs (jamais de veste/membres sombres sans contour ou rim light sur un mur sombre). **Règle d'objet/vêtement-clé** : si l'histoire porte sur un vêtement ou objet spécifique (un nouveau haut, un sac, un plat, une fiole, une bague), donne-lui une couleur et une forme **distinctes** de la veste habituelle des personnages, et respecte la chronologie du récit (un personnage ne porte ou ne tient l'objet qu'à partir du plan où le texte le dit !).
    - **3. Découpage, continuité décor↔code et chorégraphie physique des actions plan par plan**:
@@ -215,11 +215,11 @@ export const S1: React.FC<ShotProps> = ({ t, len }) => {
         <WallFrame x={650} y={250} w={130} h={95} art={0} />
         <WallFrame x={1140} y={250} w={130} h={95} art={1} />
         <FloorPlant r={STUDY} u={0.14} w={0.18} size={0.85} />
-        {/* Layer 2 (Midground): seated characters BEFORE <DiningTable> so the tablecloth occludes their legs */}
+        {/* Layer 2 (Midground): seated characters BEFORE <DiningTable> so the table occludes their lower waist/legs */}
         <Hero look={NARRATOR} pose={{ ...basePose, ...poseL, ...faceL, talk: talkAt(t, len) }} />
         <Hero look={PARTNER} pose={{ ...basePose, ...poseR, ...faceR }} />
-        {/* Layer 3 (Foreground): table & physically held/grabbed prop */}
-        <DiningTable x={960} y={690} w={480} cloth="#9E2A3B" candle plates>
+        {/* Layer 3 (Foreground): wooden table/desk & physically held/grabbed prop (only pass cloth/candle/plates in restaurant scenes) */}
+        <DiningTable x={960} y={690} w={480} wood="#8C6239">
           <g transform={\`translate(\${grab.propPos.x} \${grab.propPos.y})\`}>
             <rect x={-16} y={-24} width={32} height={24} rx={4} fill="#7BDFF2" stroke="#1E1824" strokeWidth={3} />
           </g>

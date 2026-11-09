@@ -223,7 +223,13 @@ def make_app(project: pathlib.Path):
             proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace")
             out["timings"]["node"] = round(time.perf_counter() - t, 3)
             stdout_lines = (proc.stdout or "").splitlines()
-            logs.append("$ render_run.mjs\n" + "\n".join(stdout_lines[-80:]) + "\n" + (proc.stderr or "")[-3000:])
+            non_prog = [ln for ln in stdout_lines if not ln.startswith("PROGRESS_JSON:")]
+            last_prog = [ln for ln in stdout_lines if ln.startswith("PROGRESS_JSON:")][-4:]
+            logs.append(
+                "$ render_run.mjs\n"
+                + "\n".join(last_prog + non_prog[-30:])
+                + ("\n" + (proc.stderr or "")[-6000:] if proc.stderr else "")
+            )
             payload = None
             for line in stdout_lines:
                 if line.startswith("RESULT_JSON:"):
@@ -276,8 +282,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--typecheck", action="store_true")
+    ap.add_argument("--shots", dest="shots_opt", default="")
     ap.add_argument("--out", default="")
-    args = ap.parse_args(argv)
+    args = ap.parse_intermixed_args(argv)
+    all_shots = [s for s in [*(args.shots or []), *(args.shots_opt.split(",") if args.shots_opt else [])] if s.strip()]
 
     project = pathlib.Path(args.project).resolve()
     if not (project / "src" / "episodes" / args.slug / "episode.json").is_file():
@@ -302,7 +310,7 @@ def main(argv: list[str]) -> int:
                 mode=args.mode,
                 scale=args.scale,
                 frames=args.frames,
-                shots_filter=",".join(args.shots or []),
+                shots_filter=",".join(all_shots),
                 concurrency=args.concurrency,
                 crf=args.crf,
                 typecheck=args.typecheck,

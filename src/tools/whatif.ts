@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { layoutReport } from '../orchestrator/layout.js';
 import { countScriptWords } from '../orchestrator/context.js';
 import { fileURLToPath } from 'node:url';
@@ -306,7 +307,7 @@ export function episodeAudit(episode: any, slug: string): string | null {
  */
 export function shotsAudit(projectRoot: string, slug: string, episode: any, timeline: any): string | null {
   const src = path.join(projectRoot, 'src', 'episodes', slug);
-  const tlShots: { id: string; len: number; size?: string }[] = Array.isArray(timeline?.shots) ? timeline.shots : [];
+  const tlShots: { id: string; len: number; size?: string; key?: number }[] = Array.isArray(timeline?.shots) ? timeline.shots : [];
   const epShots: Record<string, any> = {};
   for (const s of Array.isArray(episode?.shots) ? episode.shots : []) {
     if (s?.id) epShots[String(s.id)] = s;
@@ -360,10 +361,11 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const isFrench = frHits >= 4;
 
   // Continuity check: DIRECTOR.md / bible.json <-> shots.tsx
+  let bible: any = null;
   try {
     const biblePath = path.join(src, 'bible.json');
     if (fs.existsSync(biblePath)) {
-      const bible = JSON.parse(fs.readFileSync(biblePath, 'utf8'));
+      bible = JSON.parse(fs.readFileSync(biblePath, 'utf8'));
       for (const c of Array.isArray(bible?.cast) ? bible.cast : []) {
         const cname = typeof c === 'string' ? c : String(c?.id ?? c?.name ?? '');
         if (cname && !new RegExp(`\\b${cname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(shotsSource)) {
@@ -533,12 +535,82 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       }
     }
 
+    // Catch restaurant tablecloth / candle / plates used inside non-restaurant settings (classroom, bedroom, rooftop, stairwell, study)
+    const defaultSet = String(bible?.defaultSet ?? '').toLowerCase();
+    if (defaultSet && ['classroom', 'bedroom', 'rooftop', 'stairwell', 'study'].includes(defaultSet)) {
+      if (/<DiningTable[^>]*\b(?:candle|plates|cloth\s*=\s*['"]#9E2A3B['"])/i.test(body)) {
+        errors.push(
+          `${id} uses restaurant props (candle / plates / red tablecloth cloth="#9E2A3B") on <DiningTable> inside a "${defaultSet}" episode: use a plain wooden desk/table (<DiningTable x={...} y={...} w={...} wood="#B98A55" /> without cloth, candle or plates).`,
+        );
+      }
+    }
+
     // Catch elements drawn at x=640 (1280x720 centre) when the canvas is 1920x1080 (centre x=960)
     const x640 = (body.match(/\bx\s*[:=]\s*\{?\s*6[456]0\b/g) ?? []).length;
     const x960 = (body.match(/\bx\s*[:=]\s*\{?\s*(?:8[5-9]\d|9\d\d|10\d\d|11\d\d)\b/g) ?? []).length;
     if (x640 >= 2 && x960 === 0) {
       errors.push(`${id} centres its elements at x≈640–660 on a 1920x1080 canvas (leaving the right half empty): centre around x=960`);
     }
+  }
+
+  // Fast local in-memory SSR smoke test (catches runtime TypeErrors/ReferenceErrors in <0.3s before Modal)
+  try {
+    const nm = path.join(projectRoot, 'node_modules');
+    if (fs.existsSync(path.join(nm, 'typescript')) && fs.existsSync(path.join(nm, 'react-dom'))) {
+      const req = createRequire(path.join(projectRoot, 'package.json'));
+      const ts = req('typescript');
+      const React = req('react');
+      const ReactDOMServer = req('react-dom/server');
+      const jsxRuntime = req('react/jsx-runtime');
+      const cache: Record<string, { exports: any }> = {};
+      const loadMod = (rel: string): any => {
+        let full = path.join(projectRoot, rel);
+        if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
+          for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
+            if (fs.existsSync(full + ext) && fs.statSync(full + ext).isFile()) {
+              full = full + ext;
+              break;
+            }
+          }
+        }
+        if (cache[full]) return cache[full]!.exports;
+        if (full.endsWith('.json')) return JSON.parse(fs.readFileSync(full, 'utf8'));
+        const srcCode = fs.readFileSync(full, 'utf8');
+        const transpiled = ts.transpileModule(srcCode, {
+          compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+        }).outputText;
+        const mod = { exports: {} as any };
+        cache[full] = mod;
+        const localReq = (id: string) => {
+          if (id === 'react') return React;
+          if (id === 'react/jsx-runtime') return jsxRuntime;
+          if (id === 'remotion') return { AbsoluteFill: 'div', Audio: 'audio', staticFile: (s: string) => s, useCurrentFrame: () => 0 };
+          if (id.startsWith('@remotion/google-fonts')) return { loadFont: () => ({ fontFamily: 'sans-serif' }) };
+          if (id.startsWith('.')) return loadMod(path.relative(projectRoot, path.resolve(path.dirname(full), id)));
+          return req(id);
+        };
+        new Function('exports', 'require', 'module', transpiled)(mod.exports, localReq, mod);
+        return mod.exports;
+      };
+      const exportedShots = loadMod(`src/episodes/${slug}/shots.tsx`);
+      for (const sh of tlShots) {
+        const id = String(sh.id ?? '');
+        const Comp = exportedShots?.[id];
+        if (typeof Comp !== 'function') continue;
+        const len = Math.max(30, Number(sh.len ?? 90));
+        const key = Math.min(len - 1, Math.max(0, Number(sh.key ?? 18)));
+        for (const t of [0, key, len]) {
+          try {
+            ReactDOMServer.renderToStaticMarkup(React.createElement(Comp, { t, len, f: t }));
+          } catch (err) {
+            errors.push(`${id} crashes at runtime (t=${t}): ${(err as Error).message}`);
+            break;
+          }
+        }
+      }
+    }
+  } catch {
+    /* ignore SSR harness load errors when node_modules is incomplete */
   }
 
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.45));
@@ -1027,11 +1099,13 @@ const runStep: Tool = {
         }
       }
     }
+    const payloadWithoutLog = payload ? Object.fromEntries(Object.entries(payload).filter(([k]) => k !== 'log')) : undefined;
+    const remoteLogTail = typeof payload?.log === 'string' && payload.log.trim() ? `\n\n[remote log]\n${payload.log.slice(-3500)}` : '';
     return {
       ok: !failed,
       summary: `$ ${argv.join(' ')}\nexit ${res.code}${res.timedOut ? ' (timeout)' : ''}\n${tail(visible)}${res.stderr ? `\n[stderr]\n${tail(res.stderr.split('\n').filter(Boolean))}` : ''}${
-        payload ? `\n\nresult: ${JSON.stringify(payload).slice(0, 1200)}` : ''
-      }${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}${
+        payloadWithoutLog ? `\n\nresult: ${JSON.stringify(payloadWithoutLog).slice(0, 1200)}` : ''
+      }${remoteLogTail}${artifacts.length ? `\n\n${artifacts.length} new file(s): ${artifacts.map((a) => a.path).join(', ')}` : ''}${
         layout ? `\n\n${layout}` : ''
       }${layoutFailure ? `\n\n${layoutFailure}` : ''}${extraNotes.length ? `\n\n${extraNotes.join('\n\n')}` : ''}${planWarning ? `\n\n${planWarning}` : ''}`,
       artifacts,
