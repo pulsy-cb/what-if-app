@@ -398,7 +398,56 @@ Défauts trouvés au rendu et corrigés : croissant de peau en haut des têtes d
 - Le rendu reste vérifié hors de la suite de tests ; seule la logique de `cast()` y est couverte.
 - Toujours aucun run LLM : on ignore si un modèle Flash utilise bien `cast()`.
 
-**Prochaine étape : D (actions : postures, clips comme se lever ou se retourner, interactions à deux).**
+## 15. Étape D intégrée au calque (2026-11-09, non commitée)
+
+**Livré :** l'agent nomme ce que fait le personnage au lieu d'écrire des angles.
+
+```tsx
+<Stage ground={G} t={t}>
+  <Staged at={{ u: 0.4, w: 0.5 }} look={LOU} yaw={1} act="stand-up" from={12} />
+  <Staged at={deskSeat(DESK)} look={NOOR} stance="sit" act="phone" />
+  <Duo a={{ at: A, look: LOU }} b={{ at: B, look: LEO }} action="give" prop={<Phone />} />
+</Stage>
+```
+
+| Élément | Contenu |
+|---|---|
+| `actions.ts` (calcul pur) | 4 postures, 18 gestures, 10 clips, `turnAt`, adaptation au corps (`amp`, `tempo`) |
+| Gestes (boucle) | `idle talk explain question shrug think point hold phone cross-arms hands-hips pockets cheer wave type eat nod shake` |
+| Clips | `stand-up sit-down startle jump slump bow pick-up`, et en boucle `walk run sneak` |
+| Postures | `sit kneel crouch` |
+| `Duo` | `handshake give hug push whisper` : les mains se trouvent quels que soient les corps, et ils se rapprochent si besoin |
+| `Staged` | `act`, `from`, `dur`, `stance`, `yaw` ; **les pieds restent au sol** quelle que soit la pose |
+
+Adaptations : le bras qui gesticule est toujours le plus proche ; de profil, les bras croisés et mains sur les hanches ont leur propre forme ; la tête et l'inclinaison suivent le sens du regard ; `turnAt` passe par un clignement pour masquer le changement de dessin. Clips construits en anticipation, action, maintien, retour.
+
+Planches locales : `docs/screenshots/stage/actions-*.png`.
+
+**Validation**
+
+| Vérification | Résultat |
+|---|---|
+| Planches de mouvement relues | 10 clips sur 8 images, 18 gestes face et 3/4 ou profil, 4 postures × 5 vues, 5 interactions sur 6 images |
+| Scène en classe | élève assise avec téléphone, remise d'objet à deux, prof de dos |
+| `Person` sans `cast` vs `Hero` | **0 pixel** |
+| `tsc` / `npm test` | 0 erreur / **18/18** |
+| Mutations | **7/7 détectées**, dont une qui a révélé un test trop faible (renforcé) |
+| Calque sur 4 moteurs réels | **0 erreur dans `src/engine/`** |
+| Prompt système | environ 56 Ko sur 90 |
+
+Défauts trouvés au rendu et corrigés : bras croisés qui partaient en arrière de profil, personnage poussé qui levait les bras avant d'être touché, câlin réduit à deux mains qui se rejoignent, têtes qui se recouvraient au chuchotement.
+
+**Limites**
+
+- Les gestes ne sont pas calés sur les mots : ils oscillent. Le calage sur `words.json` reste à faire.
+- Une main ne peut toujours pas toucher le visage (la tête est dessinée après les bras) : `think` et `eat` restent approximatifs.
+- `walk` n'avance pas tout seul : l'agent doit faire varier `at`, et les pieds peuvent glisser légèrement.
+- Le câlin ne fonctionne bien que de côté. `Duo` suppose deux personnes debout.
+- Pas de `defineAction` : au-delà du catalogue, c'est `poseAt` dans `pose`.
+- Le prompt grossit (56 Ko) : à surveiller, c'est le contexte disponible pour le travail.
+- Toujours aucun run LLM.
+
+**Reste au plan :** étape E (`Bedroom`, `Kitchen`, `Study` en coque + éléments ; catalogue et promotion), étape F (langage déclaratif), et surtout le run réel.
 
 ## Validation
 
