@@ -355,7 +355,50 @@ Deux défauts ont été trouvés et corrigés en cours de route : le bras éloig
 - La géométrie de `Person` est vérifiée par rendus et calculs ponctuels, **pas par la suite de tests** (qui ne peut pas compiler le TSX du moteur).
 - Toujours aucun run LLM ; le prompt système fait environ 52 Ko sur 90.
 
-**Prochaine étape : C (garde-robe en couches, coiffures, emplacements de visage, `seed`).**
+## 14. Étape C intégrée au calque (2026-11-09, non commitée)
+
+**Livré :** un personnage s'écrit en une ligne, et ce qui n'est pas précisé vient du `seed`, toujours de la même façon.
+
+```tsx
+const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'], face: { marks: 'freckles' } });
+<Staged at={{ u: 0.36, w: 0.6 }} look={LOU} />
+```
+
+| Fichier (`engine-overlay/files/src/engine/`) | Contenu |
+|---|---|
+| `cast.ts` | `cast()`, peaux, couleurs, tirage reproductible, messages d'erreur avec la liste des noms connus |
+| `hair.tsx` | 10 coiffures en face, profil et dos : `long`, `braids`, `bun`, `buzz`, `sidepart`, `wavy`, `fringe`, `mohawk`, `dreads`, `hijab` (les 13 du rig restent) |
+| `face-parts.tsx` | sourcils, nez, marques, pilosité, lunettes de vue, boucles d'oreilles, bandeau |
+| `wardrobe.tsx` | `tshirt`, `shirt`, `hoodie`, `sweater` · `blazer`, `labcoat`, `apron`, `coat` · `tie`, `scarf` · `backpack` · jupe qui suit les genoux |
+| `person.tsx`, `views.tsx`, `stage.tsx` | branchements ; manches, jambes et chaussures selon la tenue (`jeans`, `pants`, `shorts`, `skirt`, `sneakers`, `boots`, `formal`) |
+
+Le guide de l'agent liste tous les noms en quelques lignes. Planches locales : `docs/screenshots/stage/cast-*.png`.
+
+**Validation**
+
+| Vérification | Résultat |
+|---|---|
+| **`Person` sans `cast` vs `Hero`, de face** | **0 pixel de différence** |
+| Planches relues | 8 personnages × 5 vues, 10 coiffures × 4 vues, options de visage en face et profil, 12 personnages au `seed` seul |
+| Scène en classe | ado en sweat, élève assise en jupe, ado au sac à dos, prof de dos |
+| `tsc` / `npm test` | 0 erreur / **17/17** |
+| Mutations | **6/6 détectées** |
+| Calque sur 4 moteurs réels | **0 erreur dans `src/engine/`** |
+| Prompt système | environ 54 Ko sur 90 |
+
+Défauts trouvés au rendu et corrigés : croissant de peau en haut des têtes de dos (arc mal calculé, présent aussi au lot 5), jean vert au lieu de denim, chaume qui dépassait de profil, casque autour du cou hérité de la coiffure `curls`, et `Staged` qui refusait un personnage `cast()` à la compilation (l'agent aurait été bloqué).
+
+**Limites**
+
+- **Escalier d'ouverture partiel** : les crans 1 à 3 existent (catalogue, options, `torsoGear` / `headGear`, `defineBody`). `defineGarment`, `defineAction` et la promotion au catalogue ne sont pas faits.
+- Le torse d'un corps non adulte reste une mise à l'échelle.
+- `torsoGear` n'est affiché que de face.
+- Accord des vêtements avec le corps vérifié sur `teen` et `adult` seulement.
+- La forme des yeux ne change que l'œil au repos, par choix.
+- Le rendu reste vérifié hors de la suite de tests ; seule la logique de `cast()` y est couverte.
+- Toujours aucun run LLM : on ignore si un modèle Flash utilise bien `cast()`.
+
+**Prochaine étape : D (actions : postures, clips comme se lever ou se retourner, interactions à deux).**
 
 ## Validation
 
