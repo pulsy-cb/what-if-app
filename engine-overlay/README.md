@@ -23,5 +23,15 @@ It runs when `whatif_new` creates a project and with `whatif_sync_engine { apply
 
 Behaviour change worth knowing: with the overlay, a `yaw` of 0.72 or more (and `walkPose`, which uses 0.85) now draws a real profile head instead of a front head with a slid face.
 
+## Person
+
+`person.tsx` is the rig redrawn from measurements: `<Person body="teen" pose={...} />` takes the same pose and slots as `<Hero>`. An adult seen from the front is pixel-identical to `<Hero>`. Bodies are data (`BODIES`, `defineBody`). In profile the arms reach forward, seated legs foreshorten from the front and back, and `yaw` alone gives the direction. Hands and props use `handOf`, `ikArmOf`, `reachOf`, `grabOf`, which take the body. `<Staged>` renders a `Person`.
+
+## Stage
+
+`stage.tsx` places things by ground position: `<Stage ground={roomGround(CLS)}>` with `<Staged at={{ u, w }}>` computes position, size, draw order (far to near, whatever order they are written in), contact shadow, a slight dimming with distance and, with `focus`, softness away from the focus. `sets/classroom.tsx` adds `ClassroomShell`, `DeskAt` and `deskSeat` so desks sort with people. Depth is read only from `at` or a numeric `depth` prop: `w` means width on most engine components. `roomGround` covers every `makeRoom` box (indoors and `OUTDOOR`), `planeGround` a flat ground, and `at={{ x, y, scale }}` anything else. `fade={0}` turns the dimming off (it costs about 25% render time).
+
+`examples/stage-scenes.tsx` and `stage-order.tsx` are the render checks.
+
 `examples/views-sheet.tsx` renders the 12 hairstyles in 6 turns. `examples/classrooms.tsx` renders a lycée by day, a primary school, a lecture hall, a night class and a meeting room
 (not a school) from the same pieces. It is a reference, not part of the engine.

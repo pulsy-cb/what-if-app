@@ -538,7 +538,10 @@ test('engine overlay: adds the template classroom and the character views, patch
     assert.deepEqual(first.patched.sort(), ['src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
+    assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
     const furnish = read(dir, 'src/engine/furnish.tsx');
     assert.equal(furnish.split('below the near plane').length, 2, 'the floor patch is inserted once');
     assert.ok(furnish.indexOf(anchor) < furnish.indexOf('below the near plane') && furnish.indexOf('below the near plane') < furnish.indexOf('{fl}'), 'inserted right after its anchor');
@@ -587,6 +590,40 @@ test('engine overlay: whatif_sync_engine applies it without a mounted skill', as
     assert.equal(done.ok, true);
     assert.equal(fs.existsSync(path.join(dir, 'src', 'engine', 'pieces.tsx')), true);
     assert.match(fs.readFileSync(path.join(dir, 'src', 'engine', 'index.ts'), 'utf8'), /pieces/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stage: the audit counts <Staged> as a character, checks ground positions, and the guide appears only with the engine', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const { buildMessages } = await import('../dist/orchestrator/context.js');
+  const { staticMetrics } = await import('../dist/orchestrator/reviewer.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-stage-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const room = defineEpisode("Room", { timeline, shots: { S1 } });\n');
+  const shot = (w) => `export const S1 = ({ t, len }) => <Stage ground={G}><Staged at={{ u: 0.4, w: ${w} }} look={A} pose={poseAt(t, [{ f: 0, p: {} }])} /></Stage>;\n`;
+  const ep = { shots: [{ id: 'S1', set: 'study', size: 'wide' }] };
+  const tl = { shots: [{ id: 'S1', len: 60 }] };
+  const hasGuide = () => buildMessages({ projectRoot: dir, history: [], maxChars: 90_000 }).some((m) => m.role === 'system' && m.content.includes('## Stage: place people'));
+  try {
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shot(0.5));
+    const ok = shotsAudit(dir, 'room', ep, tl) ?? '';
+    assert.doesNotMatch(ok, /has no <Hero>/, 'a <Staged> is a character');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), 'export const S1 = ({ t, len }) => <g><Person look={A} body="teen" pose={poseAt(t, [{ f: 0, p: {} }])} /></g>;\n');
+    assert.doesNotMatch(shotsAudit(dir, 'room', ep, tl) ?? '', /has no <Hero>/, 'a <Person> is a character');
+    assert.doesNotMatch(ok, /places something at/);
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shot(1.4));
+    assert.match(shotsAudit(dir, 'room', ep, tl) ?? '', /places something at u 0\.4, w 1\.4/);
+
+    assert.equal(hasGuide(), false, 'no Stage guide for an engine without stage.tsx');
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'stage.tsx'), 'export const Stage = 1;\n');
+    assert.equal(hasGuide(), true, 'guide present once the engine has it');
+
+    const three = `export const S1 = () => <Stage focus={0.6}><Staged at={{ u: 0.1, w: 0.2 }} /><Staged at={{ u: 0.5, w: 0.2 }} /><Staged at={{ u: 0.9, w: 0.2 }} /></Stage>;\n`;
+    assert.match(staticMetrics(three), /1\/1 plans avec amorce floue · 1 plans à 3 personnages/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

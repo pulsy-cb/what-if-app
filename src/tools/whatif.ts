@@ -457,7 +457,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const hasHero = /<(Hero|Actor)\b/.test(body);
+    const hasHero = /<(Hero|Actor|Staged|Person)\b/.test(body);
     if (hasHero) heroShots++;
 
     if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
@@ -535,6 +535,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       const z = Number(cd[1]);
       if (z > 4.5 || z < 0.6) {
         errors.push(`${id} sets camT zoom to ${z} (keep zoom in 0.6..4.5; zoom ${z} shows an empty wall/window)`);
+      }
+    }
+
+    // Catch stage positions off the ground: u is across the floor, w runs from the back wall (0) to the camera (1)
+    for (const at of body.matchAll(/\bat=\{\{\s*u:\s*(-?\d*\.?\d+)\s*,\s*w:\s*(-?\d*\.?\d+)/g)) {
+      const [u, w] = [Number(at[1]), Number(at[2])];
+      if (u < -0.1 || u > 1.1 || w < 0 || w > 1) {
+        errors.push(`${id} places something at u ${u}, w ${w}: u runs across the floor (0..1) and w from the back wall (0) to the camera (1)`);
       }
     }
 

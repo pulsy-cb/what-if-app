@@ -19,7 +19,7 @@ EXPORT_RE = re.compile(r"export\s+(?:const|function)\s+(S\d+)\b")
 CAMT_RE = re.compile(r"camT\(\s*[^,()]+,\s*[^,()]+,\s*(\d+(?:\.\d+)?)\s*\)")
 CAMPUSH_RE = re.compile(r"camPush\(\s*t\s*,\s*len\s*,\s*[^,()]+,\s*[^,()]+,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)")
 YAW_RE = re.compile(r"\byaw\s*:\s*(-?\d*\.?\d+)")
-BLUR_RE = re.compile(r"<Foreground\b|url\(#blur(?:3|6|10|16)\)|\bblur16\b")
+BLUR_RE = re.compile(r"<Foreground\b|url\(#blur(?:3|6|10|16)\)|\bblur16\b|\bfocus=")
 ORIENTED_HELPERS = ("tableSit(", "walkPose(", "carSit(", "bedSit(")
 
 
@@ -40,11 +40,12 @@ def measure(project: Path, slug: str) -> dict:
     tl = json.loads((ep_dir / "timeline.json").read_text(encoding="utf8")) if (ep_dir / "timeline.json").exists() else {}
 
     heroes = {"0": 0, "1": 0, "2": 0, "3+": 0}
-    oriented = blur = 0
+    oriented = blur = staged = 0
     zooms = []
     yaws = []
     for body in bodies.values():
-        n = len(re.findall(r"<Hero\b", body))
+        n = len(re.findall(r"<(?:Hero|Staged|Person)\b", body))
+        staged += 1 if "<Staged" in body else 0
         heroes["3+" if n >= 3 else str(n)] += 1
         ys = [float(y) for y in YAW_RE.findall(body)]
         yaws += ys
@@ -70,6 +71,7 @@ def measure(project: Path, slug: str) -> dict:
         "yaw_values_written": len(yaws),
         "yaw_abs_ge_0_6": sum(abs(y) >= 0.6 for y in yaws),
         "shots_with_foreground_blur": blur,
+        "shots_on_stage": staged,
         "distinct_sets_in_episode_json": len(sets),
         "sizes": sizes,
         "zoom_min": min(zooms) if zooms else None,

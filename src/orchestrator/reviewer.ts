@@ -93,8 +93,8 @@ export function staticMetrics(shotsRaw: string): string {
   for (const body of parts) {
     const yaws = [...body.matchAll(/\byaw\s*:\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
     if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(/.test(body)) oriented++;
-    if (/<Foreground\b|blur16/.test(body)) blur++;
-    if ((body.match(/<Hero\b/g) ?? []).length >= 3) group3++;
+    if (/<Foreground\b|blur16|\bfocus=/.test(body)) blur++;
+    if ((body.match(/<(Hero|Staged|Person)\b/g) ?? []).length >= 3) group3++;
   }
   return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus`;
 }

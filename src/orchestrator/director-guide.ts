@@ -4,6 +4,42 @@
  * skill (references/look.md, kit.md, traps.md), plus the 9:16 geometry measured from engine/episode.tsx.
  * Keep it short: it is paid for on every step of every turn.
  */
+/** How to place people in depth. Sent only when the project's engine has src/engine/stage.tsx (the overlay). */
+export const STAGE_GUIDE = `## Stage: place people on the ground (this project's engine has it)
+Prefer <Stage> to literal x / y / scale for every shot with people in a room or outdoors: it computes position, size,
+what hides what, the contact shadow and how far things feel.
+
+const G = roomGround(CLS); // or STUDY, BEDROOM, KITCHEN, OUTDOOR, any makeRoom box
+const DESK = { u: 0.43, w: 0.27 };
+export const S4: React.FC<ShotProps> = ({ t, len }) => (
+  <g transform={camT(900, 575, 1.1)}>
+    <Stage ground={G}>
+      <ClassroomShell t={t} id="s4" tokens={TOKENS} board={BOARD} deskProps={false} />
+      <Staged at={{ u: 0.4, w: 0.08 }} look={PROF} pose={{ yaw: 2, armL: { a: 150, b: 20 } }} />
+      <DeskAt at={DESK} tokens={TOKENS} />
+      <Staged at={deskSeat(DESK)} seated body="teen" look={STUDENT} pose={{ yaw: 2 }} />
+      <Staged at={{ u: 0.68, w: 0.46 }} look={LEO} rimId="rimL" pose={{ yaw: -0.5, facing: -1, ...actPose('idle', t) }} />
+      <Staged at={{ u: 0.36, w: 0.6 }} body="teen" look={LOU} pose={{ yaw: 0.5, ...actPose('talk', t), talk: talkAt(t, len) }} />
+    </Stage>
+  </g>
+);
+
+- \`at\`: u is across the floor (0 left wall, 1 right wall), w is depth (0 back wall, 1 at the camera). Do not put x, y or scale in the pose.
+- Depth guide: w 0.05-0.2 background (small), 0.3-0.5 middle, 0.55-0.7 foreground (large), above 0.75 only as a figure cut by the frame edge.
+- True perspective makes near people big, and they hide what is behind them: put the near person on one side and leave the far subject visible
+  in the gap. Three depths read better than three people in a row.
+- In 9:16 at zoom about 1.1, keep u within 0.2-0.8 at the back and 0.3-0.7 in front, or the person is cut by the frame.
+- \`body\`: "adult" (default) or "teen" set the proportions and the height; defineBody('adult', { chest: 1.25, belly: 16, arm: 14, leg: 15 }) makes your own. \`seated\` sits the character at chair height; deskSeat(desk) is the place at a <DeskAt at={desk}>.
+- Stage sorts its DIRECT children by depth, so write them in any order. A custom component that holds several people is sorted as one block.
+  Give your own component an \`at\` or a numeric \`depth\` prop, or wrap SVG in <StageItem depth={0.4}>, to place it in depth (\`w\` means width on engine components).
+  A child with no depth written before the first placed element is background; written after it, foreground (a <Foreground> amorce).
+- A set that draws its own furniture stays behind everyone: use ClassroomShell + DeskAt when people go between the desks.
+- \`focus={0.6}\` on Stage keeps that depth sharp and softens the rest (close-ups, one shot in three at most).
+- Not a room? planeGround({ x0, x1, far: { y, scale }, near: { y, scale } }) for a deck or a side-on ground, or at={{ x, y, scale, w }} for
+  anything else (y is the floor point under the feet). Outside a Stage use <Person body="teen" pose={...}> (same pose as <Hero>, x / y / scale in the pose).
+- Hands and props with a body other than adult: handOf(pose, 'R', body), reachOf(pose, target, 'R', body), grabOf(t, pose, from, to, 10, 28, 'R', body), or simply the handRProp slot.
+- In profile both arms reach forward; yaw alone gives the direction, no need for facing.`;
+
 export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.tsx; this replaces the skill's references)
 
 ### Camera

@@ -3,6 +3,7 @@ import { C } from '../rig';
 import { S3, Box, makeRoom, pts } from '../room';
 import { WallTexture, RoomCorners, LightVeil, Dust } from '../light';
 import { WallBoard, PinBoard } from '../pieces';
+import { StageItem } from '../stage';
 import { FONT } from '../fonts';
 
 // The classroom: windows on the left wall, the board on the back wall (`board` sets what is written on it),
@@ -133,6 +134,16 @@ const KidDesk: React.FC<{ u: number; w: number; len: number; desk: Furniture; me
 };
 
 /** `len` is a desk's length across (0.14 a single desk, 0.4 a lecture-hall bench): one classmate sits per 0.14. */
+/** One classmate's desk as a stage element: it sorts with the people around it. Use with <ClassroomShell>. */
+export const DeskAt: React.FC<{ at: { u: number; w: number }; len?: number; tokens?: Partial<ClassTokens> }> = ({ at: { u, w }, len = 0.14, tokens }) => (
+  <StageItem depth={w}>
+    <polygon points={CLS.Q([[u - 0.01, 1, w - 0.01], [u + len + 0.01, 1, w - 0.01], [u + len + 0.01, 1, w + 0.07], [u - 0.01, 1, w + 0.07]])} fill="#000" opacity={0.22} />
+    <KidDesk u={u} w={w} len={len} desk={{ ...CLASS_DEFAULT.desk, ...tokens?.desk }} metal={tokens?.metal ?? CLASS_DEFAULT.metal} />
+  </StageItem>
+);
+/** Where the person using a desk sits: on the camera side of it, facing the board. `seat` for a bench's other places. */
+export const deskSeat = (desk: { u: number; w: number }, seat = 0) => ({ u: desk.u + 0.07 + seat * 0.14, w: desk.w + 0.08 });
+
 export type DeskRow = { w: number; us: number[]; len?: number };
 export const DESK_ROWS_DEFAULT: DeskRow[] = [
   { w: 0.36, us: [0.3, 0.55] },
@@ -343,6 +354,9 @@ export const Classroom: React.FC<{
     </g>
   );
 };
+
+/** The room without desks or classmates: put <DeskAt> and characters on a <Stage> so they sort by depth. */
+export const ClassroomShell: React.FC<Omit<React.ComponentProps<typeof Classroom>, 'rows' | 'kids'>> = (p) => <Classroom {...p} rows={[]} kids={false} />;
 
 /** The hero's own desk in the classroom, toward the classroom's vanishing point. */
 export const SchoolDesk: React.FC<{ x: number }> = ({ x }) => {

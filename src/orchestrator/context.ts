@@ -4,7 +4,7 @@ import type { ChatMessage, ImagePart, ToolCall } from './providers/types.js';
 import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { engineDigest } from './engine-digest.js';
-import { DIRECTOR_GUIDE } from './director-guide.js';
+import { DIRECTOR_GUIDE, STAGE_GUIDE } from './director-guide.js';
 
 /** Count spoken words in an episode script, stripping [audio tags] and <xml> markers consistently everywhere. */
 export function countScriptWords(script: unknown): number {
@@ -543,6 +543,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'system', content: ENGINE_CHEAT },
     { role: 'system', content: DIRECTOR_GUIDE },
+    ...(fs.existsSync(path.join(opts.projectRoot, 'src', 'engine', 'stage.tsx')) ? [{ role: 'system' as const, content: STAGE_GUIDE }] : []),
     {
       role: 'system',
       content: `## Every engine export and its props (generated from src/engine)\n${engineDigest(opts.projectRoot)}\n\nThis listing is the contract: do not read src/engine/*.tsx again unless a typecheck or a render error names a specific line.`,
