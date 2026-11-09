@@ -11,15 +11,15 @@ what hides what, the contact shadow and how far things feel.
 
 const G = roomGround(CLS); // or STUDY, BEDROOM, KITCHEN, OUTDOOR, any makeRoom box
 const DESK = { u: 0.43, w: 0.27 };
-export const S4: React.FC<ShotProps> = ({ t, len }) => (
+export const S4: React.FC<ShotProps> = ({ t }) => (
   <g transform={camT(900, 575, 1.1)}>
-    <Stage ground={G}>
+    <Stage ground={G} t={t}>
       <ClassroomShell t={t} id="s4" tokens={TOKENS} board={BOARD} deskProps={false} />
-      <Staged at={{ u: 0.4, w: 0.08 }} look={PROF} pose={{ yaw: 2, armL: { a: 150, b: 20 } }} />
+      <Staged at={{ u: 0.4, w: 0.08 }} look={PROF} yaw={2} pose={{ armL: { a: 150, b: 20 } }} />
       <DeskAt at={DESK} tokens={TOKENS} />
-      <Staged at={deskSeat(DESK)} seated body="teen" look={STUDENT} pose={{ yaw: 2 }} />
-      <Staged at={{ u: 0.68, w: 0.46 }} look={LEO} rimId="rimL" pose={{ yaw: -0.5, facing: -1, ...actPose('idle', t) }} />
-      <Staged at={{ u: 0.36, w: 0.6 }} body="teen" look={LOU} pose={{ yaw: 0.5, ...actPose('talk', t), talk: talkAt(t, len) }} />
+      <Staged at={deskSeat(DESK)} seated look={STUDENT} yaw={2} />
+      <Staged at={{ u: 0.68, w: 0.46 }} look={LEO} rimId="rimL" yaw={-0.5} act="cross-arms" />
+      <Staged at={{ u: 0.36, w: 0.6 }} look={LOU} yaw={0.5} act="talk" />
     </Stage>
   </g>
 );
@@ -39,6 +39,16 @@ export const S4: React.FC<ShotProps> = ({ t, len }) => (
   anything else (y is the floor point under the feet). Outside a Stage use <Person body="teen" pose={...}> (same pose as <Hero>, x / y / scale in the pose).
 - Hands and props with a body other than adult: handOf(pose, 'R', body), reachOf(pose, target, 'R', body), grabOf(t, pose, from, to, 10, 28, 'R', body), or simply the handRProp slot.
 - In profile both arms reach forward; yaw alone gives the direction, no need for facing.
+
+### Actions
+Name what the person does: \`act\` needs <Stage t={t}>. The feet stay on the ground by themselves, and the near arm is used automatically.
+- Gestures (loop, upper body): idle talk explain question shrug think point hold phone cross-arms hands-hips pockets cheer wave type eat nod shake.
+- Clips (once, from frame \`from\`, length \`dur\`): stand-up sit-down startle jump slump bow pick-up. Loops: walk run sneak.
+  <Staged at={...} look={LOU} yaw={1} act="stand-up" from={12} />. Moving across the room: compute \`at\` from t and use act="walk".
+- \`stance\` is the lower body under a gesture: sit kneel crouch. <Staged stance="sit" act="explain" />. A clip brings its own legs.
+- Turn on a beat: pose={turnAt(t, [[0, 0.5], [18, 2]])} goes through a blink, so the change of drawing is not seen.
+- Two people together: <Duo a={{ at, look }} b={{ at, look }} action="handshake" from={10} /> with handshake give hug push whisper; \`prop\` is what 'give' passes. They face each other and step closer if too far apart.
+- Anything else: keyframes with poseAt in \`pose\`; \`pose\` overrides \`act\`.
 
 ### Characters: build them with cast()
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'], face: { marks: 'freckles' } }); then look={LOU} (the body comes with it).

@@ -538,7 +538,7 @@ test('engine overlay: adds the template classroom and the character views, patch
     assert.deepEqual(first.patched.sort(), ['src/engine/furnish.tsx', 'src/engine/index.ts', 'src/engine/rig.tsx']);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
     assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
     assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
     assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
@@ -681,6 +681,50 @@ test('shots audit: two characters cannot share a bare seed', async () => {
     assert.match(shotsAudit(dir, 'room', ep, tl) ?? '', /used for two characters/);
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const A = cast({ seed: 'x' });\nconst B = cast({ seed: 'y' });\n${body}`);
     assert.doesNotMatch(shotsAudit(dir, 'room', ep, tl) ?? '', /used for two characters/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('actions: clips go from their first pose to their last, the near arm gestures, unknown names list the known ones', async () => {
+  const ts = (await import('typescript')).default;
+  const src = fs.readFileSync(new URL('../engine-overlay/files/src/engine/actions.ts', import.meta.url), 'utf8');
+  const out = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-act-'));
+  const file = path.join(dir, 'actions.mjs');
+  fs.writeFileSync(file, out);
+  try {
+    const { act, clip, gesture, turnAt, CLIPS, GESTURES } = await import(file);
+    assert.ok(CLIPS.length >= 10 && GESTURES.length >= 18);
+
+    assert.equal(clip('stand-up', 0, { from: 0 }).legL.a, 78, 'stand-up starts seated');
+    assert.equal(clip('stand-up', 100, { from: 0 }).legL.a, 5, 'and ends standing');
+    assert.equal(clip('stand-up', 15, { from: 20 }).legL.a, 78, 'holds its first pose before it starts');
+    assert.equal(clip('stand-up', 46, { from: 20 }).legL.a, 5, 'and counts its length from `from`');
+    assert.equal(clip('stand-up', 26, { from: 20 }).legL.a, 78, 'still seated at the start of its anticipation');
+    assert.equal(clip('sit-down', 100, { from: 0 }).legL.a, 78, 'sit-down ends seated');
+    assert.ok(clip('jump', 14, { from: 0 }).lift > 40, 'a jump leaves the ground');
+    assert.equal(clip('jump', 100, { from: 0 }).lift, 0, 'and lands');
+    assert.ok(clip('slump', 100, { yaw: 1 }).tilt > 0 && clip('slump', 100, { yaw: -1 }).tilt < 0, 'leans the way it faces');
+    assert.ok(clip('slump', 100, { yaw: 1 }).headTilt > 0 && clip('slump', 100, { yaw: -1 }).headTilt < 0, 'head tips the way it faces');
+    assert.equal(clip('slump', 100, { yaw: 0 }).tilt, 0, 'no sideways lean face-on');
+    assert.ok(clip('bow', 10, { dur: 10, yaw: 1 }).tilt !== clip('bow', 10, { dur: 40, yaw: 1 }).tilt, 'dur changes the timing');
+
+    const right = gesture('point', 10, { yaw: 0.6 });
+    const left = gesture('point', 10, { yaw: -0.6 });
+    assert.equal(right.handR, 'point');
+    assert.equal(left.handL, 'point', 'facing left the near arm is the other one');
+    assert.deepEqual(left.armL, right.armR);
+    assert.notDeepEqual(gesture('cross-arms', 0, { yaw: 1 }).armR, gesture('cross-arms', 0, { yaw: 0 }).armR, 'folded arms have a side-on shape');
+    assert.ok(Math.abs(gesture('talk', 3, { amp: 1.5 }).armR.a - 48) > Math.abs(gesture('talk', 3, { amp: 1 }).armR.a - 48), 'amp widens a gesture');
+
+    assert.deepEqual(turnAt(100, [[0, 0.5], [18, 2]]), { yaw: 2, blink: 0 });
+    assert.equal(turnAt(20, [[0, 0.5], [18, 2]]).blink, 1, 'turns through a blink');
+    assert.equal(turnAt(0, [[0, 0.5], [18, 2]]).yaw, 0.5);
+
+    assert.equal(act('explain', 5).talk !== undefined, true, 'act resolves a gesture');
+    assert.ok(act('walk', 5).legL, 'and a clip');
+    assert.throws(() => act('moonwalk', 0), /unknown action "moonwalk".*explain.*stand-up/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -38,11 +38,12 @@ export type Body = {
   /** extra depth of the belly in profile, in units */ belly: number;
   shoulder: P; hip: number; upperArm: number; foreArm: number; thigh: number; shin: number;
   /** width of the arms and of the legs */ arm: number; leg: number;
+  /** how it moves, relative to an adult */ amp?: number; tempo?: number;
 };
 export type BodyId = 'adult' | 'teen';
 export const BODIES: Record<BodyId, Body> = {
   adult: { head: 1, chest: 1, torso: 1, belly: 0, shoulder: { x: 42, y: -108 }, hip: 17, upperArm: 62, foreArm: 58, thigh: 72, shin: 68, arm: 11, leg: 12 },
-  teen: { head: 0.98, chest: 0.88, torso: 0.93, belly: 0, shoulder: { x: 37, y: -100 }, hip: 15, upperArm: 58, foreArm: 54, thigh: 66, shin: 62, arm: 10, leg: 11 },
+  teen: { head: 0.98, chest: 0.88, torso: 0.93, belly: 0, shoulder: { x: 37, y: -100 }, hip: 15, upperArm: 58, foreArm: 54, thigh: 66, shin: 62, arm: 10, leg: 11, amp: 1.1, tempo: 1.08 },
 };
 /** Your own proportions from a base body: defineBody('adult', { chest: 1.25, belly: 16, arm: 14, leg: 15 }). */
 export const defineBody = (base: BodyId, over: Partial<Body>): Body => ({ ...BODIES[base], ...over });

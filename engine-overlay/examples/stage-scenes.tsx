@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hero, makeLook, basePose, actPose, talkAt, camT, ShotProps, ClassroomShell, Classroom, CLS, CLASS_MOODS, FONT, Stage, Staged, roomGround, planeGround, DeskAt, deskSeat, Outdoor, OUTDOOR, Rooftop, walkPose, cast } from '../../engine';
+import { Hero, makeLook, basePose, actPose, talkAt, camT, ShotProps, ClassroomShell, Classroom, CLS, CLASS_MOODS, FONT, Stage, Staged, roomGround, planeGround, DeskAt, deskSeat, Outdoor, OUTDOOR, Rooftop, walkPose, cast, Duo } from '../../engine';
 
 const PROF = makeLook({ skin: '#C68A5B', jacket: '#5A3E68', accent: '#F6EFE3', hair: '#3A2A20', extra: 'suit' });
 const LOU = makeLook({ skin: '#F2C9A8', jacket: '#E05780', accent: '#FFE5EC', hair: '#5B3A24', extra: 'bob' });
@@ -63,6 +63,19 @@ export const Cast: React.FC<ShotProps> = ({ t, len }) => (
       <Staged at={deskSeat(DESK)} seated look={C_NOOR} pose={{ yaw: 0.45, armL: { a: 30, b: 50 }, armR: { a: 30, b: 50 } }} />
       <Staged at={{ u: 0.68, w: 0.46 }} look={C_LEO} rimId="rimL" pose={{ yaw: -0.5, ...actPose('idle', t) }} />
       <Staged at={{ u: 0.4, w: 0.08 }} look={C_PROF} pose={{ yaw: 2, armL: { a: 150, b: 20 } }} />
+    </Stage>
+  </g>
+);
+
+// actions by name: a clip, a gesture on a stance, two people together
+export const Actions: React.FC<ShotProps> = ({ t }) => (
+  <g transform={cam}>
+    <Stage ground={G} t={t}>
+      <ClassroomShell t={t} id="sa2" tokens={CLASS_MOODS.day} board={BOARD} deskProps={false} />
+      <Staged at={{ u: 0.4, w: 0.08 }} look={C_PROF} yaw={2} pose={{ armL: { a: 150, b: 20 } }} />
+      <DeskAt at={DESK} tokens={CLASS_MOODS.day} />
+      <Staged at={deskSeat(DESK)} look={C_NOOR} yaw={0.45} stance="sit" act="phone" />
+      <Duo a={{ at: { u: 0.36, w: 0.56 }, look: C_LOU }} b={{ at: { u: 0.66, w: 0.5 }, look: C_LEO, rimId: 'rimL' }} action="give" from={0} prop={<rect x={-14} y={-20} width={28} height={36} rx={4} fill="#F2545B" stroke="#1E1824" strokeWidth={3} />} />
     </Stage>
   </g>
 );

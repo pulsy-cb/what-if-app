@@ -27,6 +27,10 @@ Behaviour change worth knowing: with the overlay, a `yaw` of 0.72 or more (and `
 
 `person.tsx` is the rig redrawn from measurements: `<Person body="teen" pose={...} />` takes the same pose and slots as `<Hero>`. An adult seen from the front is pixel-identical to `<Hero>`. Bodies are data (`BODIES`, `defineBody`). In profile the arms reach forward, seated legs foreshorten from the front and back, and `yaw` alone gives the direction. Hands and props use `handOf`, `ikArmOf`, `reachOf`, `grabOf`, which take the body. `<Staged>` renders a `Person`.
 
+## Actions
+
+`actions.ts` holds stances, gestures and clips as plain pose values. `<Staged act="explain" stance="sit" />` or `act="stand-up" from={12}` needs `<Stage t={t}>`; the feet stay on the ground by themselves. `<Duo a b action="handshake" />` makes two people act together (handshake, give, hug, push, whisper). `turnAt` changes view through a blink. `examples/actions-sheets.tsx` renders the motion sheets.
+
 ## cast
 
 `cast({ seed, body, kind, skin, hair, face, outfit, acc })` builds a character in one line (`cast.ts`), drawn by `hair.tsx`, `face-parts.tsx` and `wardrobe.tsx`. What is not given comes from `seed`, reproducibly. Unknown names throw with the list of known ones. A `Person` without `cast` is untouched. `examples/cast-sheets.tsx` renders the review sheets.
