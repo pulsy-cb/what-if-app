@@ -17,7 +17,11 @@ export const S2 = shot({ place: ROOM, cam: 'wide', people: [
   { who: PROF, at: { u: 0.22, w: 0.3 }, yaw: 0.45, act: 'explain', face: 'happy' },
   { who: LOU, on: 'd4', yaw: -2 },
 ] });
-export const S3 = shot({ place: ROOM, cam: 'close', on: 0, people: [{ who: LOU, on: 'd4', yaw: 0.45, act: 'think', face: [[0, 'neutral'], [18, 'shock']] }] });
+// the line: "Lou leva les yeux (f 4) et vit (f 16) le prof qui la fixait (f 30)": each moment lands on its word
+export const S3 = shot({ place: ROOM, cam: 'medium', on: 0, beats: [{ at: 30, cam: 'close', on: 1 }], people: [
+  { who: LOU, on: 'd4', yaw: -2, act: 'type', face: 'neutral', beats: [{ at: 4, look: 1, act: 'idle' }, { at: 16, face: 'shock' }] },
+  { who: PROF, at: { u: 0.25, w: 0.3 }, look: 0, act: 'cross-arms', face: 'neutral', beats: [{ at: 30, face: 'smug', reach: { to: 'd4' } }] },
+] });
 export const S4 = shot({ place: ROOM, cam: 'wide', duo: { a: { who: LOU, at: { u: 0.36, w: 0.55 } }, b: { who: PROF, at: { u: 0.62, w: 0.55 } }, action: 'handshake', from: 10 } });
 
 Every shot of a place reuses the same \`place(...)\` constant, so layout and props stay identical from shot to shot. Register S1, S2... in index.tsx as usual.
@@ -26,6 +30,13 @@ Every shot of a place reuses the same \`place(...)\` constant, so layout and pro
 - \`on\`: index in \`people\` the camera follows (default 0). \`move\`: 'push' (default slow push-in) | 'pull' | 'still'. \`focus\`: depth kept sharp, the rest softens; use it in about one shot in three (or a foreground amorce: \`extra: () => <Foreground blur={16}>…</Foreground>\`).
 - \`people\`: [{ who, at or on, seat, yaw, act, from, dur, stance, face, pose, rimId, headGear, torsoGear, handLProp, handRProp }]. at = { u, w } on the floor, or (t, len) => ({ u, w }) to walk across with act: 'walk'. on = a piece's id (or name): sits there, \`seat\` picks which place.
 - \`face\`: one expression, or [frame, expression] pairs. \`pose\`: any pose field, or (t, len) => ({...}) for keyframes; it overrides \`act\`.
+- \`look\`: index of the person to turn toward. \`reach\`: { to } a hand goes to a person (index, part: 'head' | 'chest' | 'hand'), a piece id, or { u, w, v }.
+**Rhythm: every shot with people plays at least one moment on a word of its line** (the audit refuses a board where more than 1 shot in 5 changes nothing).
+The frame of each word is given per shot in "When each word is said" (word@frame). Put the moment on the word it illustrates:
+- person \`beats: [{ at, act, face, yaw, look, reach }]\`: from that frame the person does that (a clip like startle starts there; reach: null lets go).
+- shot \`beats: [{ at, cam, on, shake }]\`: a punch-in on the key word (cam: 'close'), a cut to the person who reacts (on: 1), a shake on an impact.
+- Act what the narrator says: someone touches, takes, looks, turns, reacts. \`idle\` alone and \`talk\` on a person who is not speaking are not acting.
+- To fix one shot later, send it whole with edit_shot { episode, id: 'S7', code: 'export const S7 = shot({...});' }: no need to read shots.tsx first.
 - \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
 **place(name, { mood, palette, add, remove, pieces, slots, lights })**
 - Names: classroom bedroom kitchen living office restaurant blank. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.

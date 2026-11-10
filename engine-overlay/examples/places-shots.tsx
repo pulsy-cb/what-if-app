@@ -50,3 +50,17 @@ const laundry = place('blank', {
 });
 export const SLaundry = shot({ place: laundry, cam: 'establishing', move: 'still' });
 export const SWalk = shot({ place: laundry, cam: 'wide', people: [{ who: sam, at: (t, len) => ({ u: 0.3 + (0.3 * t) / len, w: 0.35 }), yaw: 1, act: 'walk' }, { who: lou, on: 'fold', yaw: 2, face: [[0, 'neutral'], [10, 'shock']] }] });
+
+// Several moments in one shot, set on the words: "J'ai soulevé (f 8) les cheveux derrière l'oreille (f 30) de mon client (f 48)".
+const salon = place('blank', { mood: 'dusk', palette: { wall: '#6E5661', floor: '#7A5C49' }, pieces: [{ p: 'chair', id: 'seat', at: { u: 0.5, w: 0.36 } }, { p: 'counter', at: { u: 0.7, w: 0 }, len: 0.24 }] });
+const nora = cast({ seed: 'nora', kind: 'fem', hair: 'bun', outfit: ['blazer:plum', 'skirt'] });
+const miles = cast({ seed: 'miles', kind: 'masc', hair: 'buzz', outfit: ['coat:black', 'jeans'] });
+export const SBeats = shot({
+  place: salon,
+  cam: 'wide',
+  beats: [{ at: 30, cam: 'medium', on: 1 }, { at: 48, shake: 8 }],
+  people: [
+    { who: miles, on: 'seat', yaw: -0.45, act: 'idle', face: 'neutral', beats: [{ at: 48, act: 'startle', face: 'shock' }] },
+    { who: nora, at: { u: 0.36, w: 0.4 }, look: 0, act: 'idle', face: 'neutral', beats: [{ at: 8, reach: { to: 0 } }, { at: 30, face: 'shock' }, { at: 48, reach: null, act: 'shrug' }] },
+  ],
+});

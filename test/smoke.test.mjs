@@ -466,7 +466,7 @@ test('reviewer: reads the contact sheets and the measured counts, not the tall s
     `export const S3 = ({ t }) => <g><Foreground blur={16}><Hero look={A} pose={tableSit(700)} /></Foreground></g>;\n`;
   assert.equal(
     staticMetrics(shots),
-    '2/3 plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · 1/3 plans avec amorce floue · 1 plans à 3 personnages ou plus',
+    "2/3 plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · 1/3 plans avec amorce floue · 1 plans à 3 personnages ou plus · 3 plans avec personnages où rien ne change pendant le plan · 0 plans où l'unique action est idle",
   );
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rev-'));
@@ -753,8 +753,10 @@ test('shot(): the audit sees its people and its motion, and a wrong name at the 
   const write = (body) => fs.writeFileSync(path.join(epDir, 'shots.tsx'), ids.map((id) => `export const ${id} = shot({ place: ROOM, ${body} });\n`).join(''));
   const audit = () => shotsAudit(dir, 'room', ep, tl) ?? '';
   try {
+    write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 0.5 }, yaw: 0.45, act: 'talk', beats: [{ at: 12, face: 'shock' }] }]`);
+    assert.equal(audit(), '', 'a described shot with a moment passes as it is');
     write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 0.5 }, yaw: 0.45, act: 'talk' }]`);
-    assert.equal(audit(), '', 'a described shot passes as it is');
+    assert.match(audit(), /4\/4 shots with people change nothing while they play \(S1, S2, S3, S4\)/, 'a shot that only loops one action is refused');
     write(`cam: 'wide', duo: { a: { who: A, at: { u: 0.3, w: 0.5 } }, b: { who: B, at: { u: 0.6, w: 0.5 } }, action: 'hug' }`);
     assert.equal(audit(), '', 'so does a duo');
     write(`cam: 'wide', people: []`);
@@ -906,5 +908,108 @@ test('modern prompt: a project with shot() is never told to draw with Hero and p
     assert.doesNotMatch(text, /### Choosing the set/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rhythm: words land on frames, the pace follows the length, the reviewer sees still and long shots', async () => {
+  const { timedChanges, paceTarget, paceProblem } = await import('../dist/tools/whatif.js');
+  const { shotWordFrames } = await import('../dist/orchestrator/context.js');
+  const { timingMetrics, formatReviewFeedback } = await import('../dist/orchestrator/reviewer.js');
+  assert.equal(timedChanges(`export const S1 = shot({ people: [{ who: A, act: 'idle', face: 'happy' }] });`), 0);
+  assert.equal(timedChanges(`export const S1 = shot({ people: [{ who: A, beats: [{ at: 12, act: 'startle' }] }] });`), 1);
+  assert.equal(timedChanges(`export const S1 = shot({ beats: [{ at: 30, cam: 'close' }], people: [{ who: A, at: { u: 0.2, w: 0.4 }, face: [[0, 'happy'], [20, 'shock']] }] });`), 2, 'a floor position is not a moment; a camera beat and a later face are');
+
+  assert.deepEqual([paceTarget(20).minCutsPerMin, paceTarget(89).minCutsPerMin, paceTarget(962).minCutsPerMin], [24, 20, 10]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-pace-'));
+  const ep = path.join(dir, 'src', 'episodes', 'e');
+  fs.mkdirSync(ep, { recursive: true });
+  try {
+    const tl = (n, len) => ({ fps: 30, total: n * len, shots: Array.from({ length: n }, (_, i) => ({ id: `S${i + 1}`, len })), segments: Array.from({ length: n }, (_, i) => ({ shot: `S${i + 1}`, a: i * len, b: (i + 1) * len, t0: 0 })) });
+    fs.writeFileSync(path.join(ep, 'timeline.json'), JSON.stringify(tl(36, 801)));
+    assert.match(paceProblem(dir, 'e'), /PACE TOO SLOW for a long video .* 36 shots over 961\.2s/, 'the y-school case: 36 shots for 16 min');
+    fs.writeFileSync(path.join(ep, 'timeline.json'), JSON.stringify(tl(214, 135)));
+    assert.equal(paceProblem(dir, 'e'), null, '4.5 s shots pass for a long video');
+    fs.writeFileSync(path.join(ep, 'timeline.json'), JSON.stringify(tl(28, 96)));
+    assert.match(paceProblem(dir, 'e'), /short \(under 2\.5 min\)/, '3.2 s shots are too slow for a short now');
+
+    fs.writeFileSync(path.join(ep, 'timeline.json'), JSON.stringify({ fps: 30, total: 120, shots: [{ id: 'S1', len: 60 }, { id: 'S2', len: 60 }], segments: [{ shot: 'S1', a: 0, b: 60, t0: 0 }, { shot: 'S2', a: 60, b: 120, t0: 0 }] }));
+    fs.writeFileSync(path.join(ep, 'words.json'), JSON.stringify([{ w: "J'ai", s: 0 }, { w: 'soulevé,', s: 0.4 }, { w: 'Mes', s: 2.1 }, { w: 'ciseaux', s: 2.5 }]));
+    assert.deepEqual(shotWordFrames(dir, 'e'), ["S1 (60f): J'ai@0 soulevé@12", 'S2 (60f): Mes@3 ciseaux@15'], 'frames are the shot\'s own clock, punctuation dropped');
+    assert.deepEqual(shotWordFrames(dir, 'e', ['S2']), ['S2 (60f): Mes@3 ciseaux@15']);
+    const report = { ok: true, pass: false, model: 'm', episode: 'e', summary: 's', issues: [{ shot: 'S2', severity: 'error', problem: 'p', fix: 'f' }], createdAt: '' };
+    assert.match(formatReviewFeedback(report, 'e', shotWordFrames(dir, 'e', ['S2'])), /mot@image[\s\S]*S2 \(60f\): Mes@3 ciseaux@15/);
+    assert.match(timingMetrics(tl(3, 300)), /médiane 10\.0 s, la plus longue 10\.0 s .* 3 plan\(s\) de plus de 6 s \(S1, S2, S3\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('edit_shot: one shot is replaced by its id, its neighbours and their comments stay', async () => {
+  const { replaceShot } = await import('../dist/tools/fs.js');
+  const src = "import x;\nexport const S1 = shot({ a: 1 });\n// S2 — gros plan\nexport const S2 = shot({ b: 2 });\n\nexport const S3 = () => null;\n";
+  const two = replaceShot(src, 'S2', 'export const S2 = shot({ b: 9 });');
+  assert.equal(two.replaced, true);
+  assert.equal(two.text, "import x;\nexport const S1 = shot({ a: 1 });\n// S2 — gros plan\nexport const S2 = shot({ b: 9 });\n\nexport const S3 = () => null;\n");
+  const one = replaceShot(src, 'S1', 'export const S1 = shot({ a: 7 });').text;
+  assert.match(one, /S1 = shot\(\{ a: 7 \}\);\n+\/\/ S2 — gros plan\nexport const S2 = shot\(\{ b: 2 \}\)/, 'the comment of S2 stays above S2');
+  assert.equal(replaceShot(src, 'S3', 'export const S3 = () => 1;').text.endsWith('export const S3 = () => 1;\n'), true, 'the last shot runs to the end');
+  const added = replaceShot(src, 'S4', 'export const S4 = () => 4;');
+  assert.equal(added.replaced, false);
+  assert.match(added.text, /S3 = \(\) => null;\n\nexport const S4 = \(\) => 4;\n$/);
+  const tool = fsTools.find((t) => t.name === 'edit_shot');
+  assert.match(tool.validate({ episode: 'e', id: 'S2', code: 'const S2 = 1' }), /must start with `export const S2 =`/);
+  assert.equal(tool.validate({ episode: 'e', id: 'S2', code: '// gros plan\nexport const S2 = shot({});' }), null);
+});
+
+test('agent loop: the same render failure twice stops the turn instead of retrying for hours', async () => {
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-stop-'));
+  const db = new Db(path.join(dir, 'app.db'));
+  let renders = 0;
+  const registry = new ToolRegistry([
+    { name: 'whatif_run', description: 'r', policy: 'ask', schema: { type: 'object' }, run: async (a) => (a.step === 'render' ? (renders++, { ok: false, summary: `$ modal_render.py\nexit 124 (timeout)\n[modal] sources: ${renders}0.5 MB` }) : { ok: true, summary: 'ok' }) },
+    { name: 'read_file', description: 'r', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+    { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+  ]);
+  try {
+    fs.mkdirSync(path.join(dir, 'p'), { recursive: true });
+    db.createProject('p', 'p', path.join(dir, 'p'));
+    const th = db.createThread('p', 't');
+    db.addMessage(th.id, 'user', 'go');
+    let n = 0;
+    const provider = { id: 'x', label: 'x', model: 'm', chat: async () => {
+      n++;
+      // render, a successful read in between (what fooled the old loop-breaker), render again, then render forever
+      const name = n % 2 === 0 ? 'read_file' : 'whatif_run';
+      return { text: '', toolCalls: [{ id: `c${n}`, name, args: name === 'read_file' ? { path: 'x' } : { episode: 'e', step: 'render' } }] };
+    } };
+    const config = { ...loadConfig(), maxSteps: 20, reviewMaxRounds: 0, approvalsMode: 'off', contextChars: 90_000 };
+    await runTurn({ db, bus: { emit() {} }, config, registry, approvals: null, provider: () => provider, reviewProvider: () => null }, th.id, new AbortController().signal);
+    assert.equal(renders, 2, 'stops after the second identical failure');
+    const last = db.listMessages(th.id).at(-1);
+    assert.match(last.content, /Arrêt : render échoue toujours pour la même raison \(timeout\)/);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('engine overlay: hidden files of the overlay folder are never copied into a project', async () => {
+  const { applyEngineOverlay } = await import('../dist/tools/engine-overlay.js');
+  const overlay = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ovsrc-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-ovdst-'));
+  try {
+    fs.mkdirSync(path.join(overlay, 'files', 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'src', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(overlay, 'files', '.DS_Store'), 'x');
+    fs.writeFileSync(path.join(overlay, 'files', 'src', 'engine', '.DS_Store'), 'x');
+    fs.writeFileSync(path.join(overlay, 'files', 'src', 'engine', 'new.ts'), 'export const n = 1;\n');
+    const r = applyEngineOverlay(project, { overlayDir: overlay });
+    assert.deepEqual(r.added, ['src/engine/new.ts']);
+    assert.equal(fs.existsSync(path.join(project, '.DS_Store')), false);
+  } finally {
+    fs.rmSync(overlay, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true });
   }
 });

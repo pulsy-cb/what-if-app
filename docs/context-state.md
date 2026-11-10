@@ -36,3 +36,11 @@
 ## Point d'arrêt (2026-11-09)
 - Étapes A à F livrées, audit du run fait : `docs/audits/audit-run-reel-2026-11-09.md`. Tests locaux 22/22.
 - Reste : pré-vol puis run réel sur l'autre machine (LLM, Modal, `:8005`, Docker jamais exécutés ici) ; décider de la promotion des pièces.
+
+## Audit des runs réels (2026-11-10)
+- `docs/audits/audit-runs-2026-11-10.md` : système complet et propre (6 erreurs au lieu de 112), mais 4 à 5 fois moins d’animation par plan, vidéo longue plafonnée à 36 plans, rendu et allers-retours trop longs.
+- En attente : décision de Pulsy (rythme cible des vidéos longues, ordre des chantiers ; recommandé : priorité 1).
+
+## Rythme et cohérence (2026-11-10)
+- Priorités 1 à 3 de l’audit faites, plus un premier lot de la priorité 4 : `docs/feature-plans/rythme-et-coherence.md`. Tests 26/26, simulation complète OK.
+- Reste : contrechamp, catalogue de lieux et d’extérieurs, personnage assis vu de face, angles ; mesurer un vrai short sur l’autre machine. Non commité.

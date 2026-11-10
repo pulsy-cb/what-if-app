@@ -146,7 +146,8 @@ export function modernSystemPrompt(): string {
   p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus**: passe l'objet à \`handRProp\` / \`handLProp\` ; il suit la main. Un objet posé va dans un slot ou dans \`extra\`. Jamais d'objet flottant loin des mains.
 `);
   p = p.replace('with imports, `makeLook` cast, shared custom set components, and shots', 'with imports, the cast(), the place() constants, and shots');
-  p = swapBlock(p, '   - **Custom Characters', '   - **Clock `t`', `   - **Write the shots with \`shot({...})\`** (see the shot() section): place, cam, people with an act and a face. A hand-written <Stage> or camT shot is the way out for what shot() cannot do; both mix in one episode.
+  p = swapBlock(p, '   - **Custom Characters', '   - **Clock `t`', `   - **Write the shots with \`shot({...})\`** (see the shot() section): place, cam, people with an act and a face, and **beats on the words** of each shot's line (their frames are pinned under "When each word is said"). A hand-written <Stage> or camT shot is the way out for what shot() cannot do; both mix in one episode.
+   - **Fixing a shot** after the audit or the reviewer: edit_shot { episode, id, code } with the whole new shot. Do not read shots.tsx back to quote it.
 `);
   p = swapBlock(p, '- Sets and characters: define ONE', '- Framing.', `- Places and characters: define each place once with place() and each character once with cast(), at the top of \`shots.tsx\`, and reuse them in every shot. Never invent external image/audio file paths.
 `);
@@ -423,6 +424,42 @@ export function pipelineTodo(projectRoot: string, history?: MessageRow[]): strin
 }
 
 /**
+ * When each word is said inside each shot, in the shot's own frames (0..len): what a beat needs to land on the word.
+ * Read from words.json (seconds) and timeline.json (each shot's segments). Empty when either is missing.
+ */
+export function shotWordFrames(projectRoot: string, slug: string, ids?: string[], maxWords = 40): string[] {
+  const dir = path.join(projectRoot, 'src', 'episodes', slug);
+  let words: any[] = [];
+  let tl: any = null;
+  try {
+    words = JSON.parse(fs.readFileSync(path.join(dir, 'words.json'), 'utf8'));
+    tl = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(words) || !Array.isArray(tl?.segments)) return [];
+  const fps = Number(tl.fps ?? 30);
+  const lens = new Map<string, number>((tl.shots ?? []).map((s: any) => [String(s.id), Number(s.len ?? 0)]));
+  const out: string[] = [];
+  const wanted = ids ?? [...lens.keys()];
+  for (const id of wanted) {
+    const segs = tl.segments.filter((s: any) => String(s.shot) === id);
+    if (!segs.length) continue;
+    const marks: string[] = [];
+    for (const w of words) {
+      const f = Math.round(Number(w.s ?? 0) * fps);
+      const seg = segs.find((s: any) => f >= Number(s.a) && f < Number(s.b));
+      if (!seg) continue;
+      const local = f - Number(seg.a) + Number(seg.t0 ?? 0);
+      const text = String(w.w ?? '').replace(/[^\p{L}\p{N}'-]/gu, '');
+      if (text) marks.push(`${text}@${local}`);
+    }
+    if (marks.length) out.push(`${id} (${lens.get(id) ?? '?'}f): ${marks.slice(0, maxWords).join(' ')}${marks.length > maxWords ? ' …' : ''}`);
+  }
+  return out;
+}
+
+/**
  * Pin the active episode's continuity bible, DIRECTOR.md, shared shots.tsx header (makeLook + set components),
  * last exported shot, and the remaining unexported shots (with frame lengths and spoken words) right in the
  * system header. This ensures small/Flash models never lose track of character looks, set props, or shot IDs
@@ -472,6 +509,10 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
   }
 
   if (tlShots.length > 1) {
+    // every shot's length and size, so the timeline never has to be read again
+    parts.push(
+      `### All shots (id len size)\n${tlShots.map((s) => `${s.id} ${s.len}f ${String(epShotsMap.get(String(s.id))?.size ?? s.size ?? '')}`.trim()).join(' · ')}`,
+    );
     const missing = tlShots.filter((s) => !exportedSet.has(String(s.id)));
     parts.push(
       `### Shots progress (${exportedIds.length}/${tlShots.length} exported in shots.tsx)\n` +
@@ -488,6 +529,8 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
         return `  - ${id}: len=${s.len}f (${(Number(s.len || 60) / 30).toFixed(1)}s), size="${size}", set="${set}", words="${note}"`;
       });
       parts.push(`### Next shots to write (use these exact IDs, lengths and sizes):\n${nextBatch.join('\n')}`);
+      const timing = shotWordFrames(projectRoot, slug, missing.slice(0, 12).map((s) => String(s.id)));
+      if (timing.length) parts.push(`### When each word is said in these shots (word@frame, the shot's own clock): put the beats on these frames\n${timing.join('\n')}`);
     }
   }
 

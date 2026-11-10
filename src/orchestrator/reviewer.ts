@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatMessage, ImagePart, Provider } from './providers/types.js';
 import { readText } from '../tools/paths.js';
+import { timedChanges } from '../tools/whatif.js';
 
 export type ReviewIssue = {
   shot: string;
@@ -44,7 +45,9 @@ Vérifie particulièrement ces 9 points critiques :
 5. **Cadrage & placement (16:9 ou 9:16)** :
    - Les personnages et objets tenus (handRProp / grabAt / handWorld) sont-ils bien cadrés, sans objet flottant loin des mains ni moitié d'écran vide ?
    - En 9:16 : un tiers ou plus du cadre vide (plafond ou sol sombre), un personnage coupé par le bord sans raison, trois personnages qui ne tiennent pas dans 900/zoom unités de large.
-6. **Mise en scène** :
+6. **Mise en scène et rythme** :
+   - Ce qui se passe à l'image suit-il ce que dit le narrateur au moment où il le dit (geste, regard, objet, réaction) ? Un personnage qui « parle » alors que le narrateur décrit une action, ou un plan où rien ne bouge pendant toute la réplique, est un défaut (les mesures automatiques comptent les plans figés).
+   - Un plan qui tient plus de 6 s sans évènement casse le rythme.
    - Les personnages sont-ils presque tous de face (les « Mesures automatiques » donnent le nombre de plans orientés) ? Deux personnes qui se parlent doivent se faire face (yaw opposés), pas regarder la caméra.
    - Un groupe de 3 est-il aligné à la même hauteur et à la même échelle, en rang ? Il doit être étagé en profondeur.
    - Les cadrages varient-ils (deux plans voisins de même taille et même angle sont un défaut) ? Y a-t-il au moins un plan large, un gros plan et un angle haut ou bas ?
@@ -96,13 +99,30 @@ export function staticMetrics(shotsRaw: string): string {
   let oriented = 0;
   let blur = 0;
   let group3 = 0;
+  let still = 0;
+  let idleOnly = 0;
   for (const body of parts) {
+    if (timedChanges(body) === 0 && /\bpeople\s*[=:]|<(Hero|Staged|Person)\b/.test(body)) still++;
+    const acts = [...body.matchAll(/\bact\s*[:=]\s*['"]([a-z-]+)/g)].map((m) => m[1]);
+    if (acts.length && acts.every((a) => a === 'idle')) idleOnly++;
     const yaws = [...body.matchAll(/\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
     if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{/.test(body)) oriented++;
     if (/<Foreground\b|blur16|\bfocus\s*[=:]/.test(body)) blur++;
     if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*:/g) ?? []).length >= 3) group3++;
   }
-  return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus`;
+  return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus · ${still} plans avec personnages où rien ne change pendant le plan · ${idleOnly} plans où l'unique action est idle`;
+}
+
+/** Shot lengths from timeline.json: a long held shot is the first thing that kills the pace. */
+export function timingMetrics(timeline: any): string {
+  const fps = Number(timeline?.fps ?? 30);
+  const shots = (Array.isArray(timeline?.shots) ? timeline.shots : []) as { id: string; len: number }[];
+  if (!shots.length) return '(pas de timeline)';
+  const secs = shots.map((s) => ({ id: String(s.id), s: Number(s.len ?? 0) / fps })).sort((a, b) => a.s - b.s);
+  const median = secs[Math.floor(secs.length / 2)]!.s;
+  const longest = secs[secs.length - 1]!;
+  const over = secs.filter((x) => x.s > 6).map((x) => x.id);
+  return `durée des plans : médiane ${median.toFixed(1)} s, la plus longue ${longest.s.toFixed(1)} s (${longest.id}) · ${over.length} plan(s) de plus de 6 s${over.length ? ` (${over.slice(0, 8).join(', ')})` : ''}`;
 }
 
 export function parseReviewJson(raw: string, model: string, episode: string): ReviewReport {
@@ -162,6 +182,12 @@ export async function reviewEpisodeBoard(
   const bibleRaw = readText(epDir, 'bible.json', 4_000) ?? '';
   const shotsRaw = readText(epDir, 'shots.tsx', 120_000) ?? '';
 
+  let timeline: any = null;
+  try {
+    timeline = JSON.parse(readText(epDir, 'timeline.json', 400_000) ?? 'null');
+  } catch {
+    timeline = null;
+  }
   let ep: any = {};
   try {
     ep = JSON.parse(epRaw);
@@ -200,7 +226,7 @@ export async function reviewEpisodeBoard(
     bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 2_000)}` : '',
     `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 3_500)}`,
     `## 5. Code des plans (shots.tsx)\n${summarizeShotsCode(shotsRaw)}`,
-    `## 6. Mesures automatiques (lues dans shots.tsx)\n${staticMetrics(shotsRaw)}`,
+    `## 6. Mesures automatiques (lues dans shots.tsx et timeline.json)\n${staticMetrics(shotsRaw)}\n${timingMetrics(timeline)}`,
     images.length
       ? `\n${images.length} planche(s) de contact jointe(s) (plans dans l'ordre, légende = numéro du plan, taille, début du texte)${sheetFiles.length > MAX_REVIEW_IMAGES ? `, les ${MAX_REVIEW_IMAGES} premières sur ${sheetFiles.length}` : ''}. Compare chaque vignette et le code des plans au récit et à DIRECTOR.md, puis renvoie ton verdict JSON.`
       : `\nInspecte la cohérence entre le récit, DIRECTOR.md et le code de shots.tsx, puis renvoie ton verdict JSON.`,
@@ -252,7 +278,7 @@ export function clearReviewBlock(projectRoot: string, slug: string): void {
   }
 }
 
-export function formatReviewFeedback(report: ReviewReport, slug: string): string {
+export function formatReviewFeedback(report: ReviewReport, slug: string, wordFrames: string[] = []): string {
   if (!report.ok) {
     return `[reviewer indépendant · ${report.model}] Audit de "${slug}" : NON VÉRIFIÉ (réponse illisible, deux essais). ${report.summary}\nContinue la chaîne : vérifie toi-même les planches de contact.`;
   }
@@ -276,6 +302,7 @@ export function formatReviewFeedback(report: ReviewReport, slug: string): string
     for (const err of errors) {
       lines.push(`- [${err.shot}] Problème : ${err.problem}\n  → Correctif : ${err.fix}`);
     }
+    if (wordFrames.length) lines.push(`\nMoment de chaque mot dans ces plans (mot@image, horloge du plan) pour placer les beats :\n${wordFrames.join('\n')}`);
     const rerunArgs = affectedShots.length ? `, args: ${JSON.stringify(affectedShots)}` : '';
     lines.push(
       `\nApplique ces corrections dans src/episodes/${slug}/shots.tsx (avec edit_file), relance uniquement les plans modifiés via whatif_run { episode: "${slug}", step: "stills"${rerunArgs} } puis whatif_run { episode: "${slug}", step: "board" }, et enchaîne ensuite sfx -> render -> master.`,

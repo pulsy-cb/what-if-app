@@ -348,11 +348,22 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
     for j in range(2, n + 1):
         dp[1][j] = seg_score(0, j)
 
+    # A shot far longer than max_dur never wins, so only look back a few max_dur from each end: this keeps a 16-minute
+    # episode (200+ shots, 2 700 words) to seconds instead of an O(k n^2) search that runs for many minutes.
+    reach = max_dur * 4.0
+    first = [0] * (n + 1)
+    lo = 0
+    for j in range(1, n + 1):
+        end_t = float(words[j - 1].get("e", 0))
+        while lo < j - 2 and end_t - float(words[lo].get("s", 0)) > reach:
+            lo += 1
+        first[j] = lo
+
     for s in range(2, k + 1):
         for j in range(2 * s, n + 1):
             best_v = -1e9
             best_i = 2 * (s - 1)
-            for i in range(2 * (s - 1), j - 1):
+            for i in range(max(2 * (s - 1), first[j]), j - 1):
                 v = dp[s - 1][i] + seg_score(i, j)
                 if v > best_v:
                     best_v = v
@@ -491,13 +502,16 @@ def main() -> int:
     total_frames = round(float(words[-1].get("e", 0)) * FPS) or (len(words) * 12)
     seconds = total_frames / FPS
 
-    # Genre pace: for short 15-28s clips, 9-14 shots (~1.6s avg). For multi-minute stories, scale smoothly up to 36 shots (~3.2s avg).
+    # Genre pace (Pulsy, 2026-11-10): 15-28 s clips ~1.6 s a shot; shorts up to 2.5 min ~2.4 s; long videos ~4.5 s
+    # (3 to 6 s), with no cap on the number of shots. A shot keeps at least a few words so a cut lands on a clause.
     if args.shots:
         k = args.shots
     elif seconds <= 28:
         k = max(9, min(14, round(seconds / 1.6), len(words) // 3))
+    elif seconds <= 150:
+        k = max(12, min(round(seconds / 2.4), len(words) // 3))
     else:
-        k = max(12, min(36, round(seconds / 3.2), len(words) // 5))
+        k = max(36, min(round(seconds / 4.5), len(words) // 5))
 
     keys = title_words(ep)
     beat_map, beat_sets = beat_starts_in_words(ep, words)

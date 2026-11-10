@@ -125,6 +125,34 @@ const Shadow: React.FC<{ x: number; y: number; scale: number; lift?: number }> =
  * `act` names a gesture or a clip (with `from` and `dur` for a clip) and needs <Stage t={t}>. `pose` overrides anything.
  * The feet stay on the ground by themselves. The position comes from `at`, not from the pose.
  */
+type Pt = { x: number; y: number };
+/** A change at frame `at`: what the person does from then on. Unset fields keep their value. */
+export type StageBeat = { at: number; act?: ActName; yaw?: number; reach?: { to: Pt; side?: 'L' | 'R' } | null };
+type Moment = { at: number; act?: ActName; from?: number; yaw: number; reach?: { to: Pt; side?: 'L' | 'R' } | null; reachAt: number };
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const ease = (v: number) => v * v * (3 - 2 * v);
+const LIMBS = ['armL', 'armR', 'legL', 'legR'] as const;
+/** Blend two sets of action bits, so a change of action at a beat is a quick move, not a jump. */
+const blendBits = (a: ActBits, b: ActBits, k: number): ActBits => {
+  if (k >= 1) return b;
+  const out: Record<string, unknown> = { ...b };
+  for (const key of LIMBS) {
+    const x = a[key];
+    const y = b[key];
+    const rest = (basePose as unknown as Record<string, { a: number; b: number }>)[key];
+    const from = x ?? rest;
+    const to = y ?? rest;
+    if (from && to) out[key] = { a: from.a + (to.a - from.a) * k, b: from.b + (to.b - from.b) * k };
+  }
+  for (const key of ['tilt', 'headTilt', 'squash', 'look', 'talk', 'sway', 'lift'] as const) {
+    const x = (a[key] as number | undefined) ?? 0;
+    const y = (b[key] as number | undefined) ?? 0;
+    if (x !== y) out[key] = x + (y - x) * k;
+  }
+  return out as ActBits;
+};
+
 export const Staged: React.FC<{
   at: Place;
   look?: PersonLook;
@@ -142,21 +170,55 @@ export const Staged: React.FC<{
   torsoGear?: React.ReactNode;
   handLProp?: React.ReactNode;
   handRProp?: React.ReactNode;
+  /** a hand goes to this world point (another person, a piece of furniture) */
+  reach?: { to: Pt; side?: 'L' | 'R' };
+  /** changes of action, turn or reach at given frames, in order: the shot plays several moments */
+  beats?: StageBeat[];
   children?: React.ReactNode;
-}> = ({ at, look = LOOKS.pipHood as PersonLook, pose = {}, yaw, body, height = 1, seated = false, stance, act, from, dur, children, ...rest }) => {
+}> = ({ at, look = LOOKS.pipHood as PersonLook, pose = {}, yaw, body, height = 1, seated = false, stance, act, from, dur, reach, beats, children, ...rest }) => {
   const { ground, t } = React.useContext(StageCtx);
   const spot = spotOf(at, ground);
   const b = bodyOf(body ?? (look as { cast?: { body?: Body | BodyId } }).cast?.body);
-  const y0 = yaw ?? (pose as { yaw?: number }).yaw ?? 0;
-  let bits: ActBits = {};
-  if (act) {
-    if (t === undefined) throw new Error(`act="${act}" needs the clock: write <Stage t={t} ...>`);
-    bits = actOf(act, t, { from, dur, yaw: y0, amp: b.amp, tempo: b.tempo });
+  const yawStart = yaw ?? (pose as { yaw?: number }).yaw ?? 0;
+  if ((act || beats?.length) && t === undefined) throw new Error(`act and beats need the clock: write <Stage t={t} ...>`);
+  const now = t ?? 0;
+  // the moments of the shot: the start, then each beat (later beats win), each one keeping what it does not change
+  const moments: Moment[] = [{ at: 0, act, from, yaw: yawStart, reach: reach ?? null, reachAt: -1e9 }];
+  for (const beat of [...(beats ?? [])].sort((x, y) => x.at - y.at)) {
+    const prev = moments[moments.length - 1]!;
+    moments.push({
+      at: beat.at,
+      act: beat.act ?? prev.act,
+      from: beat.act ? beat.at : prev.from,
+      yaw: beat.yaw ?? prev.yaw,
+      reach: beat.reach !== undefined ? beat.reach : prev.reach,
+      reachAt: beat.reach !== undefined ? beat.at : prev.reachAt,
+    });
   }
+  let idx = 0;
+  while (idx + 1 < moments.length && moments[idx + 1]!.at <= now) idx++;
+  const cur = moments[idx]!;
+  const prev = idx > 0 ? moments[idx - 1]! : null;
+  const k = prev ? ease(clamp01((now - cur.at) / 6)) : 1;
+  const bitsOf = (m: Moment, y: number): ActBits => (m.act ? actOf(m.act, now, { from: m.from, dur: m === moments[0] ? dur : undefined, yaw: y, amp: b.amp, tempo: b.tempo }) : {});
+  const y0 = prev ? prev.yaw + (cur.yaw - prev.yaw) * k : cur.yaw;
+  const bits = prev && prev.act !== cur.act ? blendBits(bitsOf(prev, y0), bitsOf(cur, y0), k) : bitsOf(cur, y0);
+  // a turn goes through a blink, so the swap of drawings is not seen
+  const turning = prev && prev.yaw !== cur.yaw && now >= cur.at - 1 && now <= cur.at + 6;
   const { lift = 0, ...limbs } = bits;
   const scale = spot.scale * height;
-  const full = { ...basePose, ...STANCES[seated ? 'sit' : stance ?? 'stand'], ...limbs, ...pose, yaw: y0, x: spot.x, y: 0, scale } as unknown as PersonPose;
+  const full = { ...basePose, ...STANCES[seated ? 'sit' : stance ?? 'stand'], ...limbs, ...pose, ...(turning ? { blink: 1 } : {}), yaw: y0, x: spot.x, y: 0, scale } as unknown as PersonPose;
   full.y = spot.y - (feetBelowHips(full, b) + lift) * scale;
+  // reaching: the hand travels from where it is to the target, and back when the reach ends
+  const target = cur.reach ?? (prev?.reach && cur.reach === null ? prev.reach : null);
+  if (target) {
+    const going = cur.reach ? ease(clamp01((now - cur.reachAt) / 8)) : 1 - k;
+    const side = target.side ?? (target.to.x < spot.x ? 'L' : 'R');
+    const restHand = handOf(full, side, b);
+    const limb = ikArmOf(full, { x: restHand.x + (target.to.x - restHand.x) * going, y: restHand.y + (target.to.y - restHand.y) * going }, side, b);
+    if (side === 'L') full.armL = limb as never;
+    else full.armR = limb as never;
+  }
   return (
     <AtDepth w={at.w ?? 0.5}>
       <Shadow x={spot.x} y={spot.y} scale={scale} lift={lift} />

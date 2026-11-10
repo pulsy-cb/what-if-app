@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, makeRoom } from './room';
 import type { Room } from './room';
 import { RoomShell, FloorPlant, FloorShadow, WallFrame, WallClock, Pendant, pendantLight } from './furnish';
-import { LightVeil, Dust, Glow } from './light';
+import { LightVeil, Dust, Glow, RoomCorners } from './light';
 import { WallBoard, PinBoard } from './pieces';
 import { StageItem, roomGround } from './stage';
 import type { Ground } from './stage';
@@ -62,6 +62,7 @@ type PieceDef = {
   w?: number;
   draw: (c: DrawCtx) => React.ReactNode;
   /** the piece is sat at, not on: the person gets a stool */ stool?: boolean;
+  /** height of its top surface, as a room v (0 ceiling, 1 floor): where a hand goes to touch it */ top?: number;
   /** where people sit: floor position of seat i */
   seats?: (c: { u: number; w: number; len: number; deep: number }, i: number) => { u: number; w: number };
 };
@@ -243,6 +244,7 @@ export type Placed = {
   /** floor position of seat `i` on piece `id` */ seat: (id: string, i?: number) => { u: number; w: number };
   has: (id: string) => boolean;
   /** true when someone sitting at piece `id` needs a stool under them */ wantsStool: (id: string) => boolean;
+  /** the world point a hand goes to on piece `id` (its top, or the middle of a wall piece) */ pointOf: (id: string) => { x: number; y: number };
   tokens: RoomTokens;
 };
 
@@ -273,6 +275,13 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
   const Shell: Placed['Shell'] = ({ t, id = 'pl' }) => (
     <g>
       <RoomShell r={r} id={id} wall={T.wall} side={T.side} floorC={T.floor} ceiling={T.ceiling} lines={T.floorLine} floor={T.floorKind} />
+      {/* the shell's noise texture reads as dirty clouds on a flat cartoon wall: paint most of it back to the plain colour */}
+      <g opacity={0.7}>
+        <rect x={r.back.x0} y={r.back.y0} width={r.back.x1 - r.back.x0} height={r.back.y1 - r.back.y0} fill={T.wall} />
+        <polygon points={r.Q([[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]])} fill={T.side} />
+        <polygon points={r.Q([[1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]])} fill={T.side} />
+      </g>
+      <RoomCorners x0={r.back.x0} x1={r.back.x1} y0={r.back.y0} y1={r.back.y1} />
       <rect x={r.back.x0} y={r.back.y1 - 14} width={r.back.x1 - r.back.x0} height={14} fill={T.trim} />
       {resolved.filter((s) => s.def.kind !== 'floor').map((s, i) => <g key={i}>{s.def.draw(ctx(s, t))}</g>)}
       {lights.map((l, i) => <Pendant key={i} r={r} u={l.u} w={l.w} t={t} glow={T.lamps ? 0.55 : 0.12} cone={T.lamps ? 0.28 : 0.05} />)}
@@ -327,6 +336,12 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
     seat,
     has: (id) => !!findPiece(id),
     wantsStool: (id) => !!findPiece(id)?.piece.def.stool || /^stool[1-4]?$/i.test(id),
+    pointOf: (id) => {
+      const s = findPiece(id)?.piece;
+      if (!s) throw new Error(`no piece "${id}" in this place. It has: ${resolved.map((x) => x.id).join(', ')}.`);
+      if (s.def.kind !== 'floor') return r.P(s.u + s.len / 2, 0.45, 0);
+      return r.P(s.u + s.len / 2, s.def.top ?? 0.8, s.w + s.deep / 2);
+    },
     tokens: T,
   };
 };

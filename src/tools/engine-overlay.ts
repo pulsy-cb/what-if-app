@@ -152,7 +152,8 @@ export type OverlayReport = {
 
 function listFiles(dir: string, base = dir): string[] {
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+  // hidden files (.DS_Store from macOS) are not part of the engine
+  return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith('.')).flatMap((e) => {
     const abs = path.join(dir, e.name);
     return e.isDirectory() ? listFiles(abs, base) : [path.relative(base, abs).split(path.sep).join('/')];
   });

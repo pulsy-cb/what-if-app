@@ -6,7 +6,7 @@ import type { Db } from './db.js';
 import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
-import { activeEpisodeSlug, buildMessages, pipelineTodo, toolMessageContent } from './context.js';
+import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
 import { clearReviewBlock, formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
@@ -98,6 +98,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     let consecutiveFails = 0;
     let checkpointedThisTurn = false;
     let reviewRounds = 0;
+    // an expensive step failing again with the same error will fail a third time: stop instead of burning hours
+    const expensiveFails = new Map<string, number>();
 
     for (let step = 0; step < config.maxSteps; step++) {
       if (signal.aborted) {
@@ -287,6 +289,25 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             durationMs,
           });
 
+          if (!result.ok && call.name === 'whatif_run' && ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))) {
+            const stage = String(call.args.step);
+            const cause = /\(timeout\)/.test(result.summary) ? 'timeout' : (result.summary.split('\n').find((l) => /error|failed|cannot/i.test(l)) ?? result.summary.split('\n')[0] ?? '').replace(/\d+/g, '#').slice(0, 160);
+            const key = `${stage}:${cause}`;
+            const n = (expensiveFails.get(key) ?? 0) + 1;
+            expensiveFails.set(key, n);
+            if (n >= (stage === 'stills' ? 3 : 2)) {
+              const stop =
+                `[orchestrateur] « ${stage} » a échoué ${n} fois avec la même cause (${cause}). Je m'arrête au lieu de relancer : ` +
+                `corrige la cause (ou signale-la à l'utilisateur) avant de relancer ${stage}.`;
+              heldNotes.push(stop);
+              bus.emit(threadId, 'notice', { text: stop });
+              for (const note of heldNotes) db.addMessage(threadId, 'user', note);
+              const id = db.addMessage(threadId, 'assistant', `Arrêt : ${stage} échoue toujours pour la même raison (${cause}).`);
+              bus.emit(threadId, 'assistant_message', { id, text: `Arrêt : ${stage} échoue toujours pour la même raison (${cause}).` });
+              finishTurn(step + 1, false, true);
+              return;
+            }
+          }
           // Loop-breaker: track repeated identical tool failures
           if (!result.ok) {
             const sig = `${call.name}:${JSON.stringify(call.args ?? {}).slice(0, 240)}`;
@@ -339,7 +360,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               });
               try {
                 const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal, { final: reviewRounds >= config.reviewMaxRounds });
-                const feedback = formatReviewFeedback(report, epSlug);
+                const affected = [...new Set(report.issues.filter((i) => i.severity === 'error').map((i) => i.shot.trim().toUpperCase()).filter((s) => /^S\d+$/.test(s)))];
+                const feedback = formatReviewFeedback(report, epSlug, shotWordFrames(project.root, epSlug, affected));
                 bus.emit(threadId, 'tool_result', {
                   id: revId,
                   name: 'reviewer',

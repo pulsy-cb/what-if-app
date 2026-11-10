@@ -298,6 +298,44 @@ export function episodeAudit(episode: any, slug: string): string | null {
   return null;
 }
 
+/** How many times a shot changes while it plays: beats, face keys after frame 0, clips started later, keyframes, turns. */
+export function timedChanges(body: string): number {
+  const count = (re: RegExp) => (body.match(re) ?? []).length;
+  return (
+    count(/\bat\s*:\s*\d+/g) +
+    count(/\[\s*[1-9]\d*\s*,\s*['"][a-z]+['"]\s*\]/g) +
+    count(/\bfrom\s*[:=]\s*\{?\s*[1-9]\d*/g) +
+    count(/\b(turnAt|poseAt|walkPose|grabAt|grabOf)\s*\(/g) +
+    count(/\bkf\s*\(\s*t\b/g) +
+    count(/<Duo\b|\bduo\s*[:=]\s*\{/g)
+  );
+}
+
+/** The pace the shot list must reach: shorts cut fast, long videos hold 3 to 6 s (Pulsy, 2026-11-10). */
+export function paceTarget(durSec: number): { minCutsPerMin: number; maxShotSec: number; label: string } {
+  if (durSec <= 30) return { minCutsPerMin: 24, maxShotSec: 3.8, label: 'short clip' };
+  if (durSec <= 150) return { minCutsPerMin: 20, maxShotSec: 5, label: 'short (under 2.5 min)' };
+  return { minCutsPerMin: 10, maxShotSec: 9, label: 'long video (3-6 s per shot)' };
+}
+
+/** Null when timeline.json keeps the pace, else what is wrong and how to fix it. */
+export function paceProblem(projectRoot: string, slug: string): string | null {
+  const tl = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json'));
+  const segs = (tl?.segments ?? []) as any[];
+  const fps = Number(tl?.fps ?? 30);
+  const durSec = Number(tl?.total ?? 0) / fps;
+  if (durSec < 12 || !segs.length) return null;
+  const shots = new Set(segs.map((s) => String(s.shot))).size;
+  const cutsPerMin = ((shots - 1) / durSec) * 60;
+  const longestSec = segs.reduce((m, s) => Math.max(m, (Number(s.b ?? 0) - Number(s.a ?? 0)) / fps), 0);
+  const want = paceTarget(durSec);
+  if (cutsPerMin >= want.minCutsPerMin && longestSec <= want.maxShotSec) return null;
+  return (
+    `PACE TOO SLOW for a ${want.label}: ${shots} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
+    `wanted >= ${want.minCutsPerMin} cuts/min and no shot over ${want.maxShotSec}s). Run whatif_run { step: "shotlist" } then { step: "plan" }.`
+  );
+}
+
 /**
  * Static audit of shots.tsx + index.tsx against timeline.json:
  * - every timeline shot is exported in shots.tsx AND wired into defineEpisode in index.tsx,
@@ -354,6 +392,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
 
   const errors: string[] = [];
   let heroShots = 0;
+  const stillShots: string[] = [];
+  let actingShots = 0;
   const fullScriptText = `${slug} ${episode?.topic ?? ''} ${(episode?.script ?? []).map((b: any) => `${b?.text ?? ''} ${b?.set ?? ''}`).join(' ')}`;
   const isSchoolStory = /\b(prof|professeur|classe|ecole|école|eleve|élève|tableau|cours|examen|interro|college|collège|lycee|lycée|math|teacher|school|classroom)\b/i.test(
     fullScriptText,
@@ -466,6 +506,11 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
     const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*[=:]\s*\{?\s*\[\s*\{|\bduo\s*[=:]\s*\{/.test(body);
     if (hasHero) heroShots++;
+    // rhythm: a shot with people must change something while it plays (a beat, a new face, a clip, keyframes)
+    if (hasHero && !isTitle && !isInsert && !isEstablishing) {
+      actingShots++;
+      if (timedChanges(body) === 0) stillShots.push(id);
+    }
 
     if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
       errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no character: show one (people: [...] in shot(), <Staged> or <Hero>), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
@@ -641,6 +686,11 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     /* ignore SSR harness load errors when node_modules is incomplete */
   }
 
+  if (actingShots >= 3 && stillShots.length > Math.floor(actingShots * 0.2)) {
+    errors.push(
+      `${stillShots.length}/${actingShots} shots with people change nothing while they play (${stillShots.slice(0, 10).join(', ')}): give each one at least one beat on a word of its line — beats: [{ at: <frame of the word>, act: '...', face: '...' }], a reach, a look, or a camera beat (frames are listed per shot in "When each word is said").`,
+    );
+  }
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
   if (heroShots < minHeroShots) {
     errors.push(
@@ -649,7 +699,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   }
   const totalPoseFaceCalls =
     (shotsSource.match(/\b(poseAt|faceAt|actPose|walkPose|turnAt)\s*\(/g) ?? []).length +
-    (shotsSource.match(/\bact\s*[:=]\s*[{'"]|<Duo\b|\bduo\s*:\s*\{|\bface\s*:\s*[\['"]/g) ?? []).length;
+    (shotsSource.match(/\bact\s*[:=]\s*[{'"]|<Duo\b|\bduo\s*:\s*\{|\bface\s*:\s*[\['"]|\bat\s*:\s*\d+/g) ?? []).length;
   const minPoseFaceCalls = Math.max(4, Math.ceil(tlShots.length * 0.85));
   if (totalPoseFaceCalls < minPoseFaceCalls) {
     errors.push(
@@ -723,6 +773,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
         `3. Découpage plan par plan : cadrage, placement, et chorégraphie physique des bras/mains quand un personnage tient, prend ou pose un objet (jamais d'objet flottant loin des mains).`
       );
     }
+    const pace = paceProblem(projectRoot, slug);
+    if (pace) return pace;
     const auditErr = shotsAudit(projectRoot, slug, episode, timeline);
     if (auditErr) return auditErr;
   }
@@ -1156,13 +1208,10 @@ const runStep: Tool = {
           `episode.json.edit, matched against the words it measured in words.json; anchors it cannot find are merged ` +
           `into the previous shot.\nAnchor candidates (substitute for the "at" values, one per shot):\n${anchorHints(ctx.projectRoot, slug)}`;
       } else {
-        const minCutsPerMin = durSec > 30 ? 12 : 24;
-        const maxShotSec = durSec > 30 ? 7.0 : 3.8;
-        if (durSec >= 12 && (cutsPerMin < minCutsPerMin || longestSec > maxShotSec)) {
+        const pace = paceProblem(ctx.projectRoot, slug);
+        if (pace) {
           failed = true;
-          planWarning =
-            `PACE TOO SLOW: ${got} segments over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest shot ${longestSec.toFixed(1)}s). ` +
-            `Run whatif_run { step: "shotlist" } to cut the measured words into clause-aligned shots, then run plan again.`;
+          planWarning = pace;
         }
       }
     }

@@ -486,4 +486,64 @@ const viewImage: Tool = {
   },
 };
 
-export const fsTools: Tool[] = [repoMap, readFile, writeFile, editFile, glob, grep, viewImage];
+/**
+ * Replace one shot of shots.tsx by its id, or add it when it is missing: the model sends the new shot only and never
+ * has to read the file back to quote it exactly. The comment lines just above the next shot stay with that shot.
+ */
+export function replaceShot(src: string, id: string, code: string): { text: string; replaced: boolean } {
+  const start = new RegExp(`^export\\s+(?:const|function)\\s+${id}\\b`, 'm').exec(src);
+  const block = code.trim() + '\n';
+  if (!start) return { text: src + (src.endsWith('\n') || !src ? '' : '\n') + '\n' + block, replaced: false };
+  const after = src.slice(start.index + 1);
+  const next = /^export\s+(?:const|function)\s+[A-Za-z0-9_$]+/m.exec(after);
+  let end = next ? start.index + 1 + next.index : src.length;
+  if (next) {
+    // keep the comment lines that introduce the next shot
+    const lines = src.slice(0, end).split('\n');
+    lines.pop();
+    while (lines.length && /^\s*(\/\/.*)?$/.test(lines[lines.length - 1]!) && lines.join('\n').length > start.index) {
+      const l = lines[lines.length - 1]!;
+      if (!/^\s*\/\//.test(l)) break;
+      lines.pop();
+    }
+    end = lines.join('\n').length + 1;
+  }
+  return { text: src.slice(0, start.index) + block + (next ? '\n' : '') + src.slice(end), replaced: true };
+}
+
+const editShot: Tool = {
+  name: 'edit_shot',
+  description:
+    'Replace one shot of src/episodes/<episode>/shots.tsx by its id (S7), or add it if it is missing. Send the whole new shot, starting with `export const S7 =`. No need to read the file first: this is the way to fix a shot after the audit or the reviewer.',
+  policy: 'auto',
+  mutating: true,
+  schema: {
+    type: 'object',
+    properties: {
+      episode: { type: 'string' },
+      id: { type: 'string', description: 'Shot id, e.g. "S7".' },
+      code: { type: 'string', description: 'The complete new shot, starting with `export const S7 =`.' },
+    },
+    required: ['episode', 'id', 'code'],
+    additionalProperties: false,
+  },
+  validate: (input) => {
+    if (!/^S\d+$/.test(String(input.id ?? ''))) return 'id must be a shot id like "S7"';
+    if (!new RegExp(`^\\s*(\\/\\/[^\\n]*\\n\\s*)*export\\s+(?:const|function)\\s+${String(input.id)}\\b`).test(String(input.code ?? '')))
+      return `code must start with \`export const ${String(input.id)} =\``;
+    return null;
+  },
+  async run(input: { episode: string; id: string; code: string }, ctx): Promise<ToolResult> {
+    const rel = `src/episodes/${input.episode}/shots.tsx`;
+    assertWritableProjectPath(rel);
+    assertNotCompactedPlaceholder(input.code, 'edit_shot');
+    const abs = safeJoin(ctx.projectRoot, rel);
+    if (!fs.existsSync(abs)) throw new Error(`${rel} does not exist yet: write it with write_file first`);
+    const { text, replaced } = replaceShot(fs.readFileSync(abs, 'utf8'), input.id, input.code);
+    fs.writeFileSync(abs, normalizeShotsJsx(rel, text), 'utf8');
+    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, rel);
+    return { ok: true, summary: `${replaced ? 'replaced' : 'added'} ${input.id} in ${rel}${tscNote}`, data: { path: rel, id: input.id, replaced } };
+  },
+};
+
+export const fsTools: Tool[] = [repoMap, readFile, writeFile, editFile, editShot, glob, grep, viewImage];
