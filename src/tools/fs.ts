@@ -6,6 +6,14 @@ import type { Tool, ToolResult } from './types.js';
 import {
   exportedSymbols, globToRegExp, isBinaryPath, mimeOf, readText, relOf, safeJoin, walk,
 } from './paths.js';
+import {
+  normalizeSharedEpisodeFile,
+  normalizeShotTagJsx,
+  prepareModularShotFile,
+  readEpisodeShots,
+  replaceShotMonolithic,
+  syncShotsBarrel,
+} from './episode-source.js';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -48,29 +56,47 @@ function assertNotCompactedPlaceholder(text: string, toolName: string): void {
   }
 }
 
-/** Normalize lowercase `<shot ... />` JSX tags into `<Shot ... />` in shots.tsx so both `shot({...})` and `<Shot ... />` work. */
-function normalizeShotsJsx(relPath: string, code: string): string {
+/**
+ * Normalize episode TSX files on write/edit:
+ * - `shots.tsx`: `<shot>` -> `<Shot>`
+ * - `shared.tsx`: `<shot>` -> `<Shot>` + auto-export top-level shared places/cast/helpers
+ * - `shots/S<N>.tsx`: auto-import `React`, `'../../../engine'`, `'../shared'` + `<shot>` -> `<Shot>`
+ */
+function normalizeEpisodeTsx(projectRoot: string, relPath: string, code: string): string {
   const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!/^src\/episodes\/[^/]+\/shots\.tsx$/.test(norm)) return code;
-  if (!/<shot(?=[\s/>])/.test(code)) return code;
-  let out = code.replace(/<shot(?=[\s/>])/g, '<Shot').replace(/<\/shot\s*>/g, '</Shot>');
-  out = out.replace(
-    /import\s*\{([^}]*)\}\s*from\s*(['"]\.\.\/\.\.\/engine['"])/,
-    (full, names: string, mod: string) => {
-      if (/\bShot\b/.test(names)) return full;
-      return `import {${names.replace(/\bshot\b/, 'shot, Shot')}} from ${mod}`;
-    },
-  );
-  return out;
+  if (/^src\/episodes\/[^/]+\/shots\.tsx$/.test(norm)) {
+    return normalizeShotTagJsx(code);
+  }
+  if (/^src\/episodes\/[^/]+\/shared\.tsx$/.test(norm)) {
+    return normalizeSharedEpisodeFile(code);
+  }
+  const shotMatch = /^src\/episodes\/([^/]+)\/shots\/(S\d+)\.tsx$/i.exec(norm);
+  if (shotMatch) {
+    const epDir = path.join(projectRoot, 'src', 'episodes', shotMatch[1]!);
+    return prepareModularShotFile(projectRoot, epDir, shotMatch[2]!.toUpperCase(), code);
+  }
+  return code;
+}
+
+/** Auto-rebuild barrel `shots.tsx` (and `index.tsx` shot map) whenever `shared.tsx` or `shots/S<N>.tsx` changes. */
+function maybeSyncEpisodeBarrel(projectRoot: string, relPath: string): void {
+  const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const m = /^src\/episodes\/([^/]+)\/(?:shared\.tsx|shots\/S\d+\.tsx)$/i.exec(norm);
+  if (!m) return;
+  const epDir = path.join(projectRoot, 'src', 'episodes', m[1]!);
+  const epSrc = readEpisodeShots(epDir);
+  if (epSrc.isModular) {
+    syncShotsBarrel(epDir);
+  }
 }
 
 /**
- * Fast local TypeScript check when an episode's shots.tsx or index.tsx is written/edited and node_modules exists.
+ * Fast local TypeScript check when an episode's shots, shared.tsx, or index.tsx is written/edited and node_modules exists.
  * Catches syntax/prop errors immediately before a slow Modal round-trip.
  */
 async function quickEpisodeTypecheck(projectRoot: string, relPath: string): Promise<string> {
-  const norm = relPath.replace(/\\/g, '/');
-  const m = /^src\/episodes\/([^/]+)\/(shots|index)\.tsx$/.exec(norm);
+  const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const m = /^src\/episodes\/([^/]+)\/(?:shots|shared|index|shots\/S\d+)\.tsx$/i.exec(norm);
   if (!m) return '';
   const slug = m[1]!;
   if (!fs.existsSync(path.join(projectRoot, 'node_modules'))) return '';
@@ -79,12 +105,15 @@ async function quickEpisodeTypecheck(projectRoot: string, relPath: string): Prom
   const tscBin = fs.existsSync(projTsc) ? projTsc : fs.existsSync(appTsc) ? appTsc : '';
   if (!tscBin) return '';
 
-  // Only run tsc once all timeline shots are exported (skip intermediate write_file append chunks)
+  // Only run tsc once all timeline shots are exported (skip intermediate batches while shots are still being added)
   try {
-    const tl = JSON.parse(fs.readFileSync(path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json'), 'utf8'));
-    const shotsSrc = fs.readFileSync(path.join(projectRoot, 'src', 'episodes', slug, 'shots.tsx'), 'utf8');
+    const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+    const tl = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+    const epSrc = readEpisodeShots(epDir);
+    if (epSrc.isPlaceholder) return '';
+    const exported = new Set(epSrc.exportedShotIds);
     const wanted: string[] = (tl?.shots ?? []).map((s: any) => String(s?.id ?? '')).filter(Boolean);
-    if (wanted.some((id) => !new RegExp(`export\\s+(?:const|function)\\s+${id}\\b`).test(shotsSrc))) {
+    if (wanted.some((id) => !exported.has(id))) {
       return '';
     }
   } catch {
@@ -206,24 +235,26 @@ const writeFile: Tool = {
     if (isBinaryPath(input.path)) throw new Error('write_file refuses binary extensions');
     assertWritableProjectPath(input.path);
     assertNotCompactedPlaceholder(input.content, 'write_file');
-    const content = normalizeShotsJsx(input.path, input.content);
     const abs = safeJoin(ctx.projectRoot, input.path);
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (input.append && existed) {
       const prev = fs.readFileSync(abs, 'utf8');
       const sep = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
-      const combined = normalizeShotsJsx(input.path, prev + sep + content);
+      const combined = normalizeEpisodeTsx(ctx.projectRoot, input.path, prev + sep + input.content);
       fs.writeFileSync(abs, combined, 'utf8');
+      maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
       const totalLines = combined.split('\n').length;
       const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
       return {
         ok: true,
-        summary: `appended to ${input.path} (+${content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
+        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
         data: { path: input.path, created: false, appended: true, lines: totalLines },
       };
     }
+    const content = normalizeEpisodeTsx(ctx.projectRoot, input.path, input.content);
     fs.writeFileSync(abs, content, 'utf8');
+    maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
     const lines = content.split('\n').length;
     const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
     return {
@@ -411,7 +442,9 @@ const editFile: Tool = {
       );
     }
     const abs = safeJoin(ctx.projectRoot, input.path);
-    fs.writeFileSync(abs, out, 'utf8');
+    const normalizedOut = normalizeEpisodeTsx(ctx.projectRoot, input.path, out);
+    fs.writeFileSync(abs, normalizedOut, 'utf8');
+    maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
     const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
     return {
       ok: true,
@@ -509,33 +542,16 @@ const viewImage: Tool = {
 
 /**
  * Replace one shot of shots.tsx by its id, or add it when it is missing: the model sends the new shot only and never
- * has to read the file back to quote it exactly. The comment lines just above the next shot stay with that shot.
+ * has to read the file back to quote it exactly. AST-aware so neighboring local helpers and comments are preserved.
  */
 export function replaceShot(src: string, id: string, code: string): { text: string; replaced: boolean } {
-  const start = new RegExp(`^export\\s+(?:const|function)\\s+${id}\\b`, 'm').exec(src);
-  const block = code.trim() + '\n';
-  if (!start) return { text: src + (src.endsWith('\n') || !src ? '' : '\n') + '\n' + block, replaced: false };
-  const after = src.slice(start.index + 1);
-  const next = /^export\s+(?:const|function)\s+[A-Za-z0-9_$]+/m.exec(after);
-  let end = next ? start.index + 1 + next.index : src.length;
-  if (next) {
-    // keep the comment lines that introduce the next shot
-    const lines = src.slice(0, end).split('\n');
-    lines.pop();
-    while (lines.length && /^\s*(\/\/.*)?$/.test(lines[lines.length - 1]!) && lines.join('\n').length > start.index) {
-      const l = lines[lines.length - 1]!;
-      if (!/^\s*\/\//.test(l)) break;
-      lines.pop();
-    }
-    end = lines.join('\n').length + 1;
-  }
-  return { text: src.slice(0, start.index) + block + (next ? '\n' : '') + src.slice(end), replaced: true };
+  return replaceShotMonolithic(src, id, code);
 }
 
 const editShot: Tool = {
   name: 'edit_shot',
   description:
-    'Replace one shot of src/episodes/<episode>/shots.tsx by its id (S7), or add it if it is missing. Send the whole new shot, starting with `export const S7 =`. No need to read the file first: this is the way to fix a shot after the audit or the reviewer.',
+    'Write or replace one shot S<N> of an episode by its id (e.g. "S7"). On modular episodes (with shared.tsx / shots/), writes isolated `src/episodes/<episode>/shots/S7.tsx` (auto-importing shared places/cast and engine helpers) and syncs the `shots.tsx` barrel + `index.tsx`. On legacy single-file episodes, replaces `S7` cleanly inside `shots.tsx`. Pass `export const S7 = ...` (optionally preceded by shot-local helpers).',
   policy: 'auto',
   mutating: true,
   schema: {
@@ -543,25 +559,68 @@ const editShot: Tool = {
     properties: {
       episode: { type: 'string' },
       id: { type: 'string', description: 'Shot id, e.g. "S7".' },
-      code: { type: 'string', description: 'The complete new shot, starting with `export const S7 =`.' },
+      code: {
+        type: 'string',
+        description: 'The complete shot code exporting `export const S7 = ...` (local helpers like `const BEFORE = shot(...)` above `export const S7` are allowed).',
+      },
     },
     required: ['episode', 'id', 'code'],
     additionalProperties: false,
   },
   validate: (input) => {
-    if (!/^S\d+$/.test(String(input.id ?? ''))) return 'id must be a shot id like "S7"';
-    if (!new RegExp(`^\\s*(\\/\\/[^\\n]*\\n\\s*)*export\\s+(?:const|function)\\s+${String(input.id)}\\b`).test(String(input.code ?? '')))
-      return `code must start with \`export const ${String(input.id)} =\``;
+    const id = String(input.id ?? '');
+    if (!/^S\d+$/.test(id)) return 'id must be a shot id like "S7"';
+    const code = String(input.code ?? '');
+    if (!new RegExp(`^\\s*export\\s+(?:const|function)\\s+${id}\\b`, 'm').test(code)) {
+      return `code must start with \`export const ${id} =\` (optionally preceded by local helpers or imports)`;
+    }
+    for (const m of code.matchAll(/^\s*export\s+(?:const|function)\s+(S\d+)\b/gm)) {
+      if (m[1] !== id) {
+        return `edit_shot writes one shot at a time: found \`export const ${m[1]}\` inside edit_shot for ${id}. Make a separate edit_shot call per shot.`;
+      }
+    }
     return null;
   },
   async run(input: { episode: string; id: string; code: string }, ctx): Promise<ToolResult> {
-    const rel = `src/episodes/${input.episode}/shots.tsx`;
-    assertWritableProjectPath(rel);
+    const epRel = `src/episodes/${input.episode}`;
+    assertWritableProjectPath(`${epRel}/shots.tsx`);
     assertNotCompactedPlaceholder(input.code, 'edit_shot');
+    const epDir = safeJoin(ctx.projectRoot, epRel);
+    if (!fs.existsSync(epDir)) {
+      throw new Error(`${epRel} does not exist yet: scaffold the episode first`);
+    }
+
+    const epSrc = readEpisodeShots(epDir);
+    // Modular mode: write isolated `src/episodes/<episode>/shots/<id>.tsx` and sync barrel `shots.tsx` + `index.tsx`
+    if (epSrc.isModular || !epSrc.exists || epSrc.isPlaceholder) {
+      const shotsDir = path.join(epDir, 'shots');
+      fs.mkdirSync(shotsDir, { recursive: true });
+      // Remove scaffold S1 placeholder if another shot is written first
+      if (input.id !== 'S1') {
+        const stubS1 = path.join(shotsDir, 'S1.tsx');
+        if (fs.existsSync(stubS1) && fs.readFileSync(stubS1, 'utf8').includes('SHOT S1 — PLACEHOLDER')) {
+          fs.unlinkSync(stubS1);
+        }
+      }
+      const shotRel = `${epRel}/shots/${input.id}.tsx`;
+      const shotAbs = safeJoin(ctx.projectRoot, shotRel);
+      const existed = fs.existsSync(shotAbs) && !fs.readFileSync(shotAbs, 'utf8').includes('SHOT S1 — PLACEHOLDER');
+      const prepared = prepareModularShotFile(ctx.projectRoot, epDir, input.id, input.code);
+      fs.writeFileSync(shotAbs, prepared, 'utf8');
+      const allIds = syncShotsBarrel(epDir);
+      const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, shotRel);
+      return {
+        ok: true,
+        summary: `${existed ? 'replaced' : 'added'} ${input.id} in ${shotRel} (${allIds.length} shot(s) synced in shots.tsx)${tscNote}`,
+        data: { path: shotRel, id: input.id, replaced: existed, modular: true },
+      };
+    }
+
+    // Legacy monolithic fallback: AST-safe single-shot replacement inside `shots.tsx`
+    const rel = `${epRel}/shots.tsx`;
     const abs = safeJoin(ctx.projectRoot, rel);
-    if (!fs.existsSync(abs)) throw new Error(`${rel} does not exist yet: write it with write_file first`);
     const { text, replaced } = replaceShot(fs.readFileSync(abs, 'utf8'), input.id, input.code);
-    fs.writeFileSync(abs, normalizeShotsJsx(rel, text), 'utf8');
+    fs.writeFileSync(abs, normalizeEpisodeTsx(ctx.projectRoot, rel, text), 'utf8');
     const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, rel);
     return { ok: true, summary: `${replaced ? 'replaced' : 'added'} ${input.id} in ${rel}${tscNote}`, data: { path: rel, id: input.id, replaced } };
   },

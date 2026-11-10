@@ -9,6 +9,7 @@ import { exec } from './exec.js';
 import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
+import { readEpisodeShots, syncShotsBarrel } from './episode-source.js';
 
 /** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
 function hexLuminance(hex: string): number | null {
@@ -150,11 +151,19 @@ export function syncStudioAspect(projectRoot: string, slug: string, explicit?: u
   return aspect;
 }
 
-const SHOT_STUB = `import React from 'react';
-import { ShotProps } from '../../engine';
+const SHARED_STUB = `import React from 'react';
+import { cast, place } from '../../engine';
 
-// PLACEHOLDER. One component per shot id in timeline.json, each a pure function of its own clock t.
-// This one draws a label, not a scene: write the real shot before anything is rendered.
+// Shared places, cast, and reusable props for this episode.
+// Define places with place(...) and characters with cast(...) here;
+// edit_shot automatically imports them into src/episodes/<slug>/shots/S<N>.tsx.
+`;
+
+const SHOT_STUB = `import React from 'react';
+import { ShotProps } from '../../../engine';
+
+// PLACEHOLDER. One component per shot id in timeline.json (shots/S1.tsx, shots/S2.tsx, ...).
+// This one draws a label, not a scene: write shared.tsx + shots via edit_shot before anything is rendered.
 export const S1: React.FC<ShotProps> = ({ len }) => (
   <g>
     <rect x={0} y={0} width={1920} height={1080} fill="#0B0816" />
@@ -162,7 +171,7 @@ export const S1: React.FC<ShotProps> = ({ len }) => (
       SHOT S1 — PLACEHOLDER
     </text>
     <text x={960} y={578} fill="#F6EFE3" fontSize={30} fontFamily="monospace" textAnchor="middle">
-      write the real shots in shots.tsx ({Math.round(len / 30)}s)
+      write shared.tsx and shots via edit_shot ({Math.round(len / 30)}s)
     </text>
   </g>
 );
@@ -550,15 +559,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const wanted = [...new Set(tlShots.map((s) => String(s.id ?? '')).filter(Boolean))];
   if (!wanted.length) return `timeline.json has no shots: run whatif_run { step: "plan" } first`;
 
-  let shotsSource = '';
-  try {
-    shotsSource = fs.readFileSync(path.join(src, 'shots.tsx'), 'utf8');
-  } catch {
-    return `src/episodes/${slug}/shots.tsx is missing: write one component per shot (${wanted.join(', ')})`;
+  const epSrc = readEpisodeShots(src);
+  if (!epSrc.exists) {
+    return `src/episodes/${slug}/shots.tsx is missing: write shared.tsx + one component per shot (${wanted.join(', ')}) via edit_shot`;
   }
-  const missing = wanted.filter((id) => !new RegExp(`export\\s+(const|function)\\s+${id}\\b`).test(shotsSource));
+  const exportedSet = new Set(epSrc.exportedShotIds);
+  const missing = wanted.filter((id) => !exportedSet.has(id));
   if (missing.length) {
-    return `shots.tsx does not export ${missing.join(', ')} yet (the timeline renders ${wanted.join(', ')}): export every shot and wire them in index.tsx.`;
+    return `shots.tsx does not export ${missing.join(', ')} yet (the timeline renders ${wanted.join(', ')}): export every shot (via edit_shot) and wire them in index.tsx.`;
   }
 
   let indexSource = '';
@@ -572,68 +580,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     return `src/episodes/${slug}/index.tsx does not register ${missingInIndex.join(', ')} in defineEpisode(..., { shots: { ... } }): update index.tsx so every shot in timeline.json is rendered.`;
   }
 
-  // Slice shots.tsx into individual exported shot bodies using the TS AST, and attach any local
-  // non-exported helper shot/component definitions (e.g. const EARLY = shot(...); <EARLY />) to the
-  // exported shot that renders them (instead of letting them bleed into the preceding shot's slice).
-  const bodies: Record<string, string> = {};
-  {
-    const sf = ts.createSourceFile('shots.tsx', shotsSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    const ownBodies = new Map<string, string>();
-    const localHelpers = new Map<string, string>();
-    const unwrapExpr = (e: ts.Expression): ts.Expression => {
-      let cur = e;
-      while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur)) cur = cur.expression;
-      return cur;
-    };
-    const isComponentOrShotInit = (name: string, init: ts.Expression): boolean => {
-      const u = unwrapExpr(init);
-      if (ts.isCallExpression(u) && ts.isIdentifier(u.expression) && /^(?:shot|phoneShot)$/.test(u.expression.text)) return true;
-      if ((ts.isArrowFunction(u) || ts.isFunctionExpression(u)) && /^[A-Z]/.test(name)) return true;
-      if (ts.isIdentifier(u) && localHelpers.has(u.text)) return true;
-      return false;
-    };
-    for (const stmt of sf.statements) {
-      const isExp = Boolean(ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword));
-      if (ts.isFunctionDeclaration(stmt) && stmt.name) {
-        const text = stmt.getText(sf);
-        if (isExp) ownBodies.set(stmt.name.text, text);
-        else if (/^[A-Z]/.test(stmt.name.text)) localHelpers.set(stmt.name.text, text);
-      } else if (ts.isVariableStatement(stmt)) {
-        for (const decl of stmt.declarationList.declarations) {
-          if (!ts.isIdentifier(decl.name)) continue;
-          const name = decl.name.text;
-          const text = stmt.declarationList.declarations.length === 1 ? stmt.getText(sf) : decl.getText(sf);
-          if (isExp) ownBodies.set(name, text);
-          else if (decl.initializer && isComponentOrShotInit(name, decl.initializer)) localHelpers.set(name, text);
-        }
-      }
-    }
-    const helperNames = [...localHelpers.keys()];
-    for (const [id, own] of ownBodies) {
-      if (!helperNames.length) {
-        bodies[id] = own;
-        continue;
-      }
-      const seen = new Set<string>();
-      const extra: string[] = [];
-      const visit = (code: string, depth: number) => {
-        if (depth > 8) return;
-        for (const h of helperNames) {
-          if (seen.has(h)) continue;
-          if (new RegExp(`\\b${h.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`).test(code)) {
-            seen.add(h);
-            const hCode = localHelpers.get(h)!;
-            extra.push(hCode);
-            visit(hCode, depth + 1);
-          }
-        }
-      };
-      visit(own, 0);
-      bodies[id] = extra.length ? `${own}\n${extra.join('\n')}` : own;
-    }
-  }
-
-  const inspectCharacter = characterInspector(shotsSource);
+  const shotsSource = epSrc.combinedSource;
+  const bodies = epSrc.shotBodies;
+  const monolithicInspector = epSrc.isModular ? null : characterInspector(shotsSource);
+  const inspectCharacter = (id: string): 'yes' | 'no' | 'unknown' => {
+    if (monolithicInspector) return monolithicInspector(id);
+    const perFile = `${epSrc.sharedSource}\n${epSrc.shotFiles.get(id) ?? bodies[id] ?? ''}`;
+    return characterInspector(perFile)(id);
+  };
   const errors: string[] = [];
   let heroShots = 0;
   const stillShots: string[] = [];
@@ -993,7 +947,7 @@ export function boardStale(projectRoot: string, slug: string): string | null {
     }
   };
   const board = mtime(path.join(projectRoot, 'out', slug, 'storyboard.jpg'));
-  const shots = mtime(path.join(projectRoot, 'src', 'episodes', slug, 'shots.tsx'));
+  const shots = readEpisodeShots(path.join(projectRoot, 'src', 'episodes', slug)).latestMtimeMs;
   if (!board || !shots || shots <= board + 1_000) return null;
   return `shots.tsx changed after the last board, so nobody has looked at these shots yet: re-run whatif_run { step: "stills", args: [the shots you changed] } then { step: "board" } before render`;
 }
@@ -1220,11 +1174,14 @@ const newProject: Tool = {
     }
     fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify(ep, null, 1) + '\n');
     fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify(TIMELINE_STUB(slug), null, 1) + '\n');
-    fs.writeFileSync(path.join(dir, 'shots.tsx'), SHOT_STUB);
+    fs.writeFileSync(path.join(dir, 'shared.tsx'), SHARED_STUB);
+    fs.mkdirSync(path.join(dir, 'shots'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'shots', 'S1.tsx'), SHOT_STUB);
     fs.writeFileSync(
       path.join(dir, 'index.tsx'),
       INDEX_STUB.replace('__EXPORT__', camel(slug)).replace('__ID__', ep.id),
     );
+    syncShotsBarrel(dir);
     syncStudioAspect(ctx.projectRoot, slug, aspect);
 
     // 4. register it, dropping imports that point at deleted episode folders

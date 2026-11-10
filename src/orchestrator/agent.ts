@@ -8,7 +8,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
-import { clearReviewBlock, formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
+import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -359,8 +359,18 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             String(call.args?.step ?? '') === 'board' &&
             result.ok
           ) {
-            const reviewer = reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;
             const epSlug = String(call.args?.episode ?? '').trim();
+            if (epSlug) {
+              try {
+                const prevRev = JSON.parse(fs.readFileSync(path.join(project.root, 'out', epSlug, 'review.json'), 'utf8'));
+                if (prevRev?.blocking && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
+                  reviewRounds = prevRev.round;
+                }
+              } catch {
+                /* no prior blocking review */
+              }
+            }
+            const reviewer = reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;
             if (epSlug && !reviewer) clearReviewBlock(project.root, epSlug);
             if (reviewer && epSlug) {
               reviewRounds++;
@@ -369,13 +379,27 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               bus.emit(threadId, 'tool_call', {
                 id: revId,
                 name: 'reviewer',
-                input: { episode: epSlug, round: reviewRounds, model: reviewer.model },
+                input: {
+                  episode: epSlug,
+                  round: reviewRounds,
+                  mode: reviewRounds > 1 ? 'delta' : 'global',
+                  model: reviewer.model,
+                },
                 policy: 'auto',
                 mustAsk: false,
               });
               try {
-                const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal, { final: reviewRounds >= config.reviewMaxRounds });
-                const affected = [...new Set(report.issues.filter((i) => i.severity === 'error').map((i) => i.shot.trim().toUpperCase()).filter((s) => /^S\d+$/.test(s)))];
+                const report = await reviewEpisodeBoard(reviewer, project.root, epSlug, signal, {
+                  round: reviewRounds,
+                  final: reviewRounds >= config.reviewMaxRounds,
+                });
+                const affected = [
+                  ...new Set(
+                    report.issues
+                      .filter((i) => i.severity === 'error')
+                      .flatMap((i) => extractReviewShotIds(i.shot)),
+                  ),
+                ];
                 const feedback = formatReviewFeedback(report, epSlug, shotWordFrames(project.root, epSlug, affected));
                 bus.emit(threadId, 'tool_result', {
                   id: revId,

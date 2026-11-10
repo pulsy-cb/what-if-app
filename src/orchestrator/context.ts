@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ChatMessage, ImagePart, ToolCall } from './providers/types.js';
 import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
+import { readEpisodeShots } from '../tools/episode-source.js';
 import { engineDigest } from './engine-digest.js';
 import { DIRECTOR_GUIDE, SHOT_GUIDE, STAGE_GUIDE, modernDirectorGuide } from './director-guide.js';
 
@@ -71,12 +72,11 @@ commands for a human to paste: you call the tools.
        - Pour un objet tenu en continu dans la main : passe-le à \`<Hero handRProp={<g>...</g>} />\` ou positionne-le à \`const H = handWorld(pose, 'R')\` (\`<g transform={\`translate(\${H.x} \${H.y})\`}>...\`).
        - Pour tendre le bras naturellement vers un objet posé sur la table en \`target = { x: 880, y: 680 }\` : utilise \`reachPose(base, { x: 880, y: 680 }, 'R')\` ou \`ikArm(base, target, 'R')\`.
        - Pour **prendre un objet sur la table et le soulever / le ranger** : utilise \`const g = grabAt(t, seatPose, { x: 890, y: 680 }, { x: 790, y: 635 }, 10, Math.round(len * 0.7), 'R')\` qui retourne \`{ arm, propPos, handPos }\` — passe \`armR: g.arm\` au \`<Hero>\` et dessine l'objet en \`translate(\${g.propPos.x} \${g.propPos.y})\`.
-6. **Step 5b — Write & Animate \`shots.tsx\` + \`index.tsx\`, then run \`whatif_run stills\` and \`whatif_run board\`**:
-   - Export one component per shot id in \`timeline.json\` (\`S1\`, \`S2\`, …) and register ALL of them in
-     \`src/episodes/<slug>/index.tsx\`.
-   - **Batching rule for long episodes (> 10 shots)**: never try to generate 15–36 shots in a single giant \`write_file\` call (it will hit the output token limit). Instead, write \`shots.tsx\` in **batches of 6–8 shots**:
-     1. First call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "..." })\` with imports, \`makeLook\` cast, shared custom set components, and shots \`S1..S7\`,
-     2. Then call \`write_file({ path: "src/episodes/<slug>/shots.tsx", content: "...", append: true })\` for \`S8..S14\`, then \`S15..S21\`, etc., until every shot in \`timeline.json\` is exported! (Check the live "Active episode continuity pin" in the system prompt: it always shows your shared header from \`shots.tsx\`, which shots are already exported, and the exact specs of the remaining shots).
+6. **Step 5b — Write \`shared.tsx\` + per-shot files via \`edit_shot\` (\`shots/S<N>.tsx\` + barrel \`shots.tsx\` + \`index.tsx\`), then run \`whatif_run stills\` and \`whatif_run board\`**:
+   - Export one component per shot id in \`timeline.json\` (\`S1\`, \`S2\`, …) — \`edit_shot\` writes each shot into its own isolated file \`src/episodes/<slug>/shots/S<N>.tsx\` and automatically syncs the \`shots.tsx\` barrel and \`src/episodes/<slug>/index.tsx\`.
+   - **Batching rule for long episodes (> 10 shots)**: never try to generate 15–60 shots in a single giant \`write_file\` call (it hits output token limits and makes edits fragile). Instead:
+     1. First call \`write_file({ path: "src/episodes/<slug>/shared.tsx", content: "..." })\` with imports, \`makeLook\` cast, shared custom set components, and reusable props,
+     2. Then emit **batches of 6–8 \`edit_shot\` calls per step** (\`edit_shot { episode: "<slug>", id: "S1", code: "export const S1 = ..." }\` for \`S1..S8\`, then \`S9..S16\`, etc.) until every shot in \`timeline.json\` is exported! \`edit_shot\` auto-imports shared symbols from \`../shared\` and helpers from \`../../../engine\`. (Check the live "Active episode continuity pin" in the system prompt: it always shows \`shared.tsx\`, which shots are already exported, and the exact specs of the remaining shots).
    - **Custom Characters (\`makeLook\` + open SVG slots)**: design custom looks at the top of \`shots.tsx\` with \`makeLook({ skin, jacket, accent, hair, extra, accessory }, base)\`. Give each character a distinct \`extra\` and contrasting \`jacket\`. Pass custom SVG to \`<Hero>\` via \`headGear\`, \`torsoGear\`, \`handRProp\` / \`handLProp\`.
    - **Natural Rigging, Lip-Sync & Camera**: every \`<Hero>\` must be animated with \`poseAt(t, ...)\` or \`actPose(kind, t)\`
      AND \`faceAt(t, ...)\`, plus camera motion (\`camT(kf(t, [[0, ...], [len, ...]]), cy, zoom)\` or \`camPush\`/\`camPan\`).
@@ -145,11 +145,11 @@ export function modernSystemPrompt(): string {
 `);
   p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus**: passe l'objet à \`handRProp\` / \`handLProp\` ; il suit la main. Un objet posé va dans un slot ou dans \`extra\`. Jamais d'objet flottant loin des mains.
 `);
-  p = p.replace('with imports, `makeLook` cast, shared custom set components, and shots', 'with imports, the cast(), the place() constants, and shots');
+  p = p.replace('with imports, `makeLook` cast, shared custom set components, and reusable props', 'with imports, the cast(), the place() constants, and reusable props');
   p = swapBlock(p, '   - **Custom Characters', '   - **Clock `t`', `   - **Write the shots with \`shot({...})\`** (see the shot() section): place, cam, people with an act and a face, and **beats on the words** of each shot's line (their frames are pinned under "When each word is said"). A hand-written <Stage> or camT shot is the way out for what shot() cannot do; both mix in one episode.
-   - **Fixing a shot** after the audit or the reviewer: edit_shot { episode, id, code } with the whole new shot. Do not read shots.tsx back to quote it.
+   - **Writing & fixing shots**: call \`edit_shot { episode, id, code }\` with the whole shot (including any shot-local helper \`const\` right above \`export const S<N> =\`). Each shot lives in its own isolated \`shots/S<N>.tsx\` file — never use \`edit_file\` on \`shots.tsx\`!
 `);
-  p = swapBlock(p, '- Sets and characters: define ONE', '- Framing.', `- Places and characters: define each place once with place() and each character once with cast(), at the top of \`shots.tsx\`, and reuse them in every shot. Never invent external image/audio file paths.
+  p = swapBlock(p, '- Sets and characters: define ONE', '- Framing.', `- Places and characters: define each place once with place() and each character once with cast() in \`src/episodes/<slug>/shared.tsx\`, and reuse them across every shot via \`edit_shot\`. Never invent external image/audio file paths.
 `);
   return p;
 }
@@ -496,10 +496,9 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
     /* ignore */
   }
 
-  const shotsRaw = readText(epDir, 'shots.tsx', 120_000) ?? '';
-  const isStub = shotsRaw.includes('SHOT S1 — PLACEHOLDER');
-  const exportMatches = [...shotsRaw.matchAll(/export\s+(?:const|function)\s+(S\d+)\b/g)];
-  const exportedIds = isStub ? [] : exportMatches.map((m) => m[1]!);
+  const epSrc = readEpisodeShots(epDir);
+  const isStub = epSrc.isPlaceholder;
+  const exportedIds = isStub ? [] : epSrc.exportedShotIds;
   const exportedSet = new Set(exportedIds);
 
   const tlShots: any[] = Array.isArray(tlJson?.shots) ? tlJson.shots : [];
@@ -515,7 +514,7 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
     );
     const missing = tlShots.filter((s) => !exportedSet.has(String(s.id)));
     parts.push(
-      `### Shots progress (${exportedIds.length}/${tlShots.length} exported in shots.tsx)\n` +
+      `### Shots progress (${exportedIds.length}/${tlShots.length} exported${epSrc.isModular ? ' in shots/S*.tsx' : ' in shots.tsx'})\n` +
         `- Exported: ${exportedIds.length ? exportedIds.join(', ') : '(none yet)'}\n` +
         `- Remaining to export: ${missing.length ? missing.map((s) => s.id).join(', ') : '(all exported!)'}`,
     );
@@ -528,24 +527,23 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
         const note = epS.note ?? '';
         return `  - ${id}: len=${s.len}f (${(Number(s.len || 60) / 30).toFixed(1)}s), size="${size}", set="${set}", words="${note}"`;
       });
-      parts.push(`### Next shots to write (use these exact IDs, lengths and sizes):\n${nextBatch.join('\n')}`);
+      parts.push(`### Next shots to write via edit_shot (use these exact IDs, lengths and sizes):\n${nextBatch.join('\n')}`);
       const timing = shotWordFrames(projectRoot, slug, missing.slice(0, 12).map((s) => String(s.id)));
       if (timing.length) parts.push(`### When each word is said in these shots (word@frame, the shot's own clock): put the beats on these frames\n${timing.join('\n')}`);
     }
   }
 
-  if (!isStub && exportMatches.length > 0) {
-    const firstIdx = exportMatches[0]!.index ?? 0;
-    const header = shotsRaw.slice(0, firstIdx).trim();
-    if (header) {
-      parts.push(
-        `### Shared header in shots.tsx (reuse these exact characters and places in subsequent batches):\n\`\`\`tsx\n${header.slice(0, 2_800)}\n\`\`\``,
-      );
-    }
-    const lastMatch = exportMatches[exportMatches.length - 1]!;
-    const lastCode = shotsRaw.slice(lastMatch.index ?? 0).trim();
+  const header = epSrc.sharedSource.trim();
+  if (header && !header.includes('Shared places, cast, and reusable props for this episode.')) {
+    parts.push(
+      `### Shared header in ${epSrc.isModular ? 'shared.tsx (auto-imported into shots/S<N>.tsx)' : 'shots.tsx'} (reuse these exact characters and places):\n\`\`\`tsx\n${header.slice(0, 3_600)}\n\`\`\``,
+    );
+  }
+  if (!isStub && exportedIds.length > 0) {
+    const lastId = exportedIds[exportedIds.length - 1]!;
+    const lastCode = (epSrc.shotBodies[lastId] ?? '').trim();
     if (lastCode) {
-      parts.push(`### Last exported shot in shots.tsx (${lastMatch[1]}):\n\`\`\`tsx\n${lastCode.slice(0, 1_200)}\n\`\`\``);
+      parts.push(`### Last exported shot (${lastId}):\n\`\`\`tsx\n${lastCode.slice(0, 1_400)}\n\`\`\``);
     }
   }
 
@@ -573,6 +571,19 @@ function compactToolCalls(calls: ToolCall[] | undefined, age: number): ToolCall[
         args: {
           ...c.args,
           content: `${head}\n/* [compacted: ${lines} lines (${c.args.content.length} chars) already on disk — always pass real TypeScript code in write_file] */\n${tail}`,
+        },
+      };
+    }
+    if (c.name === 'edit_shot' && typeof c.args?.code === 'string' && c.args.code.length > 1_200) {
+      const allLines = c.args.code.split('\n');
+      const lines = allLines.length;
+      const head = allLines.slice(0, 5).join('\n');
+      const tail = allLines.slice(-3).join('\n');
+      return {
+        ...c,
+        args: {
+          ...c.args,
+          code: `${head}\n/* [compacted: ${lines} lines (${c.args.code.length} chars) already on disk — always pass real TypeScript code in edit_shot] */\n${tail}`,
         },
       };
     }

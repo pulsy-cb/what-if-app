@@ -479,26 +479,32 @@ test('reviewer: reads the contact sheets and the measured counts, not the tall s
     fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ aspect: '9:16', script: [{ text: 'Bonjour.' }], shots: [] }));
     fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'strip');
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) fs.writeFileSync(path.join(outDir, 'sheets', `sheet-0${n}.jpg`), `sheet${n}`);
-    let seen;
+    const seenCalls = [];
     const provider = {
       model: 'fake',
       label: 'fake',
       chat: async (o) => {
-        seen = o.messages;
+        seenCalls.push(o.messages);
         return { text: '{"pass":true,"summary":"ok","issues":[]}', toolCalls: [], finishReason: 'stop' };
       },
     };
     const report = await reviewEpisodeBoard(provider, dir, 'e');
     assert.equal(report.ok, true);
-    const user = seen.find((m) => m.role === 'user');
-    assert.equal(user.images.length, 6, 'at most 6 sheets');
-    assert.equal(Buffer.from(user.images[0].data, 'base64').toString(), 'sheet1', 'sheets in natural order, not the strip');
-    assert.match(user.content, /2\/3 plans avec un personnage orienté/);
-    assert.match(user.content, /les 6 premières sur 8/);
+    assert.equal(seenCalls.length, 2, '8 sheets are audited in 2 batches (6 + 2) so zero sheets are dropped');
+    const batch1User = seenCalls[0].find((m) => m.role === 'user');
+    const batch2User = seenCalls[1].find((m) => m.role === 'user');
+    assert.equal(batch1User.images.length, 6, 'batch 1 gets at most 6 sheets');
+    assert.equal(batch2User.images.length, 2, 'batch 2 gets the remaining 2 sheets');
+    assert.equal(Buffer.from(batch1User.images[0].data, 'base64').toString(), 'sheet1', 'sheets in natural order, not the strip');
+    assert.equal(Buffer.from(batch2User.images[0].data, 'base64').toString(), 'sheet7', 'second batch starts at sheet 7');
+    assert.match(batch1User.content, /2\/3 plans avec un personnage orienté/);
+    assert.match(batch1User.content, /planches 1 à 6 sur 8/);
+    assert.match(batch2User.content, /planches 7 à 8 sur 8/);
 
     fs.rmSync(path.join(outDir, 'sheets'), { recursive: true });
+    seenCalls.length = 0;
     await reviewEpisodeBoard(provider, dir, 'e');
-    assert.equal(seen.find((m) => m.role === 'user').images.length, 1, 'falls back to storyboard.jpg when there are no sheets');
+    assert.equal(seenCalls[0].find((m) => m.role === 'user').images.length, 1, 'falls back to storyboard.jpg when there are no sheets');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1950,6 +1956,295 @@ if (process.env.FAKE_AGY_UNAUTH === '1') {
     assert.equal(resetProj.effectiveModel.model, 'gpt-6.1-terra');
   } finally {
     await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('modular episode architecture: shared.tsx + shots/S<N>.tsx + auto-barrel + zero neighbor clobbering', async () => {
+  const { ToolRegistry, fsTools } = await import('../dist/tools/index.js');
+  const { replaceShot } = await import('../dist/tools/fs.js');
+  const { shotsAudit, boardStale } = await import('../dist/tools/whatif.js');
+  const { episodePin } = await import('../dist/orchestrator/context.js');
+
+  // 1. Monolithic fallback: editing S10 must NEVER delete S11's local non-exported BEFORE_PULL/AFTER_PULL helpers!
+  const monoWithHelpers = [
+    `import { shot } from '../../engine';`,
+    `export const S10 = shot({ place: R, cam: 'wide', people: [{ who: A, act: 'talk' }] });`,
+    `// S11 — multi-phase pull`,
+    `const BEFORE_PULL = shot({ place: R, cam: 'medium', people: [{ who: A, act: 'reach' }] });`,
+    `const AFTER_PULL = shot({ place: R, cam: 'close', people: [{ who: A, act: 'shock' }] });`,
+    `export const S11 = ({ t, ...p }) => (t < 30 ? <BEFORE_PULL {...p} t={t} /> : <AFTER_PULL {...p} t={t} />);`,
+  ].join('\n') + '\n';
+  const monoPatched = replaceShot(monoWithHelpers, 'S10', `export const S10 = shot({ place: R, cam: 'close', people: [{ who: A, act: 'nod' }] });`);
+  assert.equal(monoPatched.replaced, true);
+  assert.match(monoPatched.text, /const BEFORE_PULL = shot/, 'S11 helper BEFORE_PULL is preserved when S10 is replaced');
+  assert.match(monoPatched.text, /const AFTER_PULL = shot/, 'S11 helper AFTER_PULL is preserved when S10 is replaced');
+  assert.match(monoPatched.text, /\/\/ S11 — multi-phase pull/, 'S11 comment is preserved');
+
+  // 2. Modular workflow: write shared.tsx (without `export` keywords) + write S1..S6 via edit_shot (without manual imports!)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-modular-'));
+  try {
+    const slug = 'mod-ep';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const outDir = path.join(dir, 'out', slug);
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'src', 'engine', 'shot.tsx'),
+      'export const shot = () => () => null;\nexport const phoneShot = () => () => null;\n',
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'index.tsx'),
+      `import { defineEpisode, Timeline } from '../../engine';\nimport timeline from './timeline.json';\nimport { S1 } from './shots';\nexport const modEp = defineEpisode('ModEp', { timeline: timeline as Timeline, shots: { S1 } });\n`,
+    );
+
+    const ids = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6'];
+    const tl = {
+      fps: 30,
+      total: 360,
+      segments: ids.map((id, i) => ({ shot: id, a: i * 60, b: (i + 1) * 60 })),
+      shots: ids.map((id) => ({ id, len: 60, key: 18 })),
+    };
+    const ep = {
+      id: 'ModEp',
+      slug,
+      aspect: '9:16',
+      script: Array.from({ length: 4 }, (_, i) => ({ beat: `b${i}`, text: 'Une histoire complète en français.' })),
+      shots: ids.map((id) => ({ id, size: id === 'S5' ? 'insert' : 'medium', set: 'salon', note: 'action' })),
+    };
+    fs.writeFileSync(path.join(epDir, 'timeline.json'), JSON.stringify(tl));
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(ep));
+
+    const reg = new ToolRegistry(fsTools);
+    const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: null, log: () => {} };
+
+    // Write shared.tsx WITHOUT `export` before const SALON / LEA / MARC — normalizeSharedEpisodeFile auto-exports them!
+    const wShared = await reg.run(
+      'write_file',
+      {
+        path: `src/episodes/${slug}/shared.tsx`,
+        content: [
+          `import React from 'react';`,
+          `import { cast, place } from '../../engine';`,
+          `const SALON = place('living-room', { mood: 'warm' });`,
+          `const LEA = cast({ as: 'heroine', seed: 'lea' });`,
+          `const MARC = cast({ seed: 'marc', body: 'adult' });`,
+        ].join('\n'),
+      },
+      ctx,
+    );
+    assert.equal(wShared.ok, true);
+    const sharedDisk = fs.readFileSync(path.join(epDir, 'shared.tsx'), 'utf8');
+    assert.match(sharedDisk, /export const SALON =/);
+    assert.match(sharedDisk, /export const LEA =/);
+    assert.match(sharedDisk, /export const MARC =/);
+
+    // Write S1..S4 first and check episodePin shows S5, S6 remaining
+    await reg.run('edit_shot', { episode: slug, id: 'S1', code: `export const S1 = shot({ place: SALON, cam: 'wide', people: [{ who: LEA, act: 'talk', beats: [{ at: 15, face: 'worried' }] }] });` }, ctx);
+    await reg.run('edit_shot', { episode: slug, id: 'S2', code: `export const S2 = shot({ place: SALON, cam: 'medium', people: [{ who: MARC, act: 'explain', beats: [{ at: 20, act: 'shrug' }] }] });` }, ctx);
+    // S3 and S4 BOTH define a local helper named `PHASE_A` & `PHASE_B` — zero collision across separate files!
+    await reg.run(
+      'edit_shot',
+      {
+        episode: slug,
+        id: 'S3',
+        code: [
+          `const PHASE_A = shot({ place: SALON, cam: 'medium', people: [{ who: LEA, act: 'reach', face: 'worried' }] });`,
+          `const PHASE_B = shot({ place: SALON, cam: 'close', people: [{ who: LEA, act: 'hold', face: 'shock' }] });`,
+          `export const S3 = ({ t, ...p }: ShotProps) => (t < 28 ? <PHASE_A {...p} t={t} /> : <PHASE_B {...p} t={t} />);`,
+        ].join('\n'),
+      },
+      ctx,
+    );
+    await reg.run(
+      'edit_shot',
+      {
+        episode: slug,
+        id: 'S4',
+        code: [
+          `const PHASE_A = shot({ place: SALON, cam: 'medium', people: [{ who: MARC, act: 'idle', face: 'neutral' }] });`,
+          `const PHASE_B = shot({ place: SALON, cam: 'close', people: [{ who: MARC, act: 'step-back', face: 'fear' }] });`,
+          `export const S4 = ({ t, ...p }: ShotProps) => (t < 24 ? <PHASE_A {...p} t={t} /> : <PHASE_B {...p} t={t} />);`,
+        ].join('\n'),
+      },
+      ctx,
+    );
+
+    const pinMid = episodePin(dir);
+    assert.match(pinMid, /4\/6 exported in shots\/S\*\.tsx/);
+    assert.match(pinMid, /Remaining to export: S5, S6/);
+    assert.match(pinMid, /Shared header in shared\.tsx/);
+
+    // Complete S5 and S6
+    await reg.run('edit_shot', { episode: slug, id: 'S5', code: `export const S5 = phoneShot({ name: 'Message', back: SALON, messages: [{ at: 8, text: 'Où es-tu ?' }] });` }, ctx);
+    await reg.run('edit_shot', { episode: slug, id: 'S6', code: `export const S6 = shot({ place: SALON, cam: 'close', people: [{ who: LEA, act: 'question', beats: [{ at: 18, face: 'angry' }] }] });` }, ctx);
+
+    // Check auto-imports inside shots/S3.tsx, barrel shots.tsx, and auto-synced index.tsx
+    const s3Disk = fs.readFileSync(path.join(epDir, 'shots', 'S3.tsx'), 'utf8');
+    assert.match(s3Disk, /import React from 'react';/);
+    assert.match(s3Disk, /from '\.\.\/\.\.\/\.\.\/engine'/);
+    assert.match(s3Disk, /import \{[^}]*LEA[^}]*SALON[^}]*\} from '\.\.\/shared'/);
+
+    const barrelDisk = fs.readFileSync(path.join(epDir, 'shots.tsx'), 'utf8');
+    assert.match(barrelDisk, /export \* from '\.\/shared';/);
+    for (const id of ids) assert.match(barrelDisk, new RegExp(`export \\{ ${id} \\} from '\\.\\/shots\\/${id}';`));
+
+    const indexDisk = fs.readFileSync(path.join(epDir, 'index.tsx'), 'utf8');
+    assert.match(indexDisk, /shots:\s*\{\s*S1, S2, S3, S4, S5, S6\s*\}/);
+
+    // shotsAudit passes cleanly on the modular episode!
+    assert.equal(shotsAudit(dir, slug, ep, tl), null, 'modular episode passes shotsAudit cleanly');
+
+    // Editing S3 again via edit_shot leaves S4 untouched and triggers boardStale against an older storyboard.jpg
+    const boardPath = path.join(outDir, 'storyboard.jpg');
+    fs.writeFileSync(boardPath, 'jpg');
+    const now = Date.now() / 1000;
+    fs.utimesSync(boardPath, now - 30, now - 30);
+    await reg.run('edit_shot', { episode: slug, id: 'S3', code: `export const S3 = shot({ place: SALON, cam: 'close', people: [{ who: LEA, act: 'cry', beats: [{ at: 14, face: 'sad' }] }] });` }, ctx);
+    assert.match(fs.readFileSync(path.join(epDir, 'shots', 'S4.tsx'), 'utf8'), /MARC/, 'S4.tsx is completely untouched');
+    assert.match(boardStale(dir, slug) ?? '', /changed after the last board/, 'boardStale detects updated shots/S3.tsx');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two-mode reviewer: Round 1 audits 100% of 9 sheets (66 shots) & Round 2 runs high-res targeted delta review', async () => {
+  const { reviewEpisodeBoard, formatReviewFeedback } = await import('../dist/orchestrator/reviewer.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-twomode-rev-'));
+  try {
+    const slug = 'marie66';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const shotsDir = path.join(epDir, 'shots');
+    const outDir = path.join(dir, 'out', slug);
+    const boardDir = path.join(outDir, 'board');
+    const sheetsDir = path.join(outDir, 'sheets');
+    fs.mkdirSync(shotsDir, { recursive: true });
+    fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(sheetsDir, { recursive: true });
+
+    const allIds = Array.from({ length: 66 }, (_, i) => `S${i + 1}`);
+    fs.writeFileSync(
+      path.join(epDir, 'shared.tsx'),
+      `export const SALON = place('living-room');\nexport const LEA = cast({ as: 'heroine', seed: 'lea' });\n`,
+    );
+    for (const id of allIds) {
+      fs.writeFileSync(
+        path.join(shotsDir, `${id}.tsx`),
+        `export const ${id} = shot({ place: SALON, cam: 'medium', people: [{ who: LEA, act: 'talk', beats: [{ at: 24, face: 'shock' }] }] });\n`,
+      );
+      fs.writeFileSync(path.join(boardDir, `${id}.png`), `PNG_${id}`);
+    }
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      `export * from './shared';\n` + allIds.map((id) => `export { ${id} } from './shots/${id}';`).join('\n') + '\n',
+    );
+    for (let n = 1; n <= 9; n++) {
+      fs.writeFileSync(path.join(sheetsDir, `sheet-0${n}.jpg`), `SHEET_${n}`);
+    }
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        aspect: '9:16',
+        script: [{ text: 'Je regarde son téléphone sur la table basse.' }],
+        shots: allIds.map((id) => ({ id, size: 'medium', set: 'salon', note: `Note ${id}` })),
+      }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({
+        fps: 30,
+        total: 66 * 60,
+        segments: allIds.map((id, i) => ({ shot: id, a: i * 60, b: (i + 1) * 60 })),
+        shots: allIds.map((id) => ({ id, len: 60, key: 18 })),
+      }),
+    );
+    fs.writeFileSync(path.join(epDir, 'DIRECTOR.md'), '# DIRECTOR\nSalon chaleureux en 9:16.');
+
+    // ── ROUND 1: Global Audit across 9 contact sheets (must inspect sheet-01..06 AND sheet-07..09!) ──
+    const round1Calls = [];
+    const round1Provider = {
+      model: 'gpt-6.1-sol',
+      label: 'Codex Reviewer',
+      chat: async ({ messages }) => {
+        round1Calls.push(messages);
+        if (round1Calls.length === 1) {
+          return {
+            text: JSON.stringify({
+              pass: false,
+              summary: 'Défauts sur S3 et S11.',
+              issues: [
+                { shot: 'S3, S11', severity: 'error', problem: 'Cadrage trop large', fix: 'Passer cam en close' },
+              ],
+            }),
+          };
+        }
+        return {
+          text: JSON.stringify({
+            pass: false,
+            summary: 'Défaut sur S65 (planche 9).',
+            issues: [
+              { shot: 'S65', severity: 'error', problem: 'Téléphone absent de la main', fix: 'Ajouter handRProp' },
+            ],
+          }),
+        };
+      },
+    };
+
+    const r1 = await reviewEpisodeBoard(round1Provider, dir, slug);
+    assert.equal(r1.mode, 'global');
+    assert.equal(r1.round, 1);
+    assert.equal(r1.batches, 2, '9 contact sheets run in 2 batches (6 + 3)');
+    assert.equal(r1.pass, false);
+    assert.equal(r1.blocking, true);
+    assert.equal(round1Calls.length, 2);
+    assert.equal(round1Calls[0][1].images.length, 6, 'lot 1 attaches sheets 1..6');
+    assert.equal(round1Calls[1][1].images.length, 3, 'lot 2 attaches sheets 7..9');
+    assert.match(round1Calls[0][1].content, /couvrant S1\.\.S48/);
+    assert.match(round1Calls[1][1].content, /couvrant S49\.\.S66/);
+    assert.match(round1Calls[1][1].content, /vignette à t=18f/);
+    assert.equal(r1.issues.length, 2, 'merges issues from both batches including S65 on sheet 9');
+
+    const fb1 = formatReviewFeedback(r1, slug);
+    assert.match(fb1, /edit_shot/, 'recommends edit_shot instead of edit_file');
+    assert.match(fb1, /args: \["S3","S11","S65"\]/, 'parses multi-shot "S3, S11" + "S65" cleanly');
+
+    // ── ROUND 2: Targeted High-Resolution Delta Re-check (attaches ONLY full-res S3.png, S11.png, S65.png!) ──
+    const round2Calls = [];
+    const round2Provider = {
+      model: 'gpt-6.1-sol',
+      label: 'Codex Reviewer',
+      chat: async ({ messages }) => {
+        round2Calls.push(messages);
+        return {
+          text: JSON.stringify({ pass: true, summary: 'S3, S11 et S65 sont corrigés.', issues: [] }),
+        };
+      },
+    };
+
+    const r2 = await reviewEpisodeBoard(round2Provider, dir, slug);
+    assert.equal(r2.mode, 'delta', 'Round 2 switches automatically to targeted delta mode');
+    assert.equal(r2.round, 2);
+    assert.deepEqual(r2.targetShots, ['S3', 'S11', 'S65']);
+    assert.equal(r2.pass, true);
+    assert.equal(r2.blocking, false);
+    assert.equal(round2Calls.length, 1, '3 target stills fit in a single high-res delta call');
+
+    const deltaSys = round2Calls[0][0].content;
+    const deltaUser = round2Calls[0][1];
+    assert.match(deltaSys, /CONTRE-VISITE CIBLÉE/);
+    assert.equal(deltaUser.images.length, 3, 'attaches the 3 full-res PNG stills instead of 9 contact sheets');
+    assert.deepEqual(
+      deltaUser.images.map((im) => Buffer.from(im.data, 'base64').toString()),
+      ['PNG_S3', 'PNG_S11', 'PNG_S65'],
+    );
+    assert.match(deltaUser.content, /Plans ciblés vérifiés : S3, S11, S65/);
+    assert.match(deltaUser.content, /Cadrage trop large/);
+    assert.match(deltaUser.content, /Téléphone absent de la main/);
+    assert.match(deltaUser.content, /#### S65/);
+    assert.doesNotMatch(deltaUser.content, /#### S20/, 'untouched shots are NOT re-audited in delta mode');
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
