@@ -44,3 +44,6 @@
 ## Rythme et cohérence (2026-11-10)
 - Priorités 1 à 3 de l’audit faites, plus un premier lot de la priorité 4 : `docs/feature-plans/rythme-et-coherence.md`. Tests 26/26, simulation complète OK.
 - Reste : contrechamp, catalogue de lieux et d’extérieurs, personnage assis vu de face, angles ; mesurer un vrai short sur l’autre machine. Non commité.
+
+## Contrechamp et lieux (2026-11-10)
+- `docs/feature-plans/contrechamp-et-lieux.md` : contrechamp (`view: reverse`), 17 lieux nouveaux d’après l’analyse de la chaîne, giron des personnages assis, angles bas/haut. Tests 26/26, 4 moteurs OK. Non commité.

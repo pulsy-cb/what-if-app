@@ -106,6 +106,9 @@ const legSwing = (a: number, pose: PersonPose): number => {
   return 1 + (foldYaw(pose.yaw) - 1) * big;
 };
 
+/** How much a thigh points at the camera: 1 seated face-on, 0 standing or seen from the side. */
+export const lapOf = (pose: PersonPose, thighAngle: number): number => clamp01((Math.abs(thighAngle) - 45) / 25) * clamp01(1 - foldYaw(pose.yaw) / 0.72);
+
 /** Joint positions in local space (before the hip translate and scale), for this body. */
 export const jointsOf = (pose: PersonPose, b: Body = BODIES.adult) => {
   const arm = (s: 1 | -1, raw: Limb, root: P) => {
@@ -121,7 +124,9 @@ export const jointsOf = (pose: PersonPose, b: Body = BODIES.adult) => {
     const limb = normalizeLimb(raw, true);
     const k1 = legSwing(limb.a, pose);
     const d1 = { x: forward(pose) * Math.sin(rad(limb.a)) * k1, y: Math.cos(rad(limb.a)) };
-    const mid = { x: root.x + d1.x * b.thigh, y: root.y + d1.y * b.thigh };
+    // seated and seen from the front, the knees open a little: the lap then reads as a lap, not as short standing legs
+    const open = lapOf(pose, limb.a) * b.hip * 0.7 * Math.sign(root.x || 1);
+    const mid = { x: root.x + d1.x * b.thigh + open, y: root.y + d1.y * b.thigh };
     const a2 = limb.a + limb.b;
     const k2 = legSwing(a2, pose);
     const d2 = { x: forward(pose) * Math.sin(rad(a2)) * k2, y: Math.cos(rad(a2)) };
@@ -637,6 +642,18 @@ export const Person: React.FC<{
           {c?.legs.id === 'skirt' ? <Skirt knees={[j.legL.mid, j.legR.mid]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
           {pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
           {torso}
+          {(() => {
+            // thighs pointing at the camera are seen end-on: a short lap from knee to knee, over the top of the shins
+            const lap = Math.max(lapOf(pose, normalizeLimb(pose.legL, true).a), lapOf(pose, normalizeLimb(pose.legR, true).a));
+            if (lap < 0.25) return null;
+            const w = b.leg;
+            const x0 = Math.min(j.legL.mid.x, j.legR.mid.x) - w / 2;
+            const x1 = Math.max(j.legL.mid.x, j.legR.mid.x) + w / 2;
+            const y0 = -w * 0.6;
+            const y1 = Math.max(j.legL.mid.y, j.legR.mid.y) + w * 0.9;
+            const fill = legPaint?.cap ?? legPaint?.limb ?? L.limb;
+            return <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx={w * 0.5} fill={fill} stroke={L.line} strokeWidth={4} opacity={Math.min(1, lap * 1.4)} />;
+          })()}
           {pose.yaw < 0 ? <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</> : <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>}
           <g transform={`${headShift}${headSize}`}>
           {L.extra === 'hood' ? (

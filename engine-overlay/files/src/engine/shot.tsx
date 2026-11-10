@@ -4,6 +4,7 @@ import { Stage, Staged, StageItem, Duo } from './stage';
 import type { StageBeat } from './stage';
 import type { DuoAction, Place } from './stage';
 import type { Placed } from './rooms';
+import { mirrorSpot, mirrorYaw } from './rooms';
 import type { PersonLook } from './person';
 import { bodyOf } from './person';
 import type { ActName, Stance } from './actions';
@@ -29,7 +30,7 @@ export type ReachSpec = { to: ReachTarget; side?: 'L' | 'R'; part?: 'head' | 'ch
 /** from frame `at`, this person does something else. Frames are the shot's own clock (0..len): use the word frames given for the shot. */
 export type PersonBeat = { at: number; act?: ActName; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null };
 /** from frame `at`, the camera changes: another size, another person, or a shake (an impact) */
-export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number };
+export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level' };
 export type PersonSpec = {
   who: PersonLook;
   /** turn toward this person (index in people) */ look?: number;
@@ -60,6 +61,11 @@ export type ShotSpec = {
   /** slow move during the shot; default a gentle push-in */ move?: 'push' | 'pull' | 'still';
   /** depth kept sharp; the rest softens. Close-ups do it on their own (soft background), medium shots a little */ focus?: number;
   /** 'sharp' keeps the room sharp in a close-up (to read a board, a screen) */ background?: 'soft' | 'sharp';
+  /** 'reverse': the reverse angle. The camera looks at the opposite wall, people keep their places and are seen from the
+   * other side (a face becomes a back). Alternate it with the normal view in a dialogue: shot / reverse shot. */
+  view?: 'front' | 'reverse';
+  /** 'low': the camera looks up, the person looms and the ceiling shows; 'high': it looks down, the person shrinks over the floor */
+  angle?: 'low' | 'high';
   /** camera changes during the shot: a punch-in on the key word, a switch to the other person, a shake */ beats?: CamBeat[];
   people?: PersonSpec[];
   duo?: DuoSpec;
@@ -125,12 +131,15 @@ const sortBeats = <T extends { at: number },>(b: T[] | undefined): T[] => [...(b
 /** Turn a description into a shot. */
 export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
   const ShotComp: React.FC<ShotProps> = ({ t, len }) => {
-    const pl = spec.place;
+    const reverse = spec.view === 'reverse';
+    const pl = reverse ? spec.place.reverse : spec.place;
+    const flipYaw = (y: number | undefined) => (y === undefined || !reverse ? y : mirrorYaw(y));
+    const flipAt = <T extends Place>(at: T): Place => (reverse && 'u' in at ? mirrorSpot(at as { u: number; w: number }) : at);
     const people = spec.people ?? [];
     const whereOf = (p: PersonSpec, idx = 0): Place => {
-      if (p.on) return pl.seat(p.on, p.seat ?? 0);
+      if (p.on) return flipAt(pl.seat(p.on, p.seat ?? 0));
       const at = timed(p.at, t, len);
-      return at ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
+      return flipAt(at ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 });
     };
     const spotOfPerson = (i: number) => {
       const where = whereOf(people[i]!, i);
@@ -147,7 +156,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         return { to: { x: g.x, y: g.y - BODY * g.scale * h }, side: r.side };
       }
       if (typeof to === 'string') return { to: pl.pointOf(to), side: r.side };
-      const g = pl.ground.project(to.u, to.w);
+      const spot = flipAt({ u: to.u, w: to.w }) as { u: number; w: number };
+      const g = pl.ground.project(spot.u, spot.w);
       return { to: { x: g.x, y: g.y - BODY * g.scale * (1 - (to.v ?? 0.8)) * 0.9 }, side: r.side };
     };
     // turning toward someone keeps the strength of the turn and picks its side
@@ -158,8 +168,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     };
     const yawAt = (i: number): number => {
       const p = people[i]!;
-      let y = yawToward(i, p.look, p.yaw) ?? 0;
-      for (const b of sortBeats(p.beats)) if (b.at <= t && (b.yaw !== undefined || b.look !== undefined)) y = yawToward(i, b.look, b.yaw ?? y) ?? y;
+      let y = yawToward(i, p.look, flipYaw(p.yaw)) ?? 0;
+      for (const b of sortBeats(p.beats)) if (b.at <= t && (b.yaw !== undefined || b.look !== undefined)) y = yawToward(i, b.look, flipYaw(b.yaw) ?? y) ?? y;
       return y;
     };
     const focusOn = (i: number) => {
@@ -171,8 +181,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         return { x: g.x, y: g.y + (sitting ? b.thigh * g.scale * 0.85 : 0), scale: g.scale * ((b.thigh + b.shin) / 140) };
       }
       if (spec.duo) {
-        const a = pl.ground.project(spec.duo.a.at.u, spec.duo.a.at.w);
-        const b = pl.ground.project(spec.duo.b.at.u, spec.duo.b.at.w);
+        const da = flipAt(spec.duo.a.at) as { u: number; w: number };
+        const db = flipAt(spec.duo.b.at) as { u: number; w: number };
+        const a = pl.ground.project(da.u, da.w);
+        const b = pl.ground.project(db.u, db.w);
         return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, scale: (a.scale + b.scale) / 2 };
       }
       return pl.ground.project(0.5, 0.45);
@@ -187,8 +199,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     let camPrev: typeof camNow | null = null;
     let camAt = 0;
     let shake = 0;
+    let angle: 'low' | 'high' | 'level' = spec.angle ?? 'level';
     for (const b of sortBeats(spec.beats)) {
       if (b.at > t) break;
+      if (b.angle) angle = b.angle;
       if (b.cam !== undefined || b.on !== undefined) {
         camPrev = camNow;
         camNow = { cam: b.cam ?? camNow.cam, on: b.on ?? camNow.on };
@@ -208,9 +222,16 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'medium') && people[camNow.on];
     const focus = spec.focus ?? (soft ? ('u' in whereOf(people[camNow.on]!, camNow.on) ? (whereOf(people[camNow.on]!, camNow.on) as { w: number }).w : undefined) : undefined);
     const shellFilter = soft ? (size === 'close' ? 'url(#blur6)' : 'url(#blur3)') : undefined;
+    // an angle in a flat drawing: stretch the world about the subject's feet and move the frame toward ceiling or floor
+    const feet = people[camNow.on] ? spotOfPerson(camNow.on).y : base.y;
+    const tall = angle === 'low' ? 1.08 : angle === 'high' ? 0.93 : 1;
+    const lift = angle === 'low' ? -0.1 : angle === 'high' ? 0.1 : 0;
+    const viewH = FRAME.h / zoom;
+    const angleT = tall === 1 ? undefined : `translate(0 ${feet}) scale(1 ${tall}) translate(0 ${-feet})`;
     const jolt = shake ? { x: Math.sin(t * 2.7) * shake, y: Math.cos(t * 3.1) * shake * 0.6 } : { x: 0, y: 0 };
     return (
-      <g transform={camT(base.x + jolt.x / zoom, base.y + jolt.y / zoom, zoom)}>
+      <g transform={camT(base.x + jolt.x / zoom, base.y + lift * viewH + jolt.y / zoom, zoom)}>
+      <g transform={angleT}>
         <Stage ground={pl.ground} t={t} focus={focus}>
           <g filter={shellFilter}>
             <pl.Shell t={t} />
@@ -218,7 +239,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           {pl.items(t)}
           {people.flatMap((p) => {
             if (!p.on || !pl.wantsStool(p.on)) return [];
-            const s = pl.seat(p.on, p.seat ?? 0);
+            const s = flipAt(pl.seat(p.on, p.seat ?? 0)) as { u: number; w: number };
             const g = pl.ground.project(s.u, s.w);
             const b = legsOf(p);
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
@@ -229,21 +250,22 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             // faces given in beats join the face keyframes
             const baseFace: [number, FaceExpr][] = p.face === undefined ? [] : typeof p.face === 'string' ? [[0, p.face]] : p.face;
             const faces = [...baseFace, ...beats.filter((b) => b.face).map((b): [number, FaceExpr] => [b.at, b.face!])].sort((a, b) => a[0] - b[0]);
-            let yawRun = yawToward(i, p.look, p.yaw) ?? 0;
+            let yawRun = yawToward(i, p.look, flipYaw(p.yaw)) ?? 0;
             const stageBeats: StageBeat[] = beats.map((b) => {
-              if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, b.yaw ?? yawRun) ?? yawRun;
+              if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
               return { at: b.at, act: b.act, yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
             });
             const reach = targetOf(p.reach);
             return (
-              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, p.yaw)} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
+              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(p.yaw))} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
                 pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
                 rimId={rimId} headGear={headGear} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
             );
           })}
-          {spec.duo ? <Duo a={{ at: spec.duo.a.at, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: spec.duo.b.at, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
+          {spec.duo ? <Duo a={{ at: flipAt(spec.duo.a.at) as { u: number; w: number }, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: flipAt(spec.duo.b.at) as { u: number; w: number }, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
           {spec.extra ? <g>{typeof spec.extra === 'function' ? spec.extra(t, len) : spec.extra}</g> : null}
         </Stage>
+      </g>
       </g>
     );
   };

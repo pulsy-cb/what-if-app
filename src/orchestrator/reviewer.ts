@@ -56,7 +56,7 @@ Vérifie particulièrement ces 9 points critiques :
 8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ? Une source de lumière visible par plan ?
 9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
 
-Le code peut décrire les plans au lieu de les dessiner : \`shot({ place, cam, people, duo })\`. \`place('classroom', …)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression), \`duo\` une interaction à deux. Tes correctifs doivent employer ces mêmes champs quand le plan est écrit ainsi.
+Le code peut décrire les plans au lieu de les dessiner : \`shot({ place, cam, people, duo })\`. \`place('classroom', …)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression), \`duo\` une interaction à deux. \`view: 'reverse'\` est le contrechamp (le mur opposé), \`angle\` une contre-plongée ('low') ou une plongée ('high'). Tes correctifs doivent employer ces mêmes champs quand le plan est écrit ainsi.
 
 Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un bloc \`\`\`json) respectant exactement ce schéma :
 {

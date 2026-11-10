@@ -596,7 +596,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // Catch stage positions off the ground: u is across the floor, w runs from the back wall (0) to the camera (1)
     for (const at of body.matchAll(/\bat(?:=\{\{|\s*:\s*\{)\s*u:\s*(-?\d*\.?\d+)\s*,\s*w:\s*(-?\d*\.?\d+)/g)) {
       const [u, w] = [Number(at[1]), Number(at[2])];
-      if (u < -0.1 || u > 1.1 || w < 0 || w > 1) {
+      if (u < -0.5 || u > 1.5 || w < 0 || w > 1) {
         errors.push(`${id} places something at u ${u}, w ${w}: u runs across the floor (0..1) and w from the back wall (0) to the camera (1)`);
       }
     }

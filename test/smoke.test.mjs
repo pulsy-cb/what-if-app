@@ -765,6 +765,10 @@ test('shot(): the audit sees its people and its motion, and a wrong name at the 
     assert.doesNotMatch(audit(), /is static/, 'the default slow push-in is motion');
     write(`cam: 'wide', move: 'still', people: [{ who: A, at: { u: 0.4, w: 0.5 } }]`);
     assert.match(audit(), /S1 is static/, 'held camera and nobody acting is static');
+    write(`cam: 'wide', people: [{ who: A, at: { u: -0.3, w: 0.2 }, act: 'talk', beats: [{ at: 9, face: 'shock' }] }]`);
+    assert.doesNotMatch(audit(), /places something at/, 'outdoor pieces line the far side from u -0.3 to 1.3');
+    write(`cam: 'wide', people: [{ who: A, at: { u: -0.7, w: 0.2 }, act: 'talk', beats: [{ at: 9, face: 'shock' }] }]`);
+    assert.match(audit(), /places something at u -0\.7/);
     write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 1.6 }, act: 'talk' }]`);
     assert.match(audit(), /places something at u 0\.4, w 1\.6/, 'floor positions are checked inside shot() too');
 
