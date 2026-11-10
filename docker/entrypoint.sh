@@ -12,8 +12,10 @@ fi
 # /data is usually a bind mount owned by the host (often root). Fix its owner as root, then run the app
 # as the unprivileged "node" user: the agent writes files and executes commands, so it must not be root.
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p "$DATA"
+  mkdir -p "$DATA" "$DATA/.gemini"
+  ln -sfn "$DATA/.gemini" /home/node/.gemini 2>/dev/null || true
   chown -R node:node "$DATA" 2>/dev/null || echo "warning: cannot chown $DATA (read-only mount?)" >&2
+  chown -h node:node /home/node/.gemini 2>/dev/null || true
   if command -v setpriv >/dev/null 2>&1; then
     # HOME must follow the uid, otherwise Modal looks for /root/.modal.toml instead of /home/node/.modal.toml
     export HOME=/home/node

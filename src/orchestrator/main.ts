@@ -8,7 +8,16 @@ import { Db } from './db.js';
 import { Bus } from './bus.js';
 import { Approvals } from './approvals.js';
 import { defaultRegistry, type ToolContext, type ToolRegistry } from '../tools/index.js';
-import { PROVIDER_PRESETS, providerConfig, resolveProvider, resolveReviewProvider, reviewProviderConfig } from './providers/index.js';
+import {
+  PROVIDER_MODEL_CATALOG,
+  PROVIDER_PRESETS,
+  hasAgyCli,
+  hasCodexAuth,
+  providerConfig,
+  resolveProvider,
+  resolveReviewProvider,
+  reviewProviderConfig,
+} from './providers/index.js';
 import { runTurn } from './agent.js';
 import { mimeOf, safeJoin, walk } from '../tools/paths.js';
 
@@ -138,24 +147,30 @@ export function createApp(config: Config = loadConfig()): App {
       if (method === 'GET') {
         const cfg = providerConfig(db);
         const revCfg = reviewProviderConfig(db);
+        const codexReady = hasCodexAuth();
+        const agyReady = hasAgyCli();
         return json(res, 200, {
           provider: cfg.provider,
           baseURL: cfg.baseURL,
           model: cfg.model,
-          hasKey: Boolean(cfg.apiKey),
+          hasKey: cfg.provider === 'codex' ? codexReady : cfg.provider === 'agy' ? agyReady : Boolean(cfg.apiKey),
+          codexReady,
+          agyReady,
           reviewer: revCfg ? { provider: revCfg.provider, model: revCfg.model, baseURL: revCfg.baseURL } : null,
           presets: PROVIDER_PRESETS,
+          catalog: PROVIDER_MODEL_CATALOG,
           skillDir: config.skillDir,
           maxSteps: config.maxSteps,
         });
       }
       if (method === 'POST') {
         const body = await readJson(req);
-        for (const key of ['provider', 'baseURL', 'model'] as const) {
-          if (typeof body[key] === 'string' && body[key]) db.setSetting(key, body[key]);
+        for (const key of ['provider', 'baseURL', 'model', 'reviewProvider', 'reviewBaseURL', 'reviewModel', 'reviewerEnabled'] as const) {
+          if (typeof body[key] === 'string') db.setSetting(key, body[key].trim());
         }
         if (typeof body.apiKey === 'string' && body.apiKey.trim()) db.setSetting('apiKey', body.apiKey.trim());
         if (body.clearKey === true) db.setSetting('apiKey', '');
+        if (typeof body.reviewApiKey === 'string' && body.reviewApiKey.trim()) db.setSetting('reviewApiKey', body.reviewApiKey.trim());
         return json(res, 200, { ok: true });
       }
     }
@@ -165,24 +180,74 @@ export function createApp(config: Config = loadConfig()): App {
 
     // ---- projects
     if (parts[1] === 'projects') {
+      const enrichProject = (p: ReturnType<typeof db.listProjects>[number], activityMap?: Map<string, string>) => {
+        const pThreads = db.listThreads(p.id);
+        const activeRun = pThreads.map((t) => running.get(t.id)).find(Boolean) ?? null;
+        const timing = db.projectTiming(p.id);
+        const archivedThreadCount = pThreads.filter((t) => Boolean(t.archived_at)).length;
+        const effAgent = providerConfig(db, p);
+        const effRev = reviewProviderConfig(db, p);
+        return {
+          ...p,
+          archived_at: p.archived_at ?? null,
+          provider: p.provider ?? null,
+          model: p.model ?? null,
+          review_provider: p.review_provider ?? null,
+          review_model: p.review_model ?? null,
+          effectiveModel: {
+            provider: effAgent.provider,
+            model: effAgent.model,
+            reviewProvider: effRev?.provider ?? null,
+            reviewModel: effRev?.model ?? null,
+          },
+          lastActivityAt: activityMap?.get(p.id) ?? p.created_at,
+          threadCount: pThreads.length - archivedThreadCount,
+          archivedThreadCount,
+          credits: db.creditsSpent(p.id),
+          running: Boolean(activeRun),
+          startedAt: activeRun?.startedAt ?? null,
+          elapsedMs: timing.totalMs,
+          lastRunMs: timing.lastRunMs,
+        };
+      };
+
       if (method === 'GET' && parts.length === 2) {
+        const activityMap = db.projectLastActivityMap();
         return json(
           res,
           200,
-          db.listProjects().map((p) => {
-            const pThreads = db.listThreads(p.id);
-            const activeRun = pThreads.map((t) => running.get(t.id)).find(Boolean) ?? null;
-            const timing = db.projectTiming(p.id);
-            return {
-              ...p,
-              credits: db.creditsSpent(p.id),
-              running: Boolean(activeRun),
-              startedAt: activeRun?.startedAt ?? null,
-              elapsedMs: timing.totalMs,
-              lastRunMs: timing.lastRunMs,
-            };
-          }),
+          db.listProjects().map((p) => enrichProject(p, activityMap)),
         );
+      }
+      if (
+        (method === 'PATCH' && parts.length === 3 && parts[2]) ||
+        (method === 'POST' && parts.length === 4 && parts[2] && parts[3] === 'archive')
+      ) {
+        const projectId = parts[2];
+        let project = db.getProject(projectId);
+        if (!project) return json(res, 404, { error: 'no such project' });
+        const body = await readJson(req);
+        if (typeof body.name === 'string' && body.name.trim()) {
+          project = db.renameProject(projectId, body.name) ?? project;
+        }
+        if (typeof body.archived === 'boolean') {
+          project = db.setProjectArchived(projectId, body.archived) ?? project;
+        }
+        if ('provider' in body || 'model' in body || 'reviewProvider' in body || 'reviewModel' in body || 'review_provider' in body || 'review_model' in body) {
+          project =
+            db.setProjectModels(projectId, {
+              ...('provider' in body ? { provider: body.provider == null ? null : String(body.provider) } : {}),
+              ...('model' in body ? { model: body.model == null ? null : String(body.model) } : {}),
+              ...('reviewProvider' in body || 'review_provider' in body
+                ? { review_provider: (body.reviewProvider ?? body.review_provider) == null ? null : String(body.reviewProvider ?? body.review_provider) }
+                : {}),
+              ...('reviewModel' in body || 'review_model' in body
+                ? { review_model: (body.reviewModel ?? body.review_model) == null ? null : String(body.reviewModel ?? body.review_model) }
+                : {}),
+            }) ?? project;
+        }
+        bus.emit('global', 'projects_changed', { id: projectId });
+        return json(res, 200, enrichProject(project, db.projectLastActivityMap()));
       }
       if (method === 'POST' && parts.length === 2) {
         const body = await readJson(req);
@@ -209,9 +274,14 @@ export function createApp(config: Config = loadConfig()): App {
             fs.writeFileSync(path.join(root, 'PROJECT.md'), `# ${name}\n\n- created ${new Date().toISOString()}\n`);
           }
         }
-        const project = db.createProject(id, name, root);
+        const project = db.createProject(id, name, root, {
+          provider: typeof body.provider === 'string' ? body.provider : null,
+          model: typeof body.model === 'string' ? body.model : null,
+          review_provider: typeof body.reviewProvider === 'string' ? body.reviewProvider : null,
+          review_model: typeof body.reviewModel === 'string' ? body.reviewModel : null,
+        });
         bus.emit('global', 'projects_changed', { id });
-        return json(res, 201, { project, tool: toolResult });
+        return json(res, 201, { project: enrichProject(project, db.projectLastActivityMap()), tool: toolResult });
       }
       if (method === 'GET' && parts[2] && parts[3] === 'files') {
         const project = db.getProject(parts[2]);
@@ -243,18 +313,32 @@ export function createApp(config: Config = loadConfig()): App {
     if (parts[1] === 'threads') {
       if (method === 'GET' && parts.length === 2) {
         const list = db.listThreads(url.searchParams.get('projectId') ?? undefined);
-        return json(res, 200, list.map((t) => ({ ...t, running: running.has(t.id) })));
+        return json(res, 200, list.map((t) => ({ ...t, archived_at: t.archived_at ?? null, running: running.has(t.id) })));
       }
       if (method === 'POST' && parts.length === 2) {
         const body = await readJson(req);
         const project = db.getProject(String(body.projectId ?? ''));
         if (!project) return json(res, 400, { error: 'unknown project' });
         const thread = db.createThread(project.id, body.title ? String(body.title) : null);
-        return json(res, 201, thread);
+        return json(res, 201, { ...thread, archived_at: thread.archived_at ?? null, running: false });
       }
       const threadId = parts[2];
-      const thread = threadId ? db.getThread(threadId) : null;
+      let thread = threadId ? db.getThread(threadId) : null;
       if (threadId && !thread) return json(res, 404, { error: 'no such thread' });
+
+      if (
+        (method === 'PATCH' && parts.length === 3 && threadId) ||
+        (method === 'POST' && parts.length === 4 && threadId && parts[3] === 'archive')
+      ) {
+        const body = await readJson(req);
+        if (typeof body.title === 'string' && body.title.trim()) {
+          thread = db.renameThread(threadId, body.title) ?? thread;
+        }
+        if (typeof body.archived === 'boolean') {
+          thread = db.setThreadArchived(threadId, body.archived) ?? thread;
+        }
+        return json(res, 200, { ...thread!, archived_at: thread!.archived_at ?? null, running: running.has(threadId) });
+      }
 
       if (method === 'GET' && parts[3] === 'messages') {
         const messages = db.listMessages(threadId!).map((m) => ({ ...m, payload: m.payload ? JSON.parse(m.payload) : null }));
@@ -291,8 +375,8 @@ export function createApp(config: Config = loadConfig()): App {
             config,
             registry,
             approvals,
-            provider: () => resolveProvider(db),
-            reviewProvider: () => resolveReviewProvider(db),
+            provider: () => resolveProvider(db, db.getProject(thread!.project_id)),
+            reviewProvider: () => resolveReviewProvider(db, db.getProject(thread!.project_id)),
           },
           threadId!,
           controller.signal,

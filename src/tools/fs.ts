@@ -312,8 +312,10 @@ function nearestBlock(haystack: string, needle: string): { line: number; endLine
   });
   if (best.index < 0 || best.score < Math.min(6, Math.ceil(want.length / 2))) return null;
   const count = Math.max(1, needle.split('\n').length);
-  const slice = lines.slice(best.index, best.index + count);
-  return { line: best.index + 1, endLine: best.index + slice.length, text: slice.join('\n') };
+  const from = Math.max(0, best.index - 2);
+  const to = Math.min(lines.length, best.index + count + 3);
+  const slice = lines.slice(from, to);
+  return { line: from + 1, endLine: from + slice.length, text: slice.join('\n') };
 }
 
 /** Length of the longest common substring. */
@@ -367,11 +369,27 @@ const editFile: Tool = {
     if (src === null) throw new Error(`cannot read ${input.path}`);
     let out = src;
     const applied: number[] = [];
+    const isShotsTsx = /(?:^|\/)shots\.tsx$/.test(input.path.replace(/\\/g, '/'));
+    const shotsTip = isShotsTsx
+      ? '\nTip: for shots.tsx, prefer edit_shot (replaces one shot S<N> cleanly by ID) or send smaller single-shot edits.'
+      : '';
     for (let i = 0; i < input.edits.length; i++) {
       const { oldText, newText } = input.edits[i]!;
       const first = out.indexOf(oldText);
       if (first >= 0) {
-        if (out.indexOf(oldText, first + 1) >= 0) throw new Error(`edit ${i}: oldText is not unique in ${input.path}`);
+        if (out.indexOf(oldText, first + 1) >= 0) {
+          const hitLines: number[] = [];
+          let cursor = 0;
+          while (hitLines.length < 6) {
+            const idx = out.indexOf(oldText, cursor);
+            if (idx < 0) break;
+            hitLines.push(out.slice(0, idx).split('\n').length);
+            cursor = idx + Math.max(1, oldText.length);
+          }
+          throw new Error(
+            `edit ${i}: oldText is not unique in ${input.path} (matches at lines ${hitLines.join(', ')} — include surrounding lines to disambiguate).${shotsTip}`,
+          );
+        }
         out = out.slice(0, first) + newText + out.slice(first + oldText.length);
         applied.push(first);
         continue;
@@ -386,7 +404,10 @@ const editFile: Tool = {
       const near = nearestBlock(out, oldText);
       throw new Error(
         `edit ${i}: oldText not found in ${input.path}.` +
-          (near ? ` The closest text is lines ${near.line}-${near.endLine}:\n---\n${near.text}\n---\nCopy it exactly (indentation included).` : ' Read the file and copy the text exactly.'),
+          (near
+            ? ` The closest text is lines ${near.line}-${near.endLine}:\n---\n${near.text}\n---\nCopy the exact lines you want to replace (indentation included).`
+            : ' Read the file and copy the text exactly.') +
+          shotsTip,
       );
     }
     const abs = safeJoin(ctx.projectRoot, input.path);

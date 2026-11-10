@@ -1,44 +1,143 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What If — studio</title>
+    <title>What If — Studio</title>
+    <script>
+      (() => {
+        const qTheme = new URLSearchParams(location.search).get('theme');
+        const saved = (qTheme === 'light' || qTheme === 'dark') ? qTheme : localStorage.getItem('whatif.theme');
+        document.documentElement.dataset.theme = saved === 'light' ? 'light' : 'dark';
+      })();
+    </script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand"><span class="dot"></span> what&nbsp;if <em>studio</em></div>
-      <div class="grow"></div>
-      <span id="timer" class="chip muted" hidden>⏱ 00:00</span>
-      <span id="model" class="chip muted">modèle…</span>
-      <span id="credits" class="chip muted">0 cr</span>
-      <button id="settings-btn" class="ghost" title="Réglages">⚙</button>
-    </header>
+    <div class="app-shell">
+      <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
 
-    <div class="layout">
-      <aside class="sidebar">
-        <div class="side-head">
-          <span>Projets</span>
-          <button id="new-project" class="ghost" title="Nouveau projet">+</button>
+      <aside id="sidebar" class="sidebar">
+        <div class="ws-header">
+          <div class="brand">
+            <span class="ws-logo">W</span>
+            <div class="ws-titles">
+              <span class="ws-name">What If <em>Studio</em></span>
+              <span class="ws-status"><span class="dot"></span> Prêt</span>
+            </div>
+          </div>
+          <button id="new-project" class="new-proj-btn" type="button" title="Créer un nouveau projet">
+            <span class="plus-icon">＋</span> Nouveau
+          </button>
         </div>
-        <ul id="projects" class="list"></ul>
-        <div class="side-head">
-          <span>Fils</span>
-          <button id="new-thread" class="ghost" title="Nouveau fil">+</button>
+
+        <div class="ws-search">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            id="sidebar-search"
+            type="search"
+            placeholder="Rechercher un projet ou fil… (/)"
+            autocomplete="off"
+          />
         </div>
-        <ul id="threads" class="list"></ul>
+
+        <div class="ws-scroll">
+          <section class="nav-section">
+            <div class="side-head">
+              <span class="sec-label">Projets <span id="projects-count" class="sec-count">0</span></span>
+            </div>
+            <ul id="projects" class="list channel-list"></ul>
+            <button id="toggle-archived-projects" class="archive-toggle" type="button" hidden>
+              <span class="chev">▸</span>
+              <span id="archived-projects-label">Projets archivés (0)</span>
+            </button>
+            <ul id="archived-projects" class="list channel-list archived-list" hidden></ul>
+          </section>
+
+          <section class="nav-section">
+            <div class="side-head">
+              <span class="sec-label">
+                Conversations
+                <span id="threads-count" class="sec-count">0</span>
+              </span>
+              <button id="new-thread" class="icon-btn" type="button" title="Nouvelle conversation dans ce projet">＋</button>
+            </div>
+            <ul id="threads" class="list thread-list"></ul>
+            <button id="toggle-archived-threads" class="archive-toggle" type="button" hidden>
+              <span class="chev">▸</span>
+              <span id="archived-threads-label">Conversations archivées (0)</span>
+            </button>
+            <ul id="archived-threads" class="list thread-list archived-list" hidden></ul>
+          </section>
+        </div>
+
+        <div class="ws-footer">
+          <button id="model-btn" class="ws-model-btn" type="button" title="Configurer le modèle IA">
+            <span class="model-dot"></span>
+            <span id="model" class="model-text">modèle…</span>
+          </button>
+        </div>
       </aside>
 
       <main class="chat">
+        <header class="channel-header">
+          <div class="ch-title-group">
+            <button id="mobile-menu-btn" class="icon-btn mobile-only" type="button" title="Ouvrir la navigation">☰</button>
+            <div class="ch-heading">
+              <span id="ch-prefix" class="ch-hash">#</span>
+              <span id="ch-project-name" class="ch-project">Aucun projet</span>
+              <span id="ch-sep" class="ch-sep" hidden>/</span>
+              <span id="ch-thread-name" class="ch-thread" hidden></span>
+              <span id="ch-archived-badge" class="badge-archived" hidden>Archivé</span>
+            </div>
+          </div>
+
+          <div class="ch-actions">
+            <span id="timer" class="chip muted" hidden>⏱ 00:00</span>
+            <button id="project-model-btn" class="pill-btn model-pill" type="button" hidden title="Choisir le modèle Agent & Reviewer propre à ce projet">
+              🤖 <span id="project-model-label">modèle…</span>
+            </button>
+            <button id="deliverables-toggle" class="pill-btn" type="button" hidden title="Afficher ou masquer les livrables du projet">
+              🎬 <span id="deliverables-count">0</span>
+            </button>
+            <button id="archive-thread-btn" class="pill-btn subtle" type="button" hidden></button>
+            <button id="archive-project-btn" class="pill-btn subtle" type="button" hidden></button>
+            <span id="credits" class="chip muted" title="Crédits consommés sur ce projet">0 cr</span>
+            <button id="theme-toggle" class="pill-btn theme-btn" type="button" title="Changer de thème (Clair / Sombre)">
+              <span id="theme-icon">☀️</span>
+              <span id="theme-label">Clair</span>
+            </button>
+            <button id="settings-btn" class="icon-btn" type="button" title="Réglages">⚙</button>
+          </div>
+        </header>
+
+        <div id="archived-banner" class="archived-banner" hidden>
+          <span id="archived-banner-text">Cet élément est archivé.</span>
+          <button id="archived-banner-restore" class="pill-btn" type="button">Restaurer</button>
+        </div>
+
         <div id="deliverables" class="deliverables" hidden></div>
+
         <div id="messages" class="messages"></div>
+
         <div id="approvals" class="approvals"></div>
+
         <form id="composer" class="composer">
-          <textarea id="input" rows="2" placeholder="Dis-moi quoi faire… (Entrée pour envoyer, Maj+Entrée pour une ligne)"></textarea>
-          <div class="composer-actions">
-            <button id="stop" type="button" class="ghost danger" hidden>Stop</button>
-            <button id="send" type="submit" class="primary">Envoyer</button>
+          <div class="composer-box">
+            <textarea
+              id="input"
+              rows="2"
+              placeholder="Envoyer un message au studio… (Entrée pour envoyer, Maj+Entrée pour une ligne)"
+            ></textarea>
+            <div class="composer-bar">
+              <span id="composer-hint" class="composer-hint">
+                <kbd>Entrée</kbd> envoyer · <kbd>Maj+Entrée</kbd> nouvelle ligne
+              </span>
+              <div class="composer-actions">
+                <button id="stop" type="button" class="danger-btn" hidden>⏹ Arrêter</button>
+                <button id="send" type="submit" class="send-btn">Envoyer ➤</button>
+              </div>
+            </div>
           </div>
         </form>
       </main>
@@ -46,59 +145,158 @@
 
     <dialog id="new-project-dialog">
       <form method="dialog" class="settings-form">
-        <h2>Nouveau projet</h2>
+        <div class="dialog-head">
+          <h2>Nouveau projet</h2>
+          <p class="muted small">Crée un espace épisode dédié et lance optionnellement le pipeline complet.</p>
+        </div>
         <label>Nom du projet
-          <input id="np-name" placeholder="math-teacher" required />
+          <input id="np-name" placeholder="ex. Téléphone au salon" required />
         </label>
-        <label>Slug de l'épisode
-          <input id="np-episode" placeholder="math-teacher" />
+        <div class="form-grid-2">
+          <label>Slug de l'épisode
+            <input id="np-episode" placeholder="telephone-au-salon" />
+          </label>
+          <label>Format / Orientation
+            <select id="np-aspect">
+              <option value="16:9">16:9 — Paysage (1920×1080)</option>
+              <option value="9:16">9:16 — Vertical Shorts (1080×1920)</option>
+            </select>
+          </label>
+        </div>
+        <label>Vidéo source (ID serveur :8005, facultatif)
+          <input id="np-video" placeholder="ex. 7609890127925513503" autocomplete="off" />
         </label>
-        <label>Vidéo source (id nouveau, facultatif)
-          <input id="np-video" placeholder="zeTS1DyW1ys" autocomplete="off" />
-        </label>
-        <label>Format / Orientation
-          <select id="np-aspect">
-            <option value="16:9">16:9 — Paysage (1920×1080)</option>
-            <option value="9:16">9:16 — Vertical Shorts/TikTok (1080×1920)</option>
+        <label>Fournisseur IA pour ce projet
+          <select id="np-provider-mode">
+            <option value="">Défaut global du Studio</option>
+            <option value="codex">codex — Abonnement ChatGPT (Terra / Sol)</option>
+            <option value="agy">agy — Google Antigravity (3.8 Flash / Carbon / Argon)</option>
           </select>
         </label>
-        <p class="muted small">Un id vidéo transcrit la source en anglais, garde la proposition de narration
-          française dans <code>out/&lt;slug&gt;/source.fr.md</code> et attache la voix ElevenLabs v4 (via :8005) à cette vidéo.</p>
+        <div id="np-models-grid" class="form-grid-2" hidden>
+          <label>Modèle Agent
+            <select id="np-agent-model"></select>
+          </label>
+          <label>Modèle Reviewer
+            <select id="np-rev-model"></select>
+          </label>
+        </div>
+        <p class="info-callout small">
+          Un ID vidéo récupère la transcription et la traduction française dans
+          <code>out/&lt;slug&gt;/source.fr.md</code>, et réutilise l'audio ElevenLabs existant sur <code>:8005</code> s'il est déjà généré.
+        </p>
         <label class="row-inline">
           <input id="np-kick" type="checkbox" checked />
-          <span>Lancer l'agent : import de la source, puis écriture du script</span>
+          <span>Lancer automatiquement l'agent jusqu'au MP4 final</span>
         </label>
         <menu>
           <button value="cancel" class="ghost">Annuler</button>
-          <button id="np-create" value="create" class="primary">Créer</button>
+          <button id="np-create" value="create" class="primary">Créer le projet</button>
         </menu>
       </form>
     </dialog>
 
     <dialog id="settings">
       <form method="dialog" class="settings-form">
-        <h2>Modèle</h2>
-        <label>Fournisseur
-          <select id="s-provider"></select>
+        <div class="dialog-head">
+          <h2>Réglages globaux du Studio</h2>
+          <p class="muted small">Valeurs par défaut pour l'Agent, le Reviewer visuel et l'apparence (chaque projet peut aussi avoir ses propres modèles).</p>
+        </div>
+        <label>Apparence
+          <select id="s-theme">
+            <option value="dark">Sombre (Slack Dark)</option>
+            <option value="light">Clair (Slack Light)</option>
+          </select>
         </label>
-        <label>Base URL
+        <div class="form-grid-2">
+          <label>Fournisseur Agent (défaut)
+            <select id="s-provider"></select>
+          </label>
+          <label>Modèle Agent (défaut)
+            <select id="s-model-select" hidden></select>
+            <input id="s-model" placeholder="gpt-6.1-terra" />
+          </label>
+        </div>
+        <div class="form-grid-2">
+          <label>Fournisseur Reviewer (défaut)
+            <select id="s-rev-provider"></select>
+          </label>
+          <label>Modèle Reviewer (défaut)
+            <select id="s-rev-model-select" hidden></select>
+            <input id="s-rev-model" placeholder="gpt-6.1-sol" />
+          </label>
+        </div>
+        <label id="s-baseurl-wrap">Base URL Agent
           <input id="s-baseurl" placeholder="https://api.openai.com/v1" />
         </label>
-        <label>Modèle
-          <input id="s-model" placeholder="gpt-4.1" />
-        </label>
-        <label>Clé API
+        <label id="s-key-wrap">Clé API (inutile pour codex et agy)
           <input id="s-key" type="password" placeholder="(inchangée)" autocomplete="off" />
         </label>
-        <label>Token d'accès (si le serveur en exige un)
+        <label>Token d'accès serveur (facultatif)
           <input id="s-token" type="password" placeholder="(facultatif)" autocomplete="off" />
         </label>
+        <p id="s-codex-status" class="info-callout small" hidden></p>
+        <p id="s-agy-status" class="info-callout small" hidden></p>
         <p id="s-skill" class="muted small"></p>
         <menu>
           <button value="cancel" class="ghost">Annuler</button>
           <button id="s-save" value="save" class="primary">Enregistrer</button>
         </menu>
       </form>
+    </dialog>
+
+    <dialog id="project-model-dialog">
+      <form method="dialog" class="settings-form">
+        <div class="dialog-head">
+          <h2 id="pm-title">Modèles du projet</h2>
+          <p class="muted small">Permet d'utiliser un fournisseur et des modèles dédiés sur ce projet en parallèle des autres projets.</p>
+        </div>
+        <label>Configuration
+          <select id="pm-mode">
+            <option value="inherit">Utiliser le défaut global du Studio</option>
+            <option value="custom">Personnaliser pour ce projet uniquement</option>
+          </select>
+        </label>
+        <div id="pm-custom-fields">
+          <div class="form-grid-2">
+            <label>Fournisseur Agent
+              <select id="pm-provider"></select>
+            </label>
+            <label>Modèle Agent
+              <select id="pm-model-select" hidden></select>
+              <input id="pm-model" placeholder="gpt-6.1-terra" />
+            </label>
+          </div>
+          <div class="form-grid-2">
+            <label>Fournisseur Reviewer
+              <select id="pm-rev-provider"></select>
+            </label>
+            <label>Modèle Reviewer
+              <select id="pm-rev-model-select" hidden></select>
+              <input id="pm-rev-model" placeholder="gpt-6.1-sol" />
+            </label>
+          </div>
+        </div>
+        <menu>
+          <button value="cancel" class="ghost">Annuler</button>
+          <button id="pm-save" value="save" class="primary">Appliquer au projet</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="lightbox" class="lightbox">
+      <div class="lightbox-inner">
+        <div class="lightbox-bar">
+          <span id="lightbox-caption" class="mono small"></span>
+          <div class="lightbox-actions">
+            <a id="lightbox-open" href="#" target="_blank" rel="noreferrer" class="pill-btn">Ouvrir l'original ↗</a>
+            <button id="lightbox-close" type="button" class="icon-btn" title="Fermer (Échap)">✕</button>
+          </div>
+        </div>
+        <div class="lightbox-stage">
+          <img id="lightbox-img" alt="" />
+        </div>
+      </div>
     </dialog>
 
     <script type="module" src="/app.js"></script>

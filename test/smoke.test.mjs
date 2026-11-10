@@ -1347,3 +1347,609 @@ test('suite-telephone-salon guards: boardStale, >50% hand-written shots, phoneSh
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('projects and threads archiving, renaming, and activity metadata over HTTP + SQLite migration', async () => {
+  const { dir, app } = tmpApp();
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  const port = app.server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const p1 = await (
+      await fetch(`${base}/api/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Ancien Projet' }),
+      })
+    ).json();
+    const p2 = await (
+      await fetch(`${base}/api/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Projet Actif' }),
+      })
+    ).json();
+    assert.equal(p1.project.archived_at, null);
+    assert.equal(p2.project.archived_at, null);
+
+    // Create two threads in p2
+    const t1 = await (
+      await fetch(`${base}/api/threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: p2.project.id, title: 'Brouillon initial' }),
+      })
+    ).json();
+    const t2 = await (
+      await fetch(`${base}/api/threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: p2.project.id, title: 'Conversation principale' }),
+      })
+    ).json();
+    assert.equal(t1.archived_at, null);
+    assert.equal(t2.archived_at, null);
+
+    // Archive thread t1 and rename t2
+    const t1Arch = await (
+      await fetch(`${base}/api/threads/${t1.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ archived: true }),
+      })
+    ).json();
+    assert.equal(typeof t1Arch.archived_at, 'string');
+
+    const t2Ren = await (
+      await fetch(`${base}/api/threads/${t2.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: ' Montage final ' }),
+      })
+    ).json();
+    assert.equal(t2Ren.title, 'Montage final');
+
+    // Archive project p1
+    const p1Arch = await (
+      await fetch(`${base}/api/projects/${p1.project.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ archived: true, name: 'Ancien Projet (V1)' }),
+      })
+    ).json();
+    assert.equal(typeof p1Arch.archived_at, 'string');
+    assert.equal(p1Arch.name, 'Ancien Projet (V1)');
+
+    // Verify GET /api/projects reflects archive state and thread counts
+    const list = await (await fetch(`${base}/api/projects`)).json();
+    const gotP1 = list.find((p) => p.id === p1.project.id);
+    const gotP2 = list.find((p) => p.id === p2.project.id);
+    assert.ok(gotP1.archived_at);
+    assert.equal(gotP2.archived_at, null);
+    assert.equal(gotP2.threadCount, 1);
+    assert.equal(gotP2.archivedThreadCount, 1);
+    assert.equal(typeof gotP2.lastActivityAt, 'string');
+
+    // Unarchive project p1 and thread t1
+    const p1Restored = await (
+      await fetch(`${base}/api/projects/${p1.project.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ archived: false }),
+      })
+    ).json();
+    assert.equal(p1Restored.archived_at, null);
+
+    const t1Restored = await (
+      await fetch(`${base}/api/threads/${t1.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ archived: false }),
+      })
+    ).json();
+    assert.equal(t1Restored.archived_at, null);
+
+    // Verify static UI serves theme toggle & archive hooks
+    const indexHtml = await (await fetch(`${base}/`)).text();
+    assert.match(indexHtml, /theme-toggle/);
+    assert.match(indexHtml, /toggle-archived-projects/);
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loop-breaker: hashes full tool args (>240 chars) without false stops, and emits assistant message on real 5x identical loop', async () => {
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-loophash-'));
+  const db = new Db(path.join(dir, 'app.db'));
+  try {
+    const pRoot = path.join(dir, 'p');
+    fs.mkdirSync(path.join(pRoot, 'src', 'episodes', 'ep'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pRoot, 'src', 'episodes', 'ep', 'shots.tsx'),
+      'export const S1 = 1;\nconst place = STREET;\nexport const S2 = 2;\nconst place2 = STREET;\n',
+    );
+    const fsReg = new ToolRegistry(fsTools);
+    const ctx = { projectId: 'p', projectRoot: pRoot, dataRoot: dir, skillDir: null, log: () => {} };
+    const dup = await fsReg.run('edit_file', { path: 'src/episodes/ep/shots.tsx', edits: [{ oldText: 'STREET', newText: 'FRONT' }] }, ctx);
+    assert.equal(dup.ok, false);
+    assert.match(dup.summary, /matches at lines 2, 4/);
+    assert.match(dup.summary, /prefer edit_shot/);
+
+    db.createProject('p', 'p', pRoot);
+
+    // Case 1: 6 failed calls that share a 300-char prefix in args, but differ at the end -> must NOT trigger 5x stop!
+    const th1 = db.createThread('p', 't1');
+    db.addMessage(th1.id, 'user', 'fix shots');
+    let calls1 = 0;
+    const longPrefix = 'A'.repeat(300);
+    const reg1 = new ToolRegistry([
+      {
+        name: 'edit_file',
+        description: 'e',
+        policy: 'auto',
+        schema: { type: 'object' },
+        run: async (a) => (a.tail === 6 ? { ok: true, summary: 'ok' } : { ok: false, summary: 'oldText not found' }),
+      },
+      { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+    ]);
+    const prov1 = {
+      id: 'x',
+      label: 'x',
+      model: 'm',
+      chat: async () => {
+        calls1++;
+        if (calls1 <= 6) {
+          return { text: '', toolCalls: [{ id: `c${calls1}`, name: 'edit_file', args: { prefix: longPrefix, tail: calls1 } }] };
+        }
+        return { text: 'Tout est corrigé.', toolCalls: [] };
+      },
+    };
+    const config = { ...loadConfig(), maxSteps: 20, reviewMaxRounds: 0, approvalsMode: 'off', contextChars: 90_000 };
+    await runTurn({ db, bus: { emit() {} }, config, registry: reg1, approvals: null, provider: () => prov1, reviewProvider: () => null }, th1.id, new AbortController().signal);
+    assert.equal(calls1, 7, '6 distinct >240-char edit_file calls should not be killed at attempt 5');
+    assert.equal(db.listMessages(th1.id).at(-1).content, 'Tout est corrigé.');
+
+    // Case 2: 5 genuinely identical failing calls -> stops cleanly AND records an assistant message explaining why
+    const th2 = db.createThread('p', 't2');
+    db.addMessage(th2.id, 'user', 'loop');
+    let calls2 = 0;
+    const prov2 = {
+      id: 'x',
+      label: 'x',
+      model: 'm',
+      chat: async () => {
+        calls2++;
+        return { text: '', toolCalls: [{ id: `k${calls2}`, name: 'edit_file', args: { prefix: longPrefix, tail: 1 } }] };
+      },
+    };
+    await runTurn({ db, bus: { emit() {} }, config, registry: reg1, approvals: null, provider: () => prov2, reviewProvider: () => null }, th2.id, new AbortController().signal);
+    assert.equal(calls2, 5);
+    const last2 = db.listMessages(th2.id).at(-1);
+    assert.equal(last2.role, 'assistant');
+    assert.match(last2.content, /Arrêt : l'outil "edit_file" a échoué 5 fois de suite/);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('codex provider: normalizes gpt 6.1 terra/sol, converts Responses payload + images/tools, and auto-refreshes OAuth on 401', async () => {
+  const http = await import('node:http');
+  const { codexProvider, normalizeCodexModel, toCodexResponsesPayload } = await import('../dist/orchestrator/providers/codex.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { providerConfig, reviewProviderConfig } = await import('../dist/orchestrator/providers/index.js');
+
+  assert.deepEqual(normalizeCodexModel('gpt 6.1 terra'), { model: 'gpt-6.1-terra', effort: 'medium' });
+  assert.deepEqual(normalizeCodexModel('GPT 6.1 Sol:low'), { model: 'gpt-6.1-sol', effort: 'low' });
+
+  const converted = toCodexResponsesPayload(
+    [
+      { role: 'system', content: 'System rule' },
+      { role: 'user', content: 'Look at this', images: [{ mime: 'image/png', data: 'AAAA' }] },
+      { role: 'assistant', content: 'Checking', toolCalls: [{ id: 'call_1', name: 'read_file', args: { path: 'a.ts' } }] },
+      { role: 'tool', toolCallId: 'call_1', name: 'read_file', content: 'ok\n1| const x = 1;' },
+    ],
+    [{ type: 'function', function: { name: 'read_file', description: 'Read', parameters: { type: 'object' } } }],
+    'gpt 6.1 terra',
+  );
+  assert.equal(converted.model, 'gpt-6.1-terra');
+  assert.equal(converted.instructions, 'System rule');
+  assert.equal(converted.tools[0].name, 'read_file');
+  assert.equal(converted.input[0].content[1].type, 'input_image');
+  assert.equal(converted.input[2].type, 'function_call');
+  assert.equal(converted.input[3].type, 'function_call_output');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-codex-'));
+  const authPath = path.join(dir, 'auth.json');
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: 'chatgpt',
+      tokens: { access_token: 'stale-token', refresh_token: 'ref-123', account_id: 'acc_42' },
+    }),
+  );
+
+  let responsesHits = 0;
+  let refreshHits = 0;
+  const srv = http.createServer(async (req, res) => {
+    if (req.url === '/oauth/token') {
+      refreshHits++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ access_token: 'fresh-token', refresh_token: 'ref-456' }));
+      return;
+    }
+    if (req.url === '/responses') {
+      responsesHits++;
+      if (req.headers.authorization === 'Bearer stale-token') {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'expired' }));
+        return;
+      }
+      assert.equal(req.headers.authorization, 'Bearer fresh-token');
+      assert.equal(req.headers['chatgpt-account-id'], 'acc_42');
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'Salut ' })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: { type: 'function_call', call_id: 'c_99', name: 'repo_map', arguments: '{"maxFiles":10}' },
+        })}\n\n`,
+      );
+      res.write(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed' } })}\n\n`);
+      res.end();
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  const db = new Db(path.join(dir, 'app.db'));
+  try {
+    const prov = codexProvider({
+      baseURL: `http://127.0.0.1:${port}`,
+      oauthTokenUrl: `http://127.0.0.1:${port}/oauth/token`,
+      authPath,
+      model: 'gpt 6.1 terra',
+    });
+    let streamed = '';
+    const out = await prov.chat({
+      messages: [{ role: 'user', content: 'Go' }],
+      tools: [],
+      onText: (d) => (streamed += d),
+    });
+    assert.equal(refreshHits, 1, '401 triggers OAuth refresh');
+    assert.equal(responsesHits, 2);
+    assert.equal(streamed, 'Salut ');
+    assert.equal(out.text, 'Salut ');
+    assert.deepEqual(out.toolCalls, [{ id: 'c_99', name: 'repo_map', args: { maxFiles: 10 } }]);
+    const savedAuth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    assert.equal(savedAuth.tokens.access_token, 'fresh-token');
+
+    // Verify DB codex settings override differing .env provider cleanly
+    db.setSetting('provider', 'codex');
+    db.setSetting('model', 'gpt-6.1-terra');
+    db.setSetting('reviewProvider', 'codex');
+    db.setSetting('reviewModel', 'gpt-6.1-sol');
+    assert.equal(providerConfig(db).provider, 'codex');
+    assert.equal(providerConfig(db).model, 'gpt-6.1-terra');
+    assert.equal(reviewProviderConfig(db).provider, 'codex');
+    assert.equal(reviewProviderConfig(db).model, 'gpt-6.1-sol');
+  } finally {
+    db.close();
+    await new Promise((r) => srv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('codex run fixes: precheck skips expensiveFails, delegated shot() helpers, phoneShot as insert & translucent 9:16 rect', async () => {
+  const { shotsAudit, portraitFramingErrors } = await import('../dist/tools/whatif.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { ToolRegistry } = await import('../dist/tools/index.js');
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+
+  // 1. Translucent 9:16 siren/lighting overlay is allowed; opaque 16:9 backdrop rect reports line number
+  const translucentSrc = [
+    `export const S1 = shot({`,
+    `  place: SALON,`,
+    `  extra: (t) => <rect x={0} y={0} width={1920} height={1080} fill="#3F6BD8" opacity={0.1 + 0.08 * Math.sin(t * 0.33)} />,`,
+    `});`,
+  ].join('\n');
+  assert.deepEqual(portraitFramingErrors(translucentSrc, { S1: translucentSrc }, ['S1']), []);
+  const opaqueSrc = ['const x = 1;', 'const y = 2;', '<rect x={0} y={0} width={1920} height={220} fill="#fff" />'].join('\n');
+  const opaqueErrs = portraitFramingErrors(opaqueSrc);
+  assert.equal(opaqueErrs.length, 1);
+  assert.match(opaqueErrs[0], /\(line 3\).*clamps its backdrop\/ceiling to y=0\.\.1080/);
+
+  // 2. Delegated local shot() helpers (EARLY/LATER) + phoneShot with size="close" pass shotsAudit
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-codex-fixes-'));
+  const db = new Db(path.join(dir, 'app.db'));
+  try {
+    const slug = 'delegated';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'shot.tsx'), 'export const shot = () => () => null;\nexport const phoneShot = () => () => null;\n');
+    const ids = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const delegated = defineEpisode("D", { timeline, shots: { ${ids.join(', ')} } });\n`);
+    const tl = { fps: 30, total: 360, segments: ids.map((id, i) => ({ shot: id, a: i * 60, b: (i + 1) * 60 })), shots: ids.map((id) => ({ id, len: 60, key: 18 })) };
+    const ep = {
+      aspect: '9:16',
+      script: Array.from({ length: 4 }, (_, i) => ({ beat: `b${i}`, text: 'Une histoire complète en français.' })),
+      shots: ids.map((id) => ({ id, size: id === 'S5' ? 'close' : 'medium', set: 'bedroom', note: 'action' })),
+    };
+    const shotsCode = [
+      `export const S1 = shot({ place: BED, cam: 'wide', people: [{ who: A, act: 'explain', beats: [{ at: 18, face: 'worried' }] }] });`,
+      `export const S2 = shot({ place: BED, cam: 'medium', people: [{ who: B, act: 'think', beats: [{ at: 20, act: 'shrug' }] }] });`,
+      `const EARLY = shot({ place: BED, cam: 'medium', people: [{ who: A, act: 'hold', face: 'happy' }] });`,
+      `const LATER = shot({ place: BED, cam: 'medium', people: [{ who: A, act: 'hold', face: 'worried' }, { who: B, act: 'nod', face: 'happy' }] });`,
+      `export const S3 = ({ t, ...props }) => (t < 32 ? <EARLY {...props} t={t} /> : <LATER {...props} t={t} />);`,
+      `export const S4 = shot({ place: BED, cam: 'close', people: [{ who: A, act: 'idle', beats: [{ at: 12, act: 'slump', face: 'dizzy' }] }] });`,
+      `export const S5 = phoneShot({ name: 'Cagnotte', back: BED, messages: [{ at: 4, text: 'Objectif atteint' }] });`,
+      `export const S6 = shot({ place: BED, cam: 'medium', people: [{ who: B, act: 'question', beats: [{ at: 22, act: 'point' }] }] });`,
+    ].join('\n');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), shotsCode);
+    assert.equal(shotsAudit(dir, slug, ep, tl), null, 'delegated EARLY/LATER shot() and phoneShot(size=close) pass cleanly');
+
+    // 3. runTurn: 4 local pre-flight rejections ("cannot run stills yet — ...") do NOT trip expensiveFails,
+    //    whereas 3 real Modal runtime failures DO stop the turn.
+    db.createProject('p', 'p', dir);
+    const config = { ...loadConfig(), maxSteps: 20, reviewMaxRounds: 0, approvalsMode: 'off', contextChars: 90_000 };
+
+    let preAttempts = 0;
+    const regPre = new ToolRegistry([
+      {
+        name: 'whatif_run',
+        description: 'w',
+        policy: 'auto',
+        schema: { type: 'object' },
+        run: async () => {
+          preAttempts++;
+          if (preAttempts <= 4) {
+            return { ok: false, summary: `whatif_run failed: cannot run stills yet — shots.tsx failed check #${preAttempts}` };
+          }
+          return { ok: true, summary: 'stills rendered' };
+        },
+      },
+      { name: 'edit_shot', description: 'e', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'edited' }) },
+      { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+    ]);
+    let turnStep = 0;
+    const provPre = {
+      id: 'codex',
+      label: 'Codex',
+      model: 'gpt-6.1-terra',
+      chat: async () => {
+        turnStep++;
+        if (turnStep <= 9) {
+          return turnStep % 2 === 1
+            ? { text: '', toolCalls: [{ id: `w${turnStep}`, name: 'whatif_run', args: { step: 'stills', slug } }] }
+            : { text: '', toolCalls: [{ id: `e${turnStep}`, name: 'edit_shot', args: { shot: `S${turnStep}` } }] };
+        }
+        return { text: 'Stills prêts !', toolCalls: [] };
+      },
+    };
+    const thPre = db.createThread('p', 'precheck');
+    db.addMessage(thPre.id, 'user', 'go');
+    await runTurn({ db, bus: { emit() {} }, config, registry: regPre, approvals: null, provider: () => provPre, reviewProvider: () => null }, thPre.id, new AbortController().signal);
+    assert.equal(preAttempts, 5, '4 local precheck rejections must not stop before attempt 5 succeeds');
+    assert.equal(db.listMessages(thPre.id).at(-1).content, 'Stills prêts !');
+
+    let modalAttempts = 0;
+    const regModal = new ToolRegistry([
+      {
+        name: 'whatif_run',
+        description: 'w',
+        policy: 'auto',
+        schema: { type: 'object' },
+        run: async () => {
+          modalAttempts++;
+          return { ok: false, summary: 'whatif_run failed (exit 1): Modal container crashed with OOM' };
+        },
+      },
+      { name: 'edit_shot', description: 'e', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'edited' }) },
+      { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+    ]);
+    let mStep = 0;
+    const provModal = {
+      id: 'codex',
+      label: 'Codex',
+      model: 'gpt-6.1-terra',
+      chat: async () => {
+        mStep++;
+        return mStep % 2 === 1
+          ? { text: '', toolCalls: [{ id: `mw${mStep}`, name: 'whatif_run', args: { step: 'stills', slug } }] }
+          : { text: '', toolCalls: [{ id: `me${mStep}`, name: 'edit_shot', args: { shot: `S${mStep}` } }] };
+      },
+    };
+    const thModal = db.createThread('p', 'modalcrash');
+    db.addMessage(thModal.id, 'user', 'go');
+    await runTurn({ db, bus: { emit() {} }, config, registry: regModal, approvals: null, provider: () => provModal, reviewProvider: () => null }, thModal.id, new AbortController().signal);
+    assert.equal(modalAttempts, 3, '3 real Modal runtime crashes still stop the turn');
+    assert.match(db.listMessages(thModal.id).at(-1).content, /Arrêt : stills échoue toujours/);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agy provider + per-project models: model catalog, mock agy CLI (tools, images & auth fast-fail), and isolated project overrides', async () => {
+  const {
+    PROVIDER_MODEL_CATALOG,
+    agyProvider,
+    normalizeAgyModel,
+    providerConfig,
+    reviewProviderConfig,
+  } = await import('../dist/orchestrator/providers/index.js');
+  const { createApp } = await import('../dist/orchestrator/main.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+
+  // 1. Exact model normalization & catalog choices requested by user
+  assert.equal(normalizeAgyModel('3.8 flash medium'), 'gemini-3.8-flash-medium');
+  assert.equal(normalizeAgyModel('carbon low'), 'gemini-4-carbon-low');
+  assert.equal(normalizeAgyModel('aragon low'), 'gemini-4-argon-low');
+  assert.equal(normalizeAgyModel('aragon medium'), 'gemini-4-argon-medium');
+  assert.equal(normalizeAgyModel('carbon medium'), 'gemini-4-carbon-medium');
+
+  assert.deepEqual(
+    PROVIDER_MODEL_CATALOG.agy.agent.map((m) => m.id),
+    ['gemini-3.8-flash-medium', 'gemini-4-carbon-low', 'gemini-4-argon-low'],
+  );
+  assert.deepEqual(
+    PROVIDER_MODEL_CATALOG.agy.reviewer.map((m) => m.id),
+    ['gemini-4-argon-medium', 'gemini-4-carbon-medium'],
+  );
+  assert.deepEqual(
+    PROVIDER_MODEL_CATALOG.codex.agent.map((m) => m.id),
+    ['gpt-6.1-terra', 'gpt-6.1-sol'],
+  );
+  assert.deepEqual(
+    PROVIDER_MODEL_CATALOG.codex.reviewer.map((m) => m.id),
+    ['gpt-6.1-sol', 'gpt-6.1-terra'],
+  );
+
+  // 2. Mock agy binary: test structured tool calls, reviewer image streaming, and instant auth-prompt abort
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-agy-test-'));
+  const fakeAgy = path.join(dir, 'fake-agy');
+  fs.writeFileSync(
+    fakeAgy,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const modelIdx = args.indexOf('--model');
+const model = modelIdx >= 0 ? args[modelIdx + 1] : 'unknown';
+const hasSchema = args.includes('--json-schema');
+const printArg = args.find((a) => a.startsWith('--print=')) || '';
+const prompt = printArg.slice('--print='.length);
+if (process.env.FAKE_AGY_UNAUTH === '1') {
+  process.stdout.write('Authentication required. Please visit the URL to log in:\\nhttps://accounts.google.com/...\\n');
+  setTimeout(() => process.exit(1), 30000);
+} else if (hasSchema) {
+  const out = {
+    event: 'result',
+    result: {
+      status: 'SUCCESS',
+      response: JSON.stringify({ text: 'Plan prêt (' + model + ')', toolCalls: [{ name: 'whatif_run', argsJson: '{"step":"stills"}' }] }),
+      structured_output: { text: 'Plan prêt (' + model + ')', toolCalls: [{ name: 'whatif_run', argsJson: '{"step":"stills"}' }] },
+      usage: { total_tokens: 42 },
+    },
+  };
+  process.stdout.write(JSON.stringify(out) + '\\n');
+} else {
+  const imgMatch = prompt.match(/attached_1\\.png/);
+  const imgExists = imgMatch ? fs.existsSync(require('node:path').join(process.cwd(), 'attached_1.png')) : false;
+  process.stdout.write(JSON.stringify({ event: 'step_update', step_update: { step_type: 'agent_response', text_delta: '{"pass":true,' } }) + '\\n');
+  const finalJson = JSON.stringify({ pass: true, summary: 'Image vue=' + imgExists + ' via ' + model, issues: [] });
+  process.stdout.write(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: finalJson } }) + '\\n');
+}
+`,
+    { mode: 0o755 },
+  );
+
+  const app = createApp({
+    ...loadConfig(),
+    dataRoot: dir,
+    projectsDir: path.join(dir, 'projects'),
+    dbPath: path.join(dir, 'app.db'),
+    skillDir: null,
+  });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const port = app.server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // Agent call with tools
+    const agentProv = agyProvider({ model: 'aragon low', agyBin: fakeAgy });
+    assert.equal(agentProv.model, 'gemini-4-argon-low');
+    const agentRes = await agentProv.chat({
+      messages: [{ role: 'user', content: 'Lance stills' }],
+      tools: [{ type: 'function', function: { name: 'whatif_run', description: 'run', parameters: { type: 'object' } } }],
+    });
+    assert.equal(agentRes.text, 'Plan prêt (gemini-4-argon-low)');
+    assert.equal(agentRes.toolCalls.length, 1);
+    assert.equal(agentRes.toolCalls[0].name, 'whatif_run');
+    assert.deepEqual(agentRes.toolCalls[0].args, { step: 'stills' });
+
+    // Reviewer call with image attachment and no tools
+    const revProv = agyProvider({ model: 'carbon medium', agyBin: fakeAgy });
+    let streamed = '';
+    const revRes = await revProv.chat({
+      messages: [{ role: 'user', content: 'Vérifie la planche', images: [{ mime: 'image/png', data: Buffer.from('PNGDATA').toString('base64') }] }],
+      tools: [],
+      onText: (d) => (streamed += d),
+    });
+    assert.ok(streamed.includes('{"pass":true,'));
+    assert.match(revRes.text, /Image vue=true via gemini-4-carbon-medium/);
+
+    // Fast fail (<1.5s, never waiting 30s) when agy asks for interactive login
+    const unauthProv = agyProvider({ model: '3.8 flash medium', agyBin: fakeAgy, env: { FAKE_AGY_UNAUTH: '1' } });
+    const t0 = Date.now();
+    await assert.rejects(
+      () => unauthProv.chat({ messages: [{ role: 'user', content: 'hi' }], tools: [] }),
+      /Session Google Antigravity \(agy\) non connectée/,
+    );
+    assert.ok(Date.now() - t0 < 3000, 'kills unauthenticated agy prompt immediately without hanging');
+
+    // 3. Per-project concurrent model configuration via HTTP API
+    await fetch(`${base}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'codex',
+        model: 'gpt-6.1-terra',
+        reviewProvider: 'codex',
+        reviewModel: 'gpt-6.1-sol',
+      }),
+    });
+
+    const pCodexRes = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Projet Codex' }),
+    });
+    const { project: pCodex } = await pCodexRes.json();
+    assert.equal(pCodex.effectiveModel.provider, 'codex');
+    assert.equal(pCodex.effectiveModel.model, 'gpt-6.1-terra');
+    assert.equal(pCodex.effectiveModel.reviewModel, 'gpt-6.1-sol');
+
+    const pAgyRes = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Projet AGY',
+        provider: 'agy',
+        model: 'gemini-4-carbon-low',
+        reviewProvider: 'agy',
+        reviewModel: 'gemini-4-argon-medium',
+      }),
+    });
+    const { project: pAgy } = await pAgyRes.json();
+    assert.equal(pAgy.effectiveModel.provider, 'agy');
+    assert.equal(pAgy.effectiveModel.model, 'gemini-4-carbon-low');
+    assert.equal(pAgy.effectiveModel.reviewProvider, 'agy');
+    assert.equal(pAgy.effectiveModel.reviewModel, 'gemini-4-argon-medium');
+
+    // Verify DB-level resolution stays isolated across both projects simultaneously
+    assert.equal(providerConfig(app.db, app.db.getProject(pCodex.id)).provider, 'codex');
+    assert.equal(providerConfig(app.db, app.db.getProject(pCodex.id)).model, 'gpt-6.1-terra');
+    assert.equal(providerConfig(app.db, app.db.getProject(pAgy.id)).provider, 'agy');
+    assert.equal(providerConfig(app.db, app.db.getProject(pAgy.id)).model, 'gemini-4-carbon-low');
+    assert.equal(reviewProviderConfig(app.db, app.db.getProject(pAgy.id)).model, 'gemini-4-argon-medium');
+
+    // Patching project back to null resets to global default
+    const resetRes = await fetch(`${base}/api/projects/${pAgy.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: null, model: null, reviewProvider: null, reviewModel: null }),
+    });
+    const resetProj = await resetRes.json();
+    assert.equal(resetProj.effectiveModel.provider, 'codex');
+    assert.equal(resetProj.effectiveModel.model, 'gpt-6.1-terra');
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

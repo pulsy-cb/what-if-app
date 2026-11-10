@@ -299,7 +299,7 @@ export function episodeAudit(episode: any, slug: string): string | null {
   return null;
 }
 
-/** How many times a shot changes while it plays: beats, face keys after frame 0, clips started later, keyframes, turns. */
+/** How many times a shot changes while it plays: beats, face keys after frame 0, clips started later, keyframes, turns, or frame cuts. */
 export function timedChanges(body: string): number {
   const count = (re: RegExp) => (body.match(re) ?? []).length;
   return (
@@ -308,7 +308,8 @@ export function timedChanges(body: string): number {
     count(/\bfrom\s*[:=]\s*\{?\s*[1-9]\d*/g) +
     count(/\b(turnAt|poseAt|walkPose|grabAt|grabOf)\s*\(/g) +
     count(/\bkf\s*\(\s*t\b/g) +
-    count(/<Duo\b|\bduo\s*[:=]\s*\{/g)
+    count(/<Duo\b|\bduo\s*[:=]\s*\{/g) +
+    count(/\bt\s*(?:<|<=|>|>=|===)\s*[1-9]\d*/g)
   );
 }
 
@@ -419,13 +420,28 @@ export function portraitFramingErrors(
       `9:16 framing bug: shots.tsx flips a floor reflection around y=1080 (translate(0 1080) scale(1 -1)), which is the 16:9 bottom edge — in 9:16 the viewBox runs y=-260..1340, so the reflection floats in mid-floor. Use shot({ place }) or extend to y=1340.`,
     );
   }
-  const has16x9Rect =
-    /<rect\b[^>]*\bx\s*=\s*(?:\{\s*0\s*\}|["']0["'])[^>]*\by\s*=\s*(?:\{\s*0\s*\}|["']0["'])[^>]*\bwidth\s*=\s*(?:\{\s*1920\s*\}|["']1920["'])/.test(
-      shotsSource,
-    ) || /\bRY0\s*=\s*-?[012]?\d\b[\s\S]{0,40}\bRY1\s*=\s*10[0-8]\d\b/.test(shotsSource);
-  if (has16x9Rect && !/SHOT S1 — PLACEHOLDER/.test(shotsSource)) {
+  let clampLine: number | null = null;
+  if (!/SHOT S1 — PLACEHOLDER/.test(shotsSource)) {
+    const ryMatch = /\bRY0\s*=\s*-?[012]?\d\b[\s\S]{0,40}\bRY1\s*=\s*10[0-8]\d\b/.exec(shotsSource);
+    if (ryMatch) {
+      clampLine = shotsSource.slice(0, ryMatch.index).split('\n').length;
+    } else {
+      for (const rm of shotsSource.matchAll(/<rect\b[^>]*>/g)) {
+        const tag = rm[0]!;
+        const isZeroX = /\bx\s*=\s*(?:\{\s*0\s*\}|["']0["'])/.test(tag);
+        const isZeroY = /\by\s*=\s*(?:\{\s*0\s*\}|["']0["'])/.test(tag);
+        const isW1920 = /\bwidth\s*=\s*(?:\{\s*1920\s*\}|["']1920["'])/.test(tag);
+        if (!isZeroX || !isZeroY || !isW1920) continue;
+        // Translucent lighting/flash/tint overlays (e.g. opacity={0.1 + 0.08 * Math.sin(t)}) are not backdrops
+        if (/\bopacity\s*=\s*(?:\{\s*0?\.[0-4]|["']0?\.[0-4])/.test(tag)) continue;
+        clampLine = shotsSource.slice(0, rm.index ?? 0).split('\n').length;
+        break;
+      }
+    }
+  }
+  if (clampLine !== null) {
     errs.push(
-      `9:16 framing bug: shots.tsx clamps its backdrop/ceiling to y=0..1080 on a 9:16 canvas (viewBox "510 -260 900 1600", y runs -260..1340), leaving empty strips at the top and bottom. Use shot({ place }) or cover y=-280..1360.`,
+      `9:16 framing bug (line ${clampLine}): shots.tsx clamps its backdrop/ceiling to y=0..1080 on a 9:16 canvas (viewBox "510 -260 900 1600", y runs -260..1340), leaving empty strips at the top and bottom. Use shot({ place }) or cover y=-280..1360.`,
     );
   }
   const checkBodies: Record<string, string> = bodies ?? {};
@@ -556,18 +572,65 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     return `src/episodes/${slug}/index.tsx does not register ${missingInIndex.join(', ')} in defineEpisode(..., { shots: { ... } }): update index.tsx so every shot in timeline.json is rendered.`;
   }
 
-  // Slice shots.tsx into individual exported shot bodies
-  const exportPositions: { id: string; start: number }[] = [];
-  const expRe = /export\s+(?:const|function)\s+([A-Za-z0-9_$]+)\b/g;
-  let m: RegExpExecArray | null;
-  while ((m = expRe.exec(shotsSource)) !== null) {
-    exportPositions.push({ id: m[1]!, start: m.index });
-  }
+  // Slice shots.tsx into individual exported shot bodies using the TS AST, and attach any local
+  // non-exported helper shot/component definitions (e.g. const EARLY = shot(...); <EARLY />) to the
+  // exported shot that renders them (instead of letting them bleed into the preceding shot's slice).
   const bodies: Record<string, string> = {};
-  for (let i = 0; i < exportPositions.length; i++) {
-    const cur = exportPositions[i]!;
-    const nextStart = i + 1 < exportPositions.length ? exportPositions[i + 1]!.start : shotsSource.length;
-    bodies[cur.id] = shotsSource.slice(cur.start, nextStart);
+  {
+    const sf = ts.createSourceFile('shots.tsx', shotsSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const ownBodies = new Map<string, string>();
+    const localHelpers = new Map<string, string>();
+    const unwrapExpr = (e: ts.Expression): ts.Expression => {
+      let cur = e;
+      while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur)) cur = cur.expression;
+      return cur;
+    };
+    const isComponentOrShotInit = (name: string, init: ts.Expression): boolean => {
+      const u = unwrapExpr(init);
+      if (ts.isCallExpression(u) && ts.isIdentifier(u.expression) && /^(?:shot|phoneShot)$/.test(u.expression.text)) return true;
+      if ((ts.isArrowFunction(u) || ts.isFunctionExpression(u)) && /^[A-Z]/.test(name)) return true;
+      if (ts.isIdentifier(u) && localHelpers.has(u.text)) return true;
+      return false;
+    };
+    for (const stmt of sf.statements) {
+      const isExp = Boolean(ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword));
+      if (ts.isFunctionDeclaration(stmt) && stmt.name) {
+        const text = stmt.getText(sf);
+        if (isExp) ownBodies.set(stmt.name.text, text);
+        else if (/^[A-Z]/.test(stmt.name.text)) localHelpers.set(stmt.name.text, text);
+      } else if (ts.isVariableStatement(stmt)) {
+        for (const decl of stmt.declarationList.declarations) {
+          if (!ts.isIdentifier(decl.name)) continue;
+          const name = decl.name.text;
+          const text = stmt.declarationList.declarations.length === 1 ? stmt.getText(sf) : decl.getText(sf);
+          if (isExp) ownBodies.set(name, text);
+          else if (decl.initializer && isComponentOrShotInit(name, decl.initializer)) localHelpers.set(name, text);
+        }
+      }
+    }
+    const helperNames = [...localHelpers.keys()];
+    for (const [id, own] of ownBodies) {
+      if (!helperNames.length) {
+        bodies[id] = own;
+        continue;
+      }
+      const seen = new Set<string>();
+      const extra: string[] = [];
+      const visit = (code: string, depth: number) => {
+        if (depth > 8) return;
+        for (const h of helperNames) {
+          if (seen.has(h)) continue;
+          if (new RegExp(`\\b${h.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`).test(code)) {
+            seen.add(h);
+            const hCode = localHelpers.get(h)!;
+            extra.push(hCode);
+            visit(hCode, depth + 1);
+          }
+        }
+      };
+      visit(own, 0);
+      bodies[id] = extra.length ? `${own}\n${extra.join('\n')}` : own;
+    }
   }
 
   const inspectCharacter = characterInspector(shotsSource);
@@ -681,7 +744,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const size = String(epShot.size ?? sh.size ?? '').toLowerCase();
     const note = String(epShot.note ?? '');
     const isTitle = size.includes('title') || /<TitleCard\b/.test(body);
-    const isInsert = size.includes('insert') || size.includes('macro');
+    const isPhoneShot = /\bphoneShot\s*\(/.test(body);
+    const isInsert = size.includes('insert') || size.includes('macro') || isPhoneShot;
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
@@ -728,6 +792,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     const hasMotion =
       /\b(poseAt|faceAt|actPose|walkPose|talkAt|camPush|camPan|parallax|kf|DrawOn|CountUp|TitleCard|Arrow|PlantIcon|easeOut|clamp)\b/.test(body) ||
       /\bt\s*[*+-]/.test(body) ||
+      /\bt\s*(?:<|<=|>|>=|===)\s*[1-9]\d*/.test(body) ||
       /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
       // shot() and phoneShot() push in slowly unless told to hold
       ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body)) ||
@@ -880,7 +945,9 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   // A whole file written by hand loses what shot() does for free: the 9:16 frame, seats, depth, the reviewer's
   // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
   if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
-    const framed = wanted.filter((id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')));
+    const framed = wanted.filter(
+      (id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')) && !/\bphoneShot\s*\(/.test(bodies[id]!),
+    );
     const byHand = framed.filter((id) => !/\b(?:shot|phoneShot)\s*\(/.test(bodies[id]!));
     if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
       errors.push(

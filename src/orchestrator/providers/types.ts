@@ -34,7 +34,7 @@ export type Provider = {
 
 export type ProviderConfig = {
   maxTokens?: number;
-  provider: 'mock' | 'openai' | 'anthropic';
+  provider: 'mock' | 'openai' | 'anthropic' | 'codex' | 'agy' | string;
   baseURL: string;
   apiKey: string;
   model: string;

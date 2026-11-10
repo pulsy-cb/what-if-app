@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Bus } from './bus.js';
@@ -289,9 +290,18 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             durationMs,
           });
 
-          if (!result.ok && call.name === 'whatif_run' && ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))) {
+          // Stop expensive Modal/FFmpeg retries on repeated runtime crashes/timeouts,
+          // but do NOT count fast local pre-flight checks ("cannot run ... yet") where Modal never ran.
+          const isLocalPrecheck = /cannot run \w+ yet/i.test(result.summary);
+          if (!result.ok && !isLocalPrecheck && call.name === 'whatif_run' && ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))) {
             const stage = String(call.args.step);
-            const cause = /\(timeout\)/.test(result.summary) ? 'timeout' : (result.summary.split('\n').find((l) => /error|failed|cannot/i.test(l)) ?? result.summary.split('\n')[0] ?? '').replace(/\d+/g, '#').slice(0, 160);
+            const errLines = result.summary.split('\n').filter((l) => l.trim());
+            const firstErrIdx = errLines.findIndex((l) => /error|failed|cannot/i.test(l));
+            const rawCause =
+              firstErrIdx >= 0
+                ? errLines.slice(firstErrIdx, firstErrIdx + 2).join(' | ')
+                : (errLines[0] ?? '');
+            const cause = /\(timeout\)/.test(result.summary) ? 'timeout' : rawCause.replace(/\d+/g, '#').slice(0, 200);
             const key = `${stage}:${cause}`;
             const n = (expensiveFails.get(key) ?? 0) + 1;
             expensiveFails.set(key, n);
@@ -308,9 +318,10 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               return;
             }
           }
-          // Loop-breaker: track repeated identical tool failures
+          // Loop-breaker: track repeated identical tool failures (full args hash so multi-edit changes past 240 chars aren't conflated)
           if (!result.ok) {
-            const sig = `${call.name}:${JSON.stringify(call.args ?? {}).slice(0, 240)}`;
+            const argsHash = crypto.createHash('sha1').update(JSON.stringify(call.args ?? {})).digest('hex');
+            const sig = `${call.name}:${argsHash}`;
             if (sig === lastFailSig) {
               consecutiveFails++;
             } else {
@@ -319,12 +330,16 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             }
             if (consecutiveFails >= 3) {
               const loopNote =
-                `[orchestrateur] L'appel "${call.name}" a échoué ${consecutiveFails} fois de suite avec la même erreur. ` +
-                `Ne relance PAS le même appel tel quel : corrige d'abord la cause exacte indiquée dans le message d'erreur (ou lis le fichier concerné).`;
+                `[orchestrateur] L'appel "${call.name}" a échoué ${consecutiveFails} fois de suite avec exactement les mêmes arguments. ` +
+                `Ne relance PAS le même appel tel quel : corrige la cause exacte (ou utilise edit_shot / read_file sur le bloc concerné).`;
               heldNotes.push(loopNote);
               bus.emit(threadId, 'notice', { text: loopNote });
               if (consecutiveFails >= 5) {
                 for (const n of heldNotes) db.addMessage(threadId, 'user', n);
+                const firstLine = (result.summary ?? '').split('\n')[0] ?? 'erreur répétée';
+                const stopMsg = `Arrêt : l'outil "${call.name}" a échoué ${consecutiveFails} fois de suite avec des arguments identiques (${firstLine}).`;
+                const id = db.addMessage(threadId, 'assistant', stopMsg);
+                bus.emit(threadId, 'assistant_message', { id, text: stopMsg });
                 finishTurn(step + 1, false, true);
                 return;
               }
