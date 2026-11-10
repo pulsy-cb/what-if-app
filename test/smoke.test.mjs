@@ -1013,3 +1013,46 @@ test('engine overlay: hidden files of the overlay folder are never copied into a
     fs.rmSync(project, { recursive: true, force: true });
   }
 });
+
+
+test('character audit resolves bounded component delegation without trusting text or unused declarations', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-delegate-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'S1');
+  const audit = (source) => {
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), source);
+    return shotsAudit(dir, 'room', { shots: [{ id: 'S1', size: 'medium' }] }, { shots: [{ id: 'S1', len: 60 }] }) ?? '';
+  };
+  try {
+    assert.doesNotMatch(audit(`const Prim: React.FC<any> = p => <Staged {...p}/>; export const S1 = () => <Prim/>;`), /S1 .*has no character/);
+    assert.doesNotMatch(audit(`function Inner() { return <Hero/>; } const Outer = () => <Inner/>; export function S1() { return <Outer/>; }`), /S1 .*has no character/);
+    assert.match(audit(`export const S1 = () => { const unused = <Hero/>; return <g/>; };`), /S1 .*has no character/);
+    assert.match(audit(`const Empty = () => <g/>; const Unused = () => <Hero/>; export const S1 = () => <Empty/>;`), /S1 .*has no character/);
+    assert.match(audit(`// const Fake = () => <Hero/>;
+ export const S1 = () => <g>{'<Hero/>'}</g>;`), /S1 .*has no character/);
+    assert.match(audit(`const A = () => <B/>; const B = () => <A/>; export const S1 = () => <A/>;`), /character.*unknown|unknown.*character/i);
+    assert.match(audit(`export const S1 = () => <Mystery/>;`), /character.*unknown|unknown.*character/i);
+    const ids = ['S1','S2','S3'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), ids.join(' '));
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const Prim = () => <Staged/>;\n` + ids.map(id => `export const ${id} = () => <Prim/>;`).join('\n'));
+    assert.match(shotsAudit(dir, 'room', {shots: ids.map(id => ({id, size:'medium'}))}, {shots:ids.map(id => ({id, len:60}))}) ?? '', /shots with people change nothing/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('real telephone-salon shots do not falsely lose delegated characters', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const root = path.resolve('data/projects/telephone-salon-7609890127925513503');
+  if (!fs.existsSync(root)) return;
+  const src = path.join(root, 'src/episodes/telephone-salon');
+  const episode = JSON.parse(fs.readFileSync(path.join(src, 'episode.json')));
+  const timeline = JSON.parse(fs.readFileSync(path.join(src, 'timeline.json')));
+  const result = shotsAudit(root, 'telephone-salon', episode, timeline) ?? '';
+  for (const id of ['S9','S10','S12']) {
+    const one = shotsAudit(root, 'telephone-salon', episode, { ...timeline, shots: timeline.shots.filter(s => s.id === id) }) ?? '';
+    assert.doesNotMatch(one, new RegExp(`${id} .*has no character`));
+  }
+  assert.match(result, /S6 .*character presence unknown/);
+  assert.match(result, /S19 .*character presence unknown/);
+});

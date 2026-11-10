@@ -1,3 +1,4 @@
+import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -336,6 +337,66 @@ export function paceProblem(projectRoot: string, slug: string): string | null {
   );
 }
 
+/** Bounded, syntactic character discovery. Never execute episode code. */
+function characterInspector(source: string): (id: string) => 'yes' | 'no' | 'unknown' {
+  const file = ts.createSourceFile('shots.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const defs = new Map<string, ts.Node>();
+  for (const statement of file.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) defs.set(statement.name.text, statement.body);
+    if (ts.isVariableStatement(statement)) for (const d of statement.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer) defs.set(d.name.text, d.initializer);
+    }
+  }
+  type Result = 'yes' | 'no' | 'unknown';
+  const combine = (a: Result, b: Result): Result => a === 'yes' || b === 'yes' ? 'yes' : a === 'unknown' || b === 'unknown' ? 'unknown' : 'no';
+  const inspect = (node: ts.Node, stack: Set<string>, depth: number): Result => {
+    if (depth > 16) return 'unknown';
+    if (ts.isStringLiteralLike(node) || ts.isJsxText(node)) return 'no';
+    if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node)) return 'no';
+    if (ts.isBlock(node)) {
+      let result: Result = 'no';
+      const returns = (n: ts.Node): void => {
+        if (ts.isReturnStatement(n)) { if (n.expression) result = combine(result, inspect(n.expression, stack, depth)); return; }
+        if (ts.isFunctionLike(n) || ts.isVariableStatement(n)) return;
+        ts.forEachChild(n, returns);
+      };
+      returns(node);
+      return result;
+    }
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = ts.isJsxElement(node) ? node.openingElement.tagName : node.tagName;
+      const name = tag.getText(file);
+      let result: Result = /^(Hero|Actor|Staged|Person|Duo)$/.test(name) ? 'yes' : 'no';
+      if (result !== 'yes' && /^[A-Z]/.test(name)) {
+        const target = defs.get(name);
+        if (!target || stack.has(name)) result = 'unknown';
+        else result = inspect(target, new Set([...stack, name]), depth + 1);
+      }
+      // Inspect children and attributes, not the tag identifier itself.
+      const parts: readonly ts.Node[] = ts.isJsxElement(node) ? [node.openingElement.attributes, ...node.children] : [node.attributes];
+      for (const part of parts) result = combine(result, inspect(part, stack, depth));
+      return result;
+    }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'shot') {
+      const arg = node.arguments[0];
+      if (arg && ts.isObjectLiteralExpression(arg)) for (const p of arg.properties) {
+        if (ts.isPropertyAssignment(p) && (p.name.getText(file) === 'people' || p.name.getText(file) === 'duo')) {
+          if (p.name.getText(file) === 'duo' && ts.isObjectLiteralExpression(p.initializer)) return 'yes';
+          if (ts.isArrayLiteralExpression(p.initializer) && p.initializer.elements.some(ts.isObjectLiteralExpression)) return 'yes';
+          if (!ts.isArrayLiteralExpression(p.initializer)) return 'unknown';
+        }
+      }
+    }
+    let result: Result = 'no';
+    ts.forEachChild(node, child => { result = combine(result, inspect(child, stack, depth)); });
+    return result;
+  };
+  return id => {
+    const target = defs.get(id);
+    return target ? inspect(target, new Set([id]), 0) : 'unknown';
+  };
+}
+
 /**
  * Static audit of shots.tsx + index.tsx against timeline.json:
  * - every timeline shot is exported in shots.tsx AND wired into defineEpisode in index.tsx,
@@ -390,6 +451,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     bodies[cur.id] = shotsSource.slice(cur.start, nextStart);
   }
 
+  const inspectCharacter = characterInspector(shotsSource);
   const errors: string[] = [];
   let heroShots = 0;
   const stillShots: string[] = [];
@@ -504,7 +566,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*[=:]\s*\{?\s*\[\s*\{|\bduo\s*[=:]\s*\{/.test(body);
+    const character = inspectCharacter(id);
+    const hasHero = character === 'yes';
     if (hasHero) heroShots++;
     // rhythm: a shot with people must change something while it plays (a beat, a new face, a clip, keyframes)
     if (hasHero && !isTitle && !isInsert && !isEstablishing) {
@@ -512,7 +575,10 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       if (timedChanges(body) === 0) stillShots.push(id);
     }
 
-    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
+    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && character === 'unknown') {
+      errors.push(`${id} has no character confirmed; character presence unknown: a component could not be resolved statically (import, cycle, or depth limit); inspect it explicitly.`);
+    }
+    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && character === 'no') {
       errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no character: show one (people: [...] in shot(), <Staged> or <Hero>), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
     }
     if (!isSchoolStory && /<Classroom\b/.test(body)) {
