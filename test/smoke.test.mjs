@@ -1017,3 +1017,88 @@ test('engine overlay: hidden files of the overlay folder are never copied into a
     fs.rmSync(project, { recursive: true, force: true });
   }
 });
+
+test('cast types: the channel heroine in one line, types that a story changes, eyes, stripes and dresses', async () => {
+  const ts = (await import('typescript')).default;
+  const src = fs.readFileSync(new URL('../engine-overlay/files/src/engine/cast.ts', import.meta.url), 'utf8');
+  const out = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-cast2-'));
+  const file = path.join(dir, 'cast.mjs');
+  fs.writeFileSync(file, out);
+  try {
+    const { cast, CAST_TYPES, EYE_COLORS, COLORS } = await import(file);
+    const her = cast({ as: 'heroine', seed: 'her' });
+    assert.equal(her.cast.hairStyle, 'braided-bun');
+    assert.equal(her.cast.newHair, true, 'drawn by hair.tsx, the rig head stays bald');
+    assert.deepEqual(her.cast.iris, [EYE_COLORS.blue, EYE_COLORS.green], 'one blue eye, one green');
+    assert.equal(her.cast.face.marks, 'freckles');
+    assert.equal(her.cast.legs.id, 'joggers');
+    assert.equal(her.cast.legs.accent, COLORS.mustard, 'the yellow side stripe');
+    assert.deepEqual(her.cast.print, { text: 'her', color: COLORS.coral });
+    assert.deepEqual(cast({ as: 'heroine', seed: 'her' }), her, 'the same every time: she stays the same across episodes');
+
+    const party = cast({ as: 'heroine', seed: 'her', outfit: ['dress:green', 'formal:white'], face: { brows: 'arched' } });
+    assert.equal(party.cast.top.id, 'dress', 'what is given wins over the type');
+    assert.equal(party.cast.legs.id, 'dress', 'a dress is also the skirt');
+    assert.equal(party.cast.face.marks, 'freckles', 'face fields merge: the freckles stay');
+    assert.equal(party.cast.face.brows, 'arched');
+    assert.equal(party.cast.hairStyle, 'braided-bun');
+
+    assert.equal(cast({ seed: 'x', eyes: 'hazel' }).cast.iris[0], EYE_COLORS.hazel);
+    assert.equal(cast({ seed: 'x' }).cast.iris, undefined, 'no colour given: the plain dark eye of the style');
+    assert.equal(cast({ seed: 'x', outfit: ['joggers:navy'] }).cast.legs.accent, COLORS.white, 'joggers keep a stripe by default');
+    assert.equal(cast({ seed: 'x', outfit: ['jeans'] }).cast.legs.accent, undefined);
+    assert.throws(() => cast({ as: 'pirate' }), /unknown type "pirate" \(known: heroine, mother/);
+    for (const t of Object.keys(CAST_TYPES)) assert.doesNotThrow(() => cast({ as: t, seed: t }), `type ${t} builds`);
+    assert.equal(cast({ as: 'police', seed: 'p' }).hair, '#1E2A44', 'a navy cap, not the seed\'s hair colour');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('character audit resolves bounded component delegation without trusting text or unused declarations', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-delegate-'));
+  const epDir = path.join(dir, 'src', 'episodes', 'room');
+  fs.mkdirSync(epDir, { recursive: true });
+  fs.writeFileSync(path.join(epDir, 'index.tsx'), 'S1');
+  const audit = (source) => {
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), source);
+    return shotsAudit(dir, 'room', { shots: [{ id: 'S1', size: 'medium' }] }, { shots: [{ id: 'S1', len: 60 }] }) ?? '';
+  };
+  try {
+    assert.doesNotMatch(audit(`const Prim: React.FC<any> = p => <Staged {...p}/>; export const S1 = () => <Prim/>;`), /S1 .*has no character/);
+    assert.doesNotMatch(audit(`function Inner() { return <Hero/>; } const Outer = () => <Inner/>; export function S1() { return <Outer/>; }`), /S1 .*has no character/);
+    assert.match(audit(`export const S1 = () => { const unused = <Hero/>; return <g/>; };`), /S1 .*has no character/);
+    assert.match(audit(`const Empty = () => <g/>; const Unused = () => <Hero/>; export const S1 = () => <Empty/>;`), /S1 .*has no character/);
+    assert.match(audit(`// const Fake = () => <Hero/>;
+ export const S1 = () => <g>{'<Hero/>'}</g>;`), /S1 .*has no character/);
+    assert.match(audit(`const A = () => <B/>; const B = () => <A/>; export const S1 = () => <A/>;`), /character.*unknown|unknown.*character/i);
+    assert.match(audit(`export const S1 = () => <Mystery/>;`), /character.*unknown|unknown.*character/i);
+    // Real phone close-ups delegate to a room with imported decor. Unknown imports
+    // must not be assumed empty or used as proof of a character.
+    assert.match(audit(`import { WallClock } from './engine'; const Room = () => <g><WallClock/></g>; const PhoneScreen = () => <g><rect/></g>; export const S1 = () => <g><Room/><PhoneScreen/></g>;`), /S1 .*character presence unknown/);
+    assert.match(audit(`const Room = () => <g><rect/></g>; const PhoneScreen = () => <g><circle/><path/></g>; export const S1 = () => <g><Room/><PhoneScreen/></g>;`), /S1 .*has no character/);
+    const ids = ['S1','S2','S3'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), ids.join(' '));
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const Prim = () => <Staged/>;\n` + ids.map(id => `export const ${id} = () => <Prim/>;`).join('\n'));
+    assert.match(shotsAudit(dir, 'room', {shots: ids.map(id => ({id, size:'medium'}))}, {shots:ids.map(id => ({id, len:60}))}) ?? '', /shots with people change nothing/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('real telephone-salon shots do not falsely lose delegated characters', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const root = path.resolve('data/projects/telephone-salon-7609890127925513503');
+  if (!fs.existsSync(root)) return;
+  const src = path.join(root, 'src/episodes/telephone-salon');
+  const episode = JSON.parse(fs.readFileSync(path.join(src, 'episode.json')));
+  const timeline = JSON.parse(fs.readFileSync(path.join(src, 'timeline.json')));
+  const result = shotsAudit(root, 'telephone-salon', episode, timeline) ?? '';
+  for (const id of ['S9','S10','S12']) {
+    const one = shotsAudit(root, 'telephone-salon', episode, { ...timeline, shots: timeline.shots.filter(s => s.id === id) }) ?? '';
+    assert.doesNotMatch(one, new RegExp(`${id} .*has no character`));
+  }
+  assert.match(result, /S6 .*character presence unknown/);
+  assert.match(result, /S19 .*character presence unknown/);
+});

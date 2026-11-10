@@ -1,3 +1,4 @@
+import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -312,9 +313,11 @@ export function timedChanges(body: string): number {
 }
 
 /** The pace the shot list must reach: shorts cut fast, long videos hold 3 to 6 s (Pulsy, 2026-11-10). */
-export function paceTarget(durSec: number): { minCutsPerMin: number; maxShotSec: number; label: string } {
+export function paceTarget(durSec: number, aspect: string = '16:9'): { minCutsPerMin: number; maxShotSec: number; label: string } {
   if (durSec <= 30) return { minCutsPerMin: 24, maxShotSec: 3.8, label: 'short clip' };
   if (durSec <= 150) return { minCutsPerMin: 20, maxShotSec: 5, label: 'short (under 2.5 min)' };
+  // A vertical video is a short whatever its length (Pulsy, 2026-11-10).
+  if (aspect === '9:16') return { minCutsPerMin: 20, maxShotSec: 5, label: 'vertical short (9:16, any length)' };
   return { minCutsPerMin: 10, maxShotSec: 9, label: 'long video (3-6 s per shot)' };
 }
 
@@ -328,12 +331,73 @@ export function paceProblem(projectRoot: string, slug: string): string | null {
   const shots = new Set(segs.map((s) => String(s.shot))).size;
   const cutsPerMin = ((shots - 1) / durSec) * 60;
   const longestSec = segs.reduce((m, s) => Math.max(m, (Number(s.b ?? 0) - Number(s.a ?? 0)) / fps), 0);
-  const want = paceTarget(durSec);
+  const ep = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'episode.json'));
+  const want = paceTarget(durSec, String(ep?.aspect ?? '16:9'));
   if (cutsPerMin >= want.minCutsPerMin && longestSec <= want.maxShotSec) return null;
   return (
     `PACE TOO SLOW for a ${want.label}: ${shots} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
     `wanted >= ${want.minCutsPerMin} cuts/min and no shot over ${want.maxShotSec}s). Run whatif_run { step: "shotlist" } then { step: "plan" }.`
   );
+}
+
+/** Bounded, syntactic character discovery. Never execute episode code. */
+function characterInspector(source: string): (id: string) => 'yes' | 'no' | 'unknown' {
+  const file = ts.createSourceFile('shots.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const defs = new Map<string, ts.Node>();
+  for (const statement of file.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) defs.set(statement.name.text, statement.body);
+    if (ts.isVariableStatement(statement)) for (const d of statement.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer) defs.set(d.name.text, d.initializer);
+    }
+  }
+  type Result = 'yes' | 'no' | 'unknown';
+  const combine = (a: Result, b: Result): Result => a === 'yes' || b === 'yes' ? 'yes' : a === 'unknown' || b === 'unknown' ? 'unknown' : 'no';
+  const inspect = (node: ts.Node, stack: Set<string>, depth: number): Result => {
+    if (depth > 16) return 'unknown';
+    if (ts.isStringLiteralLike(node) || ts.isJsxText(node)) return 'no';
+    if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node)) return 'no';
+    if (ts.isBlock(node)) {
+      let result: Result = 'no';
+      const returns = (n: ts.Node): void => {
+        if (ts.isReturnStatement(n)) { if (n.expression) result = combine(result, inspect(n.expression, stack, depth)); return; }
+        if (ts.isFunctionLike(n) || ts.isVariableStatement(n)) return;
+        ts.forEachChild(n, returns);
+      };
+      returns(node);
+      return result;
+    }
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = ts.isJsxElement(node) ? node.openingElement.tagName : node.tagName;
+      const name = tag.getText(file);
+      let result: Result = /^(Hero|Actor|Staged|Person|Duo)$/.test(name) ? 'yes' : 'no';
+      if (result !== 'yes' && /^[A-Z]/.test(name)) {
+        const target = defs.get(name);
+        if (!target || stack.has(name)) result = 'unknown';
+        else result = inspect(target, new Set([...stack, name]), depth + 1);
+      }
+      // Inspect children and attributes, not the tag identifier itself.
+      const parts: readonly ts.Node[] = ts.isJsxElement(node) ? [node.openingElement.attributes, ...node.children] : [node.attributes];
+      for (const part of parts) result = combine(result, inspect(part, stack, depth));
+      return result;
+    }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'shot') {
+      const arg = node.arguments[0];
+      if (arg && ts.isObjectLiteralExpression(arg)) for (const p of arg.properties) {
+        if (ts.isPropertyAssignment(p) && (p.name.getText(file) === 'people' || p.name.getText(file) === 'duo')) {
+          if (p.name.getText(file) === 'duo' && ts.isObjectLiteralExpression(p.initializer)) return 'yes';
+          if (ts.isArrayLiteralExpression(p.initializer) && p.initializer.elements.some(ts.isObjectLiteralExpression)) return 'yes';
+          if (!ts.isArrayLiteralExpression(p.initializer)) return 'unknown';
+        }
+      }
+    }
+    let result: Result = 'no';
+    ts.forEachChild(node, child => { result = combine(result, inspect(child, stack, depth)); });
+    return result;
+  };
+  return id => {
+    const target = defs.get(id);
+    return target ? inspect(target, new Set([id]), 0) : 'unknown';
+  };
 }
 
 /**
@@ -390,6 +454,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     bodies[cur.id] = shotsSource.slice(cur.start, nextStart);
   }
 
+  const inspectCharacter = characterInspector(shotsSource);
   const errors: string[] = [];
   let heroShots = 0;
   const stillShots: string[] = [];
@@ -504,7 +569,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*[=:]\s*\{?\s*\[\s*\{|\bduo\s*[=:]\s*\{/.test(body);
+    const character = inspectCharacter(id);
+    const hasHero = character === 'yes';
     if (hasHero) heroShots++;
     // rhythm: a shot with people must change something while it plays (a beat, a new face, a clip, keyframes)
     if (hasHero && !isTitle && !isInsert && !isEstablishing) {
@@ -512,7 +578,10 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       if (timedChanges(body) === 0) stillShots.push(id);
     }
 
-    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
+    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && character === 'unknown') {
+      errors.push(`${id} has no character confirmed; character presence unknown: a component could not be resolved statically (import, cycle, or depth limit); inspect it explicitly.`);
+    }
+    if (!isTitle && !isInsert && !isSchematic && !isEstablishing && character === 'no') {
       errors.push(`${id} (set "${set || 'custom'}", size "${size || 'medium'}") has no character: show one (people: [...] in shot(), <Staged> or <Hero>), or set this shot's "size" to "establishing" or "insert" in episode.json if the line is about a place or an object`);
     }
     if (!isSchoolStory && /<Classroom\b/.test(body)) {
@@ -691,6 +760,17 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       `${stillShots.length}/${actingShots} shots with people change nothing while they play (${stillShots.slice(0, 10).join(', ')}): give each one at least one beat on a word of its line — beats: [{ at: <frame of the word>, act: '...', face: '...' }], a reach, a look, or a camera beat (frames are listed per shot in "When each word is said").`,
     );
   }
+  // A whole file written by hand loses what shot() does for free: the 9:16 frame, seats, depth, the reviewer's
+  // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
+  if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
+    const framed = wanted.filter((id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')));
+    const byHand = framed.filter((id) => !/\bshot\s*\(/.test(bodies[id]!));
+    if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
+      errors.push(
+        `${byHand.length}/${framed.length} shots with people are written by hand instead of shot({...}) (${byHand.slice(0, 10).join(', ')}): rewrite them as export const Sx = shot({ place, people, cam, beats }) — shot() frames 9:16 correctly, seats people on real chairs and lets the audit and the reviewer see who is on screen. Keep hand-written code for what shot() cannot draw (a phone screen, a diagram), at most half the shots.`,
+      );
+    }
+  }
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
   if (heroShots < minHeroShots) {
     errors.push(
@@ -711,6 +791,24 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     return `shots.tsx failed the animation & composition check:\n- ${errors.slice(0, 10).join('\n- ')}`;
   }
   return null;
+}
+
+/**
+ * shots.tsx edited after the last board: the reviewer judged older pictures and the render would ship
+ * shots nobody looked at (telephone-salon, 2026-11-10). Null when the board is current.
+ */
+export function boardStale(projectRoot: string, slug: string): string | null {
+  const mtime = (file: string): number => {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  const board = mtime(path.join(projectRoot, 'out', slug, 'storyboard.jpg'));
+  const shots = mtime(path.join(projectRoot, 'src', 'episodes', slug, 'shots.tsx'));
+  if (!board || !shots || shots <= board + 1_000) return null;
+  return `shots.tsx changed after the last board, so nobody has looked at these shots yet: re-run whatif_run { step: "stills", args: [the shots you changed] } then { step: "board" } before render`;
 }
 
 /** Why the render must wait for the independent reviewer, or null. */
@@ -786,6 +884,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     if (!fs.existsSync(path.join(projectRoot, 'out', slug, 'storyboard.jpg'))) {
       return `out/${slug}/storyboard.jpg does not exist yet: run whatif_run { step: "stills" } and { step: "board" } and inspect the storyboard before rendering the full video`;
     }
+    const stale = boardStale(projectRoot, slug);
+    if (stale) return stale;
     const refusal = reviewRefusal(projectRoot, slug);
     if (refusal) return refusal;
   }

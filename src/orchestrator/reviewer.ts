@@ -56,6 +56,8 @@ Vérifie particulièrement ces 9 points critiques :
 8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ? Une source de lumière visible par plan ?
 9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
 
+Avant d'affirmer qu'un personnage manque dans un plan, lis la ligne « personnages cités » de ce plan dans le résumé du code : s'il y est, il est dessiné (vérifie plutôt son cadrage sur la planche). Un insert (téléphone, objet) qui illustre ce que dit le narrateur n'est pas un défaut.
+
 Le code peut décrire les plans au lieu de les dessiner : \`shot({ place, cam, people, duo })\`. \`place('classroom', …)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression), \`duo\` une interaction à deux. \`view: 'reverse'\` est le contrechamp (le mur opposé), \`angle\` une contre-plongée ('low') ou une plongée ('high'). Tes correctifs doivent employer ces mêmes champs quand le plan est écrit ainsi.
 
 Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un bloc \`\`\`json) respectant exactement ce schéma :
@@ -75,21 +77,48 @@ Règles de décision :
 - Mets "pass": false UNIQUEMENT s'il y a au moins une issue avec "severity": "error" qui nuit vraiment à la cohérence du récit ou du cadrage.
 - Limite-toi aux problèmes réels et vérifiables (maximum 8 issues ciblées, les plus graves d'abord). Les défauts de mise en scène (point 6) et de lisibilité du lieu (point 7) sont "error" quand ils touchent plus de la moitié des plans, sinon "warn". S'il n'y a rien de bloquant, retourne "pass": true et "issues": [].`;
 
-function summarizeShotsCode(shotsRaw: string): string {
+/** Names bound to cast(...) in shots.tsx: the characters a shot can show. */
+function castNames(src: string): string[] {
+  return [...src.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*cast\s*\(/g)].map((m) => m[1]!);
+}
+
+/** Every local component (capitalised const/function that is not a shot), cut short: what <Prim>, <Salon> ... draw. */
+function localComponents(src: string, budget = 6_000): string {
+  const out: string[] = [];
+  let used = 0;
+  for (const m of src.matchAll(/^(?:export\s+)?(?:const|function)\s+([A-Z][\w$]*)\b/gm)) {
+    const name = m[1]!;
+    if (/^S\d+$/.test(name)) continue;
+    const body = src.slice(m.index ?? 0, (m.index ?? 0) + 2_000).split(/\n(?=(?:export\s+)?(?:const|function)\s)/)[0]!;
+    const line = `- ${body.replace(/\s+/g, ' ').trim().slice(0, 360)}`;
+    if (used + line.length > budget) {
+      out.push('- (…)');
+      break;
+    }
+    out.push(line);
+    used += line.length;
+  }
+  return out.join('\n');
+}
+
+export function summarizeShotsCode(shotsRaw: string): string {
   if (!shotsRaw) return '(shots.tsx missing)';
   const matches = [...shotsRaw.matchAll(/export\s+(?:const|function)\s+(S\d+)\b/g)];
   if (!matches.length) return shotsRaw.slice(0, 3_000);
   const firstIdx = matches[0]!.index ?? 0;
   const header = shotsRaw.slice(0, firstIdx).trim().slice(0, 2_200);
+  const names = castNames(shotsRaw);
   const perShot: string[] = [];
   for (let i = 0; i < matches.length; i++) {
     const id = matches[i]![1]!;
     const start = matches[i]!.index ?? 0;
     const end = i + 1 < matches.length ? (matches[i + 1]!.index ?? shotsRaw.length) : shotsRaw.length;
     const body = shotsRaw.slice(start, end).replace(/\s+/g, ' ').trim();
-    perShot.push(`- ${id}: ${body.slice(0, 380)}`);
+    const who = names.filter((n) => new RegExp(`\\b${n.replace(/\$/g, '\\$')}\\b`).test(body));
+    perShot.push(`- ${id} (personnages cités : ${who.length ? who.join(', ') : 'aucun'}): ${body.slice(0, 1_200)}`);
   }
-  return `### En-tête partagé (shots.tsx)\n\`\`\`tsx\n${header}\n\`\`\`\n\n### Résumé du code par plan (${matches.length} plans)\n${perShot.join('\n')}`;
+  const comps = localComponents(shotsRaw);
+  return `### En-tête partagé (shots.tsx)\n\`\`\`tsx\n${header}\n\`\`\`\n\n${comps ? `### Composants du fichier (début de chaque définition)\n${comps}\n\n` : ''}### Résumé du code par plan (${matches.length} plans)\n${perShot.join('\n')}`;
 }
 
 /** Counts read straight from shots.tsx, handed to the Reviewer so it does not have to guess from thumbnails. */
@@ -98,19 +127,21 @@ export function staticMetrics(shotsRaw: string): string {
   if (!parts.length) return '(shots.tsx has no exported shot)';
   let oriented = 0;
   let blur = 0;
+  let focus = 0;
   let group3 = 0;
   let still = 0;
   let idleOnly = 0;
   for (const body of parts) {
-    if (timedChanges(body) === 0 && /\bpeople\s*[=:]|<(Hero|Staged|Person)\b/.test(body)) still++;
+    if (timedChanges(body) === 0 && /\bpeople\s*[=:]|<(Hero|Staged|Person)\b|\bwho\s*[=:]/.test(body)) still++;
     const acts = [...body.matchAll(/\bact\s*[:=]\s*['"]([a-z-]+)/g)].map((m) => m[1]);
     if (acts.length && acts.every((a) => a === 'idle')) idleOnly++;
     const yaws = [...body.matchAll(/\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
     if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{/.test(body)) oriented++;
-    if (/<Foreground\b|blur16|\bfocus\s*[=:]/.test(body)) blur++;
-    if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*:/g) ?? []).length >= 3) group3++;
+    if (/<Foreground\b|\bforeground\s*:/.test(body)) blur++;
+    else if (/\bfocus\s*[=:]|blur16/.test(body)) focus++;
+    if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*[:=]/g) ?? []).length >= 3) group3++;
   }
-  return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue · ${group3} plans à 3 personnages ou plus · ${still} plans avec personnages où rien ne change pendant le plan · ${idleOnly} plans où l'unique action est idle`;
+  return `${oriented}/${parts.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${parts.length} plans avec amorce floue au premier plan (Foreground) · ${focus} autres avec seulement un flou de profondeur (pas une amorce) · ${group3} plans à 3 personnages ou plus · ${still} plans avec personnages où rien ne change pendant le plan · ${idleOnly} plans où l'unique action est idle`;
 }
 
 /** Shot lengths from timeline.json: a long held shot is the first thing that kills the pace. */
@@ -168,6 +199,19 @@ export function parseReviewJson(raw: string, model: string, episode: string): Re
   }
 }
 
+/** The orientation the studio renders at: episode.json first, else src/studio.config.ts (never a silent 16:9 guess). */
+function episodeAspect(projectRoot: string, epRaw: string): string {
+  try {
+    const a = String(JSON.parse(epRaw)?.aspect ?? '');
+    if (a === '9:16' || a === '16:9') return a;
+  } catch {
+    /* fall through */
+  }
+  const cfg = readText(path.join(projectRoot, 'src'), 'studio.config.ts', 50_000) ?? '';
+  if (/aspect\s*:\s*['"]9:16['"]/.test(cfg) || (/width\s*:\s*1080\b/.test(cfg) && /height\s*:\s*1920\b/.test(cfg))) return '9:16';
+  return '16:9';
+}
+
 export async function reviewEpisodeBoard(
   provider: Provider,
   projectRoot: string,
@@ -177,10 +221,12 @@ export async function reviewEpisodeBoard(
 ): Promise<ReviewReport> {
   const epDir = path.join(projectRoot, 'src', 'episodes', slug);
   const outDir = path.join(projectRoot, 'out', slug);
-  const epRaw = readText(epDir, 'episode.json', 25_000) ?? '{}';
-  const directorRaw = readText(epDir, 'DIRECTOR.md', 10_000) ?? '(aucun DIRECTOR.md)';
+  // Whole files: a 27 KB episode.json used to be dropped and the reviewer judged without the script (2026-11-10).
+  const epRaw = readText(epDir, 'episode.json', 3_000_000) ?? '{}';
+  const directorRaw = readText(epDir, 'DIRECTOR.md', 200_000) ?? '(aucun DIRECTOR.md)';
   const bibleRaw = readText(epDir, 'bible.json', 4_000) ?? '';
-  const shotsRaw = readText(epDir, 'shots.tsx', 120_000) ?? '';
+  const shotsRaw = readText(epDir, 'shots.tsx', 400_000) ?? '';
+  const aspect = episodeAspect(projectRoot, epRaw);
 
   let timeline: any = null;
   try {
@@ -220,11 +266,11 @@ export async function reviewEpisodeBoard(
   if (!images.length) addImage(path.join(outDir, 'storyboard.jpg'), 'image/jpeg');
 
   const userPrompt = [
-    `# Audit indépendant de l'épisode "${slug}" (orientation: ${ep?.aspect ?? '16:9'}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})`,
-    `## 1. Script complet (narration FR)\n${scriptLines.slice(0, 4_500)}`,
-    `## 2. Découpage des plans (episode.json.shots)\n${shotLines.slice(0, 4_500)}`,
+    `# Audit indépendant de l'épisode "${slug}" (orientation: ${aspect}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})`,
+    `## 1. Script complet (narration FR)\n${scriptLines.slice(0, 9_000)}`,
+    `## 2. Découpage des plans (episode.json.shots)\n${shotLines.slice(0, 7_000)}`,
     bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 2_000)}` : '',
-    `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 3_500)}`,
+    `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 12_000)}`,
     `## 5. Code des plans (shots.tsx)\n${summarizeShotsCode(shotsRaw)}`,
     `## 6. Mesures automatiques (lues dans shots.tsx et timeline.json)\n${staticMetrics(shotsRaw)}\n${timingMetrics(timeline)}`,
     images.length

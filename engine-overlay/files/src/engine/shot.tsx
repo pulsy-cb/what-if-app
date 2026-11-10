@@ -275,3 +275,193 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
 /** JSX component form of `shot(...)`, so `<Shot place={...} cam="wide" people={[...]} t={t} len={len} />` also works. */
 export const Shot: React.FC<ShotSpec & { t?: number; len?: number; f?: number }> = (props) =>
   shot(props)({ t: props.t ?? 0, len: props.len ?? 90, f: props.f ?? props.t ?? 0 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// A phone insert, described instead of drawn: the screen fills the frame (16:9 and 9:16), messages arrive on their
+// word, a banner drops in, a thumb types. Half the channel's stories turn on a phone; before this the agent drew the
+// screen by hand, in the wrong frame (telephone-salon, 2026-11-10).
+
+export type PhoneMsg = { at: number; text: string; from?: 'them' | 'me' };
+export type PhoneSpec = {
+  /** the contact at the top of the chat, or who the banner is from */ name: string;
+  /** 'chat' (default): a conversation; 'lock': the lock screen with its banners */ screen?: 'chat' | 'lock';
+  /** bubbles, each appearing at its frame (the shot's own clock) */ messages?: PhoneMsg[];
+  /** a banner sliding in from the top at frame `at` */ notify?: { at: number; text: string; from?: string };
+  /** the thumb types `text` into the input bar from frame `at` over `dur` frames */ typing?: { at: number; text: string; dur?: number };
+  /** battery percent in the status bar; 10 or less shows red */ battery?: number;
+  /** clock in the status bar */ time?: string;
+  /** the room behind the phone, blurred */ back?: Placed;
+  /** hand skin colour; null hides the hand */ skin?: string | null;
+  /** case colour */ case?: string;
+  /** chat accent (my bubbles) */ accent?: string;
+  /** the camera pushes on the screen (default true) */ push?: boolean;
+};
+
+const wrapText = (text: string, max: number): string[] => {
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of text.split(/\s+/).filter(Boolean)) {
+    if (cur && (cur + ' ' + w).length > max) {
+      lines.push(cur);
+      cur = w;
+    } else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+};
+
+const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number }> = ({ spec, t, W, H }) => {
+  const accent = spec.accent ?? '#3E7BFA';
+  const font = 'system-ui, -apple-system, Segoe UI, sans-serif';
+  const fs = W * 0.052;
+  const pad = W * 0.06;
+  const low = (spec.battery ?? 64) <= 10;
+  const status = (
+    <g>
+      <text x={pad} y={H * 0.045} fontSize={fs * 0.82} fontWeight={600} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
+      <g transform={`translate(${W - pad - fs * 2.6} ${H * 0.045 - fs * 0.7})`}>
+        <rect width={fs * 1.9} height={fs * 0.85} rx={fs * 0.2} fill="none" stroke={low ? '#FF5A5A' : '#F4F6FA'} strokeWidth={2.5} />
+        <rect x={3} y={3} width={Math.max(2, (fs * 1.9 - 6) * clamp((spec.battery ?? 64) / 100, 0, 1))} height={fs * 0.85 - 6} rx={2} fill={low ? '#FF5A5A' : '#F4F6FA'} />
+        <rect x={fs * 1.9 + 1} y={fs * 0.25} width={4} height={fs * 0.35} fill={low ? '#FF5A5A' : '#F4F6FA'} />
+      </g>
+      {spec.battery !== undefined ? (
+        <text x={W - pad - fs * 2.9} y={H * 0.045} textAnchor="end" fontSize={fs * 0.78} fontWeight={600} fill={low ? '#FF5A5A' : '#F4F6FA'} fontFamily={font}>{`${spec.battery} %`}</text>
+      ) : null}
+    </g>
+  );
+  const banner = spec.notify
+    ? (() => {
+        const k = ease01((t - spec.notify.at) / 7);
+        if (k <= 0) return null;
+        const lines = wrapText(spec.notify.text, 26).slice(0, 3);
+        const bh = fs * (2.6 + lines.length * 1.25);
+        return (
+          <g transform={`translate(${pad * 0.6} ${H * 0.065 - (1 - k) * (bh + H * 0.08)})`} opacity={k}>
+            <rect width={W - pad * 1.2} height={bh} rx={fs * 0.9} fill="#F7F4EE" opacity={0.97} />
+            <rect x={fs * 0.6} y={fs * 0.6} width={fs * 1.5} height={fs * 1.5} rx={fs * 0.4} fill="#35C759" />
+            <text x={fs * 2.5} y={fs * 1.6} fontSize={fs * 0.9} fontWeight={700} fill="#1C1C22" fontFamily={font}>{spec.notify.from ?? spec.name}</text>
+            {lines.map((l, i) => (
+              <text key={i} x={fs * 0.7} y={fs * (3.2 + i * 1.25)} fontSize={fs * 0.95} fill="#2A2A33" fontFamily={font}>{l}</text>
+            ))}
+          </g>
+        );
+      })()
+    : null;
+  if (spec.screen === 'lock') {
+    return (
+      <g>
+        <rect width={W} height={H} fill="#1B2440" />
+        <rect width={W} height={H} fill="url(#phoneLockGlow)" />
+        {status}
+        <text x={W / 2} y={H * 0.26} textAnchor="middle" fontSize={fs * 4.2} fontWeight={300} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
+        {banner}
+      </g>
+    );
+  }
+  // chat: header, bubbles stacked from the top and scrolled so the newest stays above the input bar
+  const headerH = H * 0.13;
+  const inputH = H * 0.09;
+  const shown = (spec.messages ?? []).filter((m) => t >= m.at);
+  const lineH = fs * 1.3;
+  const blocks = shown.map((m) => {
+    const lines = wrapText(m.text, 22);
+    return { m, lines, h: lines.length * lineH + fs * 1.1 };
+  });
+  const gap = fs * 0.55;
+  const total = blocks.reduce((s, b) => s + b.h + gap, 0);
+  const room = H - headerH - inputH - fs;
+  let y = headerH + fs * 0.6 - Math.max(0, total - room);
+  const typed = spec.typing ? spec.typing.text.slice(0, Math.floor(spec.typing.text.length * clamp((t - spec.typing.at) / (spec.typing.dur ?? 30), 0, 1))) : '';
+  return (
+    <g>
+      <rect width={W} height={H} fill="#10141C" />
+      <g>
+        {blocks.map(({ m, lines, h }, i) => {
+          const mine = m.from === 'me';
+          const k = ease01((t - m.at) / 6);
+          const bw = Math.min(W * 0.74, Math.max(...lines.map((l) => l.length)) * fs * 0.56 + fs * 1.4);
+          const x = mine ? W - pad * 0.7 - bw : pad * 0.7;
+          const top = y;
+          y += h + gap;
+          return (
+            <g key={i} transform={`translate(${x + (mine ? bw : 0)} ${top + h}) scale(${0.6 + 0.4 * k}) translate(${-(x + (mine ? bw : 0))} ${-(top + h)})`} opacity={k}>
+              <rect x={x} y={top} width={bw} height={h} rx={fs * 0.8} fill={mine ? accent : '#2A303C'} />
+              {lines.map((l, j) => (
+                <text key={j} x={x + fs * 0.7} y={top + fs * 1.25 + j * lineH} fontSize={fs} fill="#F4F6FA" fontFamily={font}>{l}</text>
+              ))}
+            </g>
+          );
+        })}
+      </g>
+      <rect width={W} height={headerH} fill="#1A202B" />
+      {status}
+      <circle cx={pad + fs * 1.1} cy={headerH * 0.68} r={fs * 1.1} fill="#C77D9A" />
+      <text x={pad + fs * 1.1} y={headerH * 0.68 + fs * 0.4} textAnchor="middle" fontSize={fs * 1.1} fontWeight={700} fill="#FFF" fontFamily={font}>{spec.name.slice(0, 1).toUpperCase()}</text>
+      <text x={pad + fs * 2.7} y={headerH * 0.66} fontSize={fs * 1.05} fontWeight={700} fill="#F4F6FA" fontFamily={font}>{spec.name}</text>
+      <text x={pad + fs * 2.7} y={headerH * 0.66 + fs * 1.05} fontSize={fs * 0.75} fill="#7FD68F" fontFamily={font}>en ligne</text>
+      <rect y={H - inputH} width={W} height={inputH} fill="#1A202B" />
+      <rect x={pad * 0.6} y={H - inputH + inputH * 0.2} width={W - pad * 1.2} height={inputH * 0.6} rx={inputH * 0.3} fill="#2A303C" />
+      <text x={pad * 0.6 + fs * 0.8} y={H - inputH / 2 + fs * 0.35} fontSize={fs * 0.95} fill={typed ? '#F4F6FA' : '#7C8494'} fontFamily={font}>
+        {typed || 'Message'}{spec.typing && t >= spec.typing.at && Math.floor(t / 8) % 2 === 0 ? '|' : ''}
+      </text>
+      {banner}
+    </g>
+  );
+};
+
+/** A full-frame phone insert: `export const S5 = phoneShot({ name: 'Camille', messages: [{ at: 36, text: 'Tu me manques' }] })`. */
+export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
+  const Back = spec.back ? shot({ place: spec.back, cam: 'wide', move: 'still' }) : null;
+  const PhoneComp: React.FC<ShotProps> = ({ t, len }) => {
+    const k = len > 0 ? clamp(t / len, 0, 1) : 0;
+    const zoom = spec.push === false ? 1 : 1 + 0.06 * k;
+    // the phone fills most of the frame height; a little sway so the shot breathes
+    const H = FRAME.h * (PORTRAIT ? 0.8 : 0.86);
+    const W = H * 0.5;
+    const cx = 960 + Math.sin(t / 23) * 4;
+    const cy = 540 + Math.cos(t / 29) * 3 + (PORTRAIT ? 30 : 10);
+    const tilt = -4 + Math.sin(t / 37) * 0.8;
+    const bezel = W * 0.04;
+    const skin = spec.skin === null ? null : spec.skin ?? '#E9BE9A';
+    const typingNow = spec.typing && t >= spec.typing.at && t <= spec.typing.at + (spec.typing.dur ?? 30);
+    const tap = typingNow ? Math.abs(Math.sin(t * 0.9)) * 10 : 0;
+    return (
+      <g>
+        {Back ? (
+          <g filter="url(#blur6)" opacity={0.85}>
+            <Back t={0} len={len} />
+          </g>
+        ) : (
+          <rect x={-2000} y={-2000} width={6000} height={6000} fill="#2A2730" />
+        )}
+        <rect x={-2000} y={-2000} width={6000} height={6000} fill="#000" opacity={0.35} />
+        <defs>
+          <radialGradient id="phoneLockGlow" cx="0.5" cy="0.3" r="0.8">
+            <stop offset="0" stopColor="#5A4E9A" stopOpacity={0.9} />
+            <stop offset="1" stopColor="#1B2440" stopOpacity={0} />
+          </radialGradient>
+        </defs>
+        <g transform={`translate(960 540) scale(${zoom}) translate(-960 -540) rotate(${tilt} ${cx} ${cy})`}>
+          <rect x={cx - W / 2 + 14} y={cy - H / 2 + 22} width={W} height={H} rx={W * 0.12} fill="#000" opacity={0.35} />
+          <rect x={cx - W / 2} y={cy - H / 2} width={W} height={H} rx={W * 0.12} fill={spec.case ?? '#1F2430'} />
+          <svg x={cx - W / 2 + bezel} y={cy - H / 2 + bezel} width={W - bezel * 2} height={H - bezel * 2} viewBox={`0 0 ${W - bezel * 2} ${H - bezel * 2}`}>
+            <rect width={W - bezel * 2} height={H - bezel * 2} rx={W * 0.09} fill="#10141C" />
+            <PhoneScreenUI spec={spec} t={t} W={W - bezel * 2} H={H - bezel * 2} />
+          </svg>
+          <rect x={cx - W * 0.12} y={cy - H / 2 + bezel * 1.6} width={W * 0.24} height={bezel * 1.1} rx={bezel * 0.55} fill="#05070A" />
+          {skin ? (
+            <g>
+              {/* the hand holding it: fingers on the left edge, the thumb over the bottom right of the screen */}
+              {[0.18, 0.3, 0.42].map((v, i) => (
+                <rect key={i} x={cx - W / 2 - W * 0.07} y={cy - H / 2 + H * (0.45 + v * 0.6)} width={W * 0.12} height={H * 0.06} rx={H * 0.03} fill={skin} />
+              ))}
+              <path d={`M ${cx - W * 0.3} ${cy + H * 0.62} Q ${cx - W * 0.1} ${cy + H * 0.3} ${cx + W * 0.62} ${cy + H * 0.36} L ${cx + W * 0.7} ${cy + H * 0.7} Z`} fill={skin} />
+              <ellipse cx={cx + W * 0.14} cy={cy + H * 0.34 - tap} rx={W * 0.13} ry={W * 0.075} fill={skin} transform={`rotate(-28 ${cx + W * 0.14} ${cy + H * 0.34 - tap})`} />
+            </g>
+          ) : null}
+        </g>
+      </g>
+    );
+  };
+  return PhoneComp;
+};

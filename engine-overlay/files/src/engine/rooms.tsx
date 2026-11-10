@@ -431,6 +431,13 @@ Object.assign(PLACES, {
   salon: { mood: 'dusk', floor: 'boards', palette: { wall: '#6E5661', floor: '#7A5C49' }, lights: [{ u: 0.5, w: 0.3 }],
     pieces: [{ p: 'mirror', at: { u: 0.43 } }, { p: 'wall-shelf', at: { u: 0.12 } }, { p: 'chair', id: 'seat', at: { u: 0.47, w: 0.3 }, color: '#1B1B22' }, { p: 'counter', id: 'counter', at: { u: 0.72, w: 0 }, len: 0.26 }, { p: 'plant', at: { u: 0.08, w: 0.2 } }],
     front: [{ p: 'window', at: { u: 0.15 }, len: 0.3 }, { p: 'door', at: { u: 0.62 } }] },
+  // a nail salon: two manicure tables, the technician on one side and the client on the other (telephone-salon, 2026-11-10)
+  nails: { mood: 'dusk', floor: 'boards', palette: { wall: '#7E9C86', side: '#6C8A74', floor: '#4A3629', wood: '#EFE4D2' }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
+    pieces: [{ p: 'window', at: { u: 0.04 }, len: 0.2, opt: { curtains: false } }, { p: 'wall-shelf', at: { u: 0.3 } }, { p: 'wall-shelf', at: { u: 0.52 } }, { p: 'frame', at: { u: 0.8 }, opt: { art: 2 } },
+      { p: 'table', id: 't1', at: { u: 0.2, w: 0.42 }, len: 0.18, deep: 0.1 }, { p: 'chair', id: 'tech1', at: { u: 0.15, w: 0.44 } }, { p: 'chair', id: 'client1', at: { u: 0.41, w: 0.44 } },
+      { p: 'table', id: 't2', at: { u: 0.58, w: 0.42 }, len: 0.18, deep: 0.1 }, { p: 'chair', id: 'tech2', at: { u: 0.53, w: 0.44 } }, { p: 'chair', id: 'client2', at: { u: 0.79, w: 0.44 } },
+      { p: 'plant', at: { u: 0.92, w: 0.16 } }],
+    front: [{ p: 'counter', id: 'desk', at: { u: 0.3, w: 0 }, len: 0.3 }, { p: 'door', at: { u: 0.72 } }, { p: 'wall-shelf', at: { u: 0.08 } }] },
   // ---------------------------------------- big rooms: receptions, stages
   reception: { mood: 'dusk', floor: 'boards', palette: { wall: '#E8DCCB', side: '#D6C8B4' }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
     pieces: [{ p: 'arch', at: { u: 0.4, w: 0.04 } }, { p: 'window', at: { u: 0.08 }, len: 0.2 }, { p: 'window', at: { u: 0.72 }, len: 0.2 }, { p: 'round-table', id: 't1', at: { u: 0.14, w: 0.4 } }, { p: 'round-table', id: 't2', at: { u: 0.62, w: 0.4 } }, { p: 'flowers', at: { u: 0.21, w: 0.44 } }, { p: 'flowers', at: { u: 0.69, w: 0.44 } }],

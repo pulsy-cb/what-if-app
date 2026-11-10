@@ -105,8 +105,11 @@ Name what the person does: \`act\` needs <Stage t={t}>. The feet stay on the gro
 ### Characters: build them with cast()
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'], face: { marks: 'freckles' } }); then look={LOU} (the body comes with it).
 Whatever you leave out is filled from \`seed\`, always the same way, so one name is enough for a varied extra: cast({ seed: 'extra1', body: 'teen' }). One seed per character. kind: fem | masc | any.
-- hair: long braids bun buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white.
-- outfit: tshirt shirt hoodie sweater / blazer labcoat apron coat / jeans pants shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon: rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown, or a hex.
+- Ready types: cast({ as: 'mother', seed: 'mum' }); what you give wins over the type. as: heroine (the channel's lead: copper braided bun, one blue eye and one green, freckles, white tee "her", green joggers with a yellow stripe) mother father brother sister friend police doctor nurse waiter teacher bride groom boss.
+  The narrator of most stories is the heroine: keep her look across episodes and change only what the story needs (cast({ as: 'heroine', seed: 'her', outfit: ['dress:emerald'...] })).
+- eyes: blue green brown hazel grey amber, or two for heterochromia ['blue', 'green']. print: { text: 'her', color: 'coral' } on the chest.
+- hair: long braids bun braided-bun shag buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white.
+- outfit: tshirt shirt hoodie sweater dress / blazer labcoat apron coat / jeans pants joggers cargo shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon, a second one after + (joggers:green+mustard is the side stripe): rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown, or a hex.
 - face: eyes round almond sleepy wide; brows none thin thick arched; nose none button long wide; marks none freckles mole blush dimples wrinkles; facial none stubble mustache goatee beard.
 - acc: glasses:round glasses:square glasses:sun earrings headband:teal headphones headset. skin: porcelain peach sand tan bronze brown deep.
 Something the list does not have (a uniform, a crown, a costume)? Draw it in the torsoGear or headGear slot, or fall back on makeLook.`;

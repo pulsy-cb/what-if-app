@@ -47,3 +47,13 @@
 
 ## Contrechamp et lieux (2026-11-10)
 - `docs/feature-plans/contrechamp-et-lieux.md` : contrechamp (`view: reverse`), 17 lieux nouveaux d’après l’analyse de la chaîne, giron des personnages assis, angles bas/haut. Tests 26/26, 4 moteurs OK. Non commité.
+
+## Personnages de la chaîne (2026-11-10)
+- `docs/feature-plans/personnages-de-la-chaine.md` : héroïne récurrente (`as: heroine`), 13 types, yeux vairons, chignon tressé, jogging à bande, robe. Tests 27/27. Non commité. En attente : retour du short lancé par Pulsy.
+
+## 2026-11-10 (soir) — audit du run telephone-salon
+- main (`a00ac2f`, `787ca30`) appliqué sans commit : la branche a divergé, et merge/rebase sont interdits. Fichiers : `whatif.ts`, `package*.json`, 2 tests.
+- Données du zip restaurées. Sauvegarde : `data/app.db.bak-avant-telephone-2026-11-10`.
+- `npm test` 28/29 : le test de main lié aux données échoue aussi sur `origin/main`.
+- Audit : `docs/audits/audit-run-telephone-salon-2026-11-10.md`. Cause principale : l'agent contourne `shot()`, et le Reviewer est aveugle (`episode.json` de plus de 25 Ko non lu). Solution P2 en attente de validation.
+- Suite (code partiel, tests à corriger) : `docs/feature-plans/suite-telephone-salon.md`
