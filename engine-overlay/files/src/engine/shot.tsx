@@ -18,8 +18,9 @@ export type CamSize = 'establishing' | 'wide' | 'medium' | 'close';
 export type CamSpec = CamSize | { x: number; y: number; zoom: number };
 
 type Timed<T> = T | ((t: number, len: number) => T);
+export type FaceExpr = Expr | 'sad' | 'angry' | 'scared' | 'surprised' | 'smile' | 'calm';
 /** one expression, or [frame, expression] pairs: [[0, 'neutral'], [20, 'shock']] */
-export type FaceSpecT = Expr | [number, Expr][];
+export type FaceSpecT = FaceExpr | [number, FaceExpr][];
 export type PersonSpec = {
   who: PersonLook;
   /** on the floor; a function of (t, len) to move someone */ at?: Timed<Place>;
@@ -48,7 +49,7 @@ export type ShotSpec = {
   /** depth kept sharp; the rest softens */ focus?: number;
   people?: PersonSpec[];
   duo?: DuoSpec;
-  /** your own SVG in the world, in front of the room and sorted last */ extra?: (t: number, len: number) => React.ReactNode;
+  /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
 };
 
 const PORTRAIT = STUDIO.height > STUDIO.width;
@@ -86,27 +87,38 @@ const Stool: React.FC<{ x: number; y: number; scale: number; height: number; col
   );
 };
 
+const EXPR_MAP: Record<string, Expr> = {
+  sad: 'worried',
+  angry: 'worried',
+  scared: 'shock',
+  surprised: 'shock',
+  smile: 'happy',
+  calm: 'neutral',
+};
+const normExpr = (e: FaceExpr): Expr => EXPR_MAP[e] ?? (e as Expr);
 const timed = <T,>(v: Timed<T> | undefined, t: number, len: number): T | undefined => (typeof v === 'function' ? (v as (t: number, len: number) => T)(t, len) : v);
 const poseOf = (p: { face?: FaceSpecT; pose?: Timed<Record<string, unknown>> }, t: number, len: number): Record<string, unknown> => {
-  const face = p.face === undefined ? {} : faceAt(t, typeof p.face === 'string' ? [[0, p.face]] : p.face);
+  const keys: [number, Expr][] | undefined =
+    p.face === undefined ? undefined : typeof p.face === 'string' ? [[0, normExpr(p.face)]] : p.face.map(([f, e]) => [f, normExpr(e)]);
+  const face = keys ? faceAt(t, keys) : {};
   return { ...face, ...timed(p.pose, t, len) };
 };
 
 /** Turn a description into a shot. */
 export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
-  const Shot: React.FC<ShotProps> = ({ t, len }) => {
+  const ShotComp: React.FC<ShotProps> = ({ t, len }) => {
     const pl = spec.place;
     const people = spec.people ?? [];
-    const whereOf = (p: PersonSpec): Place => {
+    const whereOf = (p: PersonSpec, idx = 0): Place => {
       if (p.on) return pl.seat(p.on, p.seat ?? 0);
       const at = timed(p.at, t, len);
-      if (!at) throw new Error('a person needs `at` (a floor position) or `on` (a piece of furniture)');
-      return at;
+      return at ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
     };
-    const subject = spec.duo ? null : people[spec.on ?? 0];
+    const subjectIdx = spec.on ?? 0;
+    const subject = spec.duo ? null : people[subjectIdx];
     const focusPoint = (() => {
       if (subject) {
-        const where = whereOf(subject);
+        const where = whereOf(subject, subjectIdx);
         const g = 'u' in where ? pl.ground.project(where.u, where.w) : { x: where.x, y: where.y, scale: where.scale ?? 1 };
         const b = legsOf(subject);
         const sitting = subject.on !== undefined || subject.stance === 'sit';
@@ -141,15 +153,19 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           {people.map((p, i) => {
             const { who, on, yaw, act, from, dur, stance, rimId, headGear, torsoGear, handLProp, handRProp } = p;
             return (
-              <Staged key={`p${i}`} at={whereOf(p)} look={who} yaw={yaw} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)} pose={poseOf(p, t, len) as never}
+              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yaw} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)} pose={poseOf(p, t, len) as never}
                 rimId={rimId} headGear={headGear} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
             );
           })}
           {spec.duo ? <Duo a={{ at: spec.duo.a.at, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: spec.duo.b.at, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
-          {spec.extra ? <g>{spec.extra(t, len)}</g> : null}
+          {spec.extra ? <g>{typeof spec.extra === 'function' ? spec.extra(t, len) : spec.extra}</g> : null}
         </Stage>
       </g>
     );
   };
-  return Shot;
+  return ShotComp;
 };
+
+/** JSX component form of `shot(...)`, so `<Shot place={...} cam="wide" people={[...]} t={t} len={len} />` also works. */
+export const Shot: React.FC<ShotSpec & { t?: number; len?: number; f?: number }> = (props) =>
+  shot(props)({ t: props.t ?? 0, len: props.len ?? 90, f: props.f ?? props.t ?? 0 });

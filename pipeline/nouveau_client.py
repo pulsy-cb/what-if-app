@@ -289,7 +289,7 @@ _FEM_REFL_PP = (
     r"maquillée|installée|approchée|échappée|trompée|souvenue|aperçue|inscrite|"
     r"mise|tournée|retournée|arrêtée|penchée|précipitée|cachée|réveillée|"
     r"endormie|évanouie|enfuie|battue|défendue|plainte|servie|occupée|"
-    r"inquiétée|habituée|effondrée|énervée|fâchée|décidée|lancée|faite\s+avoir)"
+    r"inquiétée|habituée|effondrée|énervée|fâchée|décidée|lancée|figée|raidie|faite\s+avoir)"
 )
 
 _MASC_REFL_PP = (
@@ -297,7 +297,7 @@ _MASC_REFL_PP = (
     r"installé|approché|échappé|trompé|souvenu|aperçu|inscrit|"
     r"mis|tourné|retourné|arrêté|penché|précipité|caché|réveillé|"
     r"endormi|évanoui|enfui|battu|défendu|plaint|servi|occupé|"
-    r"inquiété|habitué|effondré|énervé|fâché|décidé|lancé)"
+    r"inquiété|habitué|effondré|énervé|fâché|décidé|lancé|figé|raidi)"
 )
 
 _FEM_ADJ_PP = (

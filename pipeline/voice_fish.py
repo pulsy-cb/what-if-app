@@ -328,39 +328,70 @@ def main(argv: List[str]) -> int:
     nv = Nouveau()
 
     if force or meta.get("sig") != sig or not raw_mp3.exists() or not raw_words_path.exists():
-        label = "ElevenLabs" if provider == "elevenlabs" else "Fish Audio"
-        print(f"[voice] {len(text)} chars -> {label} {V['modelId']} ({V['voiceId']}) for video {video_id}", flush=True)
         t0 = time.time()
-        try:
-            if provider == "elevenlabs":
-                res = nv.tts_elevenlabs(
-                    str(video_id),
-                    text,
-                    voice_id=str(V["voiceId"]),
-                    model_id=str(V["modelId"]),
-                    speed=float(V.get("speakingRate") or V.get("speed") or ELEVENLABS_SPEED),
-                    stability=float(V.get("stability") if V.get("stability") is not None else 0.5),
-                    similarity_boost=float(V.get("similarityBoost") if V.get("similarityBoost") is not None else 0.75),
-                    style=float(V.get("style") if V.get("style") is not None else 0.0),
-                    use_speaker_boost=bool(V.get("useSpeakerBoost", True)),
-                    proposal_id=source.get("proposalId"),
+        reused_from_server = False
+        res: Dict[str, Any] = {}
+        audio_path = ""
+        if not force:
+            try:
+                chk = nv.tts_check(str(video_id))
+            except NouveauError:
+                chk = {}
+            if chk.get("exists") and chk.get("file_exists") and chk.get("path"):
+                audio_path = str(chk["path"])
+                res = {"id": chk.get("id"), "audioPath": audio_path, "reused": True}
+                raw_voice_tag = str(chk.get("voice") or "")
+                if ":" in raw_voice_tag:
+                    srv_prov, srv_vid = raw_voice_tag.split(":", 1)
+                    if srv_prov in ("elevenlabs", "fish"):
+                        provider = srv_prov
+                        V["provider"] = srv_prov
+                    if srv_vid:
+                        V["voiceId"] = srv_vid
+                raw_model_tag = str(chk.get("model") or "")
+                if ":" in raw_model_tag:
+                    _, srv_mid = raw_model_tag.split(":", 1)
+                    if srv_mid:
+                        V["modelId"] = srv_mid
+                reused_from_server = True
+                print(
+                    f"[voice] reusing existing TTS audio from :8005 ({audio_path}, id={chk.get('id')}, voice={V['voiceId']})",
+                    flush=True,
                 )
-            else:
-                res = nv.tts_fish(
-                    str(video_id),
-                    proj.strip_tts_tags(text),
-                    voice_id=str(V["voiceId"]),
-                    model_id=str(V["modelId"]),
-                    speaking_rate=float(V.get("speakingRate") or 1.0),
-                    proposal_id=source.get("proposalId"),
-                )
-        except NouveauError as e:
-            proj.result(ok=False, error=f"TTS ({provider}) failed: {e}", videoId=video_id, provider=provider)
-            return 3
-        audio_path = str(res.get("audioPath") or "")
-        if not audio_path:
-            proj.result(ok=False, error="TTS returned no audioPath", response=res)
-            return 3
+
+        if not reused_from_server:
+            label = "ElevenLabs" if provider == "elevenlabs" else "Fish Audio"
+            print(f"[voice] {len(text)} chars -> {label} {V['modelId']} ({V['voiceId']}) for video {video_id}", flush=True)
+            try:
+                if provider == "elevenlabs":
+                    res = nv.tts_elevenlabs(
+                        str(video_id),
+                        text,
+                        voice_id=str(V["voiceId"]),
+                        model_id=str(V["modelId"]),
+                        speed=float(V.get("speakingRate") or V.get("speed") or ELEVENLABS_SPEED),
+                        stability=float(V.get("stability") if V.get("stability") is not None else 0.5),
+                        similarity_boost=float(V.get("similarityBoost") if V.get("similarityBoost") is not None else 0.75),
+                        style=float(V.get("style") if V.get("style") is not None else 0.0),
+                        use_speaker_boost=bool(V.get("useSpeakerBoost", True)),
+                        proposal_id=source.get("proposalId"),
+                    )
+                else:
+                    res = nv.tts_fish(
+                        str(video_id),
+                        proj.strip_tts_tags(text),
+                        voice_id=str(V["voiceId"]),
+                        model_id=str(V["modelId"]),
+                        speaking_rate=float(V.get("speakingRate") or 1.0),
+                        proposal_id=source.get("proposalId"),
+                    )
+            except NouveauError as e:
+                proj.result(ok=False, error=f"TTS ({provider}) failed: {e}", videoId=video_id, provider=provider)
+                return 3
+            audio_path = str(res.get("audioPath") or "")
+            if not audio_path:
+                proj.result(ok=False, error="TTS returned no audioPath", response=res)
+                return 3
         try:
             audio = nv.fetch(audio_path)
         except NouveauError as e:
@@ -407,12 +438,14 @@ def main(argv: List[str]) -> int:
         costs.append(
             {
                 "step": "voice",
-                "credits": len(text) if provider == "elevenlabs" else 0,
-                "note": f"{provider}:{V['modelId']} {len(text)} chars, video {video_id}" + ("" if asr_source == "deepgram" else " (proportional timings)"),
+                "credits": 0 if reused_from_server else (len(text) if provider == "elevenlabs" else 0),
+                "note": (f"reused :8005 audio {audio_path}" if reused_from_server else f"{provider}:{V['modelId']} {len(text)} chars, video {video_id}")
+                + ("" if asr_source == "deepgram" else " (proportional timings)"),
                 "provider": provider,
                 "model": V["modelId"],
                 "voice": V["voiceId"],
                 "chars": len(text),
+                "reused": reused_from_server,
             }
         )
         proj.save_json(proj.out_dir(slug) / "costs.json", costs)

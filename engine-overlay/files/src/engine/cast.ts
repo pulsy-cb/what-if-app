@@ -17,7 +17,9 @@ export type FaceSpec = {
 };
 
 export const SKINS = { porcelain: '#F6EFE3', peach: '#F2C9A8', sand: '#E8B58C', tan: '#D89B72', bronze: '#C68A5B', brown: '#8D5A3B', deep: '#5C3A28' };
+const SKIN_MAP: Record<string, string> = { ...SKINS, fair: '#F6EFE3', light: '#F2C9A8', olive: '#D8AD84', medium: '#D89B72', caramel: '#C68A5B', warm: '#C68A5B', dark: '#5C3A28' };
 export const HAIR_COLORS = { black: '#1E1418', brown: '#3A2A20', chestnut: '#5B3A24', auburn: '#7A3E1E', blond: '#C9A25A', red: '#A8482A', grey: '#A9A6A2', white: '#E6E3DC' };
+const HAIR_COLOR_MAP: Record<string, string> = { ...HAIR_COLORS, blonde: '#C9A25A', ginger: '#A8482A', gray: '#A9A6A2' };
 export const COLORS: Record<string, string> = {
   rose: '#E05780', navy: '#274472', teal: '#2A9D8F', mustard: '#D9A404', plum: '#5A3E68', olive: '#5E6E46', coral: '#F2545B', sky: '#6FA8DC',
   red: '#B0352E', green: '#3E8C5A', black: '#23232B', grey: '#7C8493', white: '#EDE8DE', cream: '#EFE2CC', denim: '#3E5F8A', khaki: '#B59B6A', brown: '#6A4A34',
@@ -60,6 +62,7 @@ export type CastSpec = {
   kind?: 'fem' | 'masc' | 'any';
   skin?: keyof typeof SKINS | string;
   hair?: HairStyle | { style?: HairStyle; color?: keyof typeof HAIR_COLORS | string };
+  hairColor?: keyof typeof HAIR_COLORS | string;
   face?: Partial<FaceSpec>;
   /** garments by name, optionally coloured: 'hoodie:rose', 'jeans', 'sneakers', 'tie:red', 'backpack:teal' */
   outfit?: string[];
@@ -80,7 +83,8 @@ const shadeOf = (hex: string, k = 0.8): string => {
 };
 const colorOf = (name: string | undefined, table: Record<string, string>, fallback: string): string => {
   if (!name) return fallback;
-  return name.startsWith('#') ? name : table[name] ?? fallback;
+  if (name.startsWith('#')) return name;
+  return table[name] ?? table[name.toLowerCase()] ?? (fallback.startsWith('#') ? fallback : '#D89B72');
 };
 
 /** A small seeded generator: the same seed gives the same character. Every draw is taken in a fixed order. */
@@ -149,9 +153,9 @@ export const cast = (spec: CastSpec = {}): Character => {
   const legs = worn.legs ?? garment(seeded.legs, seeded.legsColor);
   const feet = worn.feet ?? garment('sneakers', seeded.feetColor);
 
-  const hairSpec = typeof spec.hair === 'string' ? { style: spec.hair } : spec.hair ?? {};
+  const hairSpec = typeof spec.hair === 'string' ? { style: spec.hair, color: spec.hairColor } : { color: spec.hairColor, ...(spec.hair ?? {}) };
   const hairStyle = hairSpec.style ?? seeded.hairStyle;
-  const hair = colorOf(hairSpec.color ?? seeded.hairColor, HAIR_COLORS, hairSpec.color ?? HAIR_COLORS.brown);
+  const hair = colorOf(hairSpec.color ?? seeded.hairColor, HAIR_COLOR_MAP, HAIR_COLORS.brown);
   const newHair = (HAIR_NEW as readonly string[]).includes(hairStyle);
 
   const youngOrFem = kind === 'fem' || spec.body === 'teen';
@@ -176,7 +180,7 @@ export const cast = (spec: CastSpec = {}): Character => {
     else throw new Error(`cast: unknown accessory "${id}" (known: glasses, earrings, headband, headphones, headset); use headGear for your own`);
   }
 
-  const skin = colorOf(spec.skin ?? seeded.skin, SKINS, spec.skin ?? SKINS.peach);
+  const skin = colorOf(spec.skin ?? seeded.skin, SKIN_MAP, SKINS.peach);
   return {
     skin,
     skinShade: shadeOf(skin, 0.9),

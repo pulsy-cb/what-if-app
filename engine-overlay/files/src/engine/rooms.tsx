@@ -286,11 +286,47 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
         {s.def.draw(ctx(s, t))}
       </StageItem>
     ));
-  const seat: Placed['seat'] = (id, i = 0) => {
-    const s = resolved.find((x) => x.id === id);
-    if (!s) throw new Error(`no piece "${id}" in this place. It has: ${resolved.map((x) => x.id).join(', ')}.`);
-    if (!s.def.seats) throw new Error(`piece "${id}" has no seat: give the person an \`at\` instead.`);
-    return s.def.seats(s, i);
+  const findPiece = (id: string, i = 0): { piece: Resolved; idx: number } | undefined => {
+    const direct = resolved.find((x) => x.id === id);
+    if (direct) return { piece: direct, idx: i };
+    const m = /^(stool|chair|seat|arm|armchair|couch|desk|table)([1-4])?$/i.exec(id);
+    if (!m) return undefined;
+    const kind = m[1]!.toLowerCase();
+    const n = m[2] ? Number(m[2]) - 1 : i;
+    if (kind === 'stool' || kind === 'chair' || kind === 'seat' || kind === 'arm' || kind === 'armchair') {
+      const byC = resolved.find((x) => x.id === `c${n + 1}`);
+      if (byC) return { piece: byC, idx: 0 };
+      const chairs = resolved.filter((x) => x.name === 'chair' || x.name === 'sofa');
+      if (chairs[n]) return { piece: chairs[n]!, idx: 0 };
+      const tbl = resolved.find((x) => x.name === 'table' || x.name === 'desk');
+      if (tbl) return { piece: tbl, idx: n };
+    }
+    if (kind === 'couch') {
+      const sofa = resolved.find((x) => x.name === 'sofa');
+      if (sofa) return { piece: sofa, idx: n };
+    }
+    if (kind === 'desk' || kind === 'table') {
+      const byD = resolved.find((x) => x.id === `d${n + 1}` || x.id === `t${n + 1}`);
+      if (byD) return { piece: byD, idx: 0 };
+      const tbl = resolved.find((x) => x.name === kind || x.name === 'table' || x.name === 'desk');
+      if (tbl) return { piece: tbl, idx: n };
+    }
+    return undefined;
   };
-  return { ground: roomGround(r), Shell, items, seat, has: (id) => resolved.some((x) => x.id === id), wantsStool: (id) => !!resolved.find((x) => x.id === id)?.def.stool, tokens: T };
+  const seat: Placed['seat'] = (id, i = 0) => {
+    const found = findPiece(id, i);
+    if (!found) throw new Error(`no piece "${id}" in this place. It has: ${resolved.map((x) => x.id).join(', ')}.`);
+    const { piece: s, idx } = found;
+    if (!s.def.seats) throw new Error(`piece "${id}" has no seat: give the person an \`at\` instead.`);
+    return s.def.seats(s, idx);
+  };
+  return {
+    ground: roomGround(r),
+    Shell,
+    items,
+    seat,
+    has: (id) => !!findPiece(id),
+    wantsStool: (id) => !!findPiece(id)?.piece.def.stool || /^stool[1-4]?$/i.test(id),
+    tokens: T,
+  };
 };

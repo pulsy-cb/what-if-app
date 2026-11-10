@@ -464,7 +464,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*:\s*\[\s*\{|\bduo\s*:\s*\{/.test(body);
+    const hasHero = /<(Hero|Actor|Staged|Person|Duo)\b/.test(body) || /\bpeople\s*[=:]\s*\{?\s*\[\s*\{|\bduo\s*[=:]\s*\{/.test(body);
     if (hasHero) heroShots++;
 
     if (!isTitle && !isInsert && !isSchematic && !isEstablishing && !hasHero) {
@@ -500,7 +500,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       /\bt\s*[*+-]/.test(body) ||
       /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
       // shot() pushes in slowly unless told to hold
-      (/\bshot\s*\(/.test(body) && !/\bmove\s*:\s*['"]still['"]/.test(body));
+      ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body));
     if (!hasMotion) {
       errors.push(`${id} is static: give someone an act, let shot() move the camera (no move: 'still'), or animate with kf(t, ...), poseAt(t, ...), faceAt(t, ...) or DrawOn`);
     }

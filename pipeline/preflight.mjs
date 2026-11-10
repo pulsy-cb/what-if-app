@@ -28,8 +28,8 @@ const has = (cmd, args) => {
     return false;
   }
 };
-// a 1x1 white PNG: enough to learn whether the model accepts an image at all
-const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+// a 32x32 PNG: vision models with minimum patch sizes (28x28) reject a 1x1 pixel
+const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nO3NMQEAAAjDMMC/2EnABHypgKaT1GfzegcAAAAAAAAAAACHLaaNAxBlrinYAAAAAElFTkSuQmCC';
 const ask = async (provider, images) => {
   const messages = [{ role: 'user', content: 'Réponds par le seul mot OK.', ...(images ? { images: [{ mime: 'image/png', data: PIXEL }] } : {}) }];
   const started = Date.now();
@@ -100,7 +100,9 @@ else {
     const r = await ask(reviewer, true);
     line(r.text ? 'OK' : 'ÉCHEC', `Reviewer (${reviewer.model})`, `voit les images, ${r.ms} ms, réponse « ${r.text} », fin ${r.finish}${r.text ? '' : ' : réponse vide, monter WHATIF_REVIEW_MAX_TOKENS'}`);
   } catch (e) {
-    line('ATTENTION', `Reviewer (${reviewer.model})`, `refuse les images (${String(e.message).split('\n')[0].slice(0, 120)}) : il jugera le code seul, choisir un modèle vision`);
+    const msg = String(e.message).split('\n')[0].slice(0, 120);
+    if (/\b40[13]\b/.test(msg)) line('ÉCHEC', `Reviewer (${reviewer.model})`, `clé API refusée (${msg}) : vérifier WHATIF_REVIEW_API_KEY`);
+    else line('ATTENTION', `Reviewer (${reviewer.model})`, `refuse les images (${msg}) : il jugera le code seul, choisir un modèle vision`);
   }
   if (same) line('ATTENTION', 'Reviewer', 'même modèle que l’agent : régler WHATIF_REVIEW_MODEL pour un regard vraiment indépendant');
 }

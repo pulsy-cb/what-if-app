@@ -40,8 +40,8 @@ commands for a human to paste: you call the tools.
    Write \`episode.json\` following the 7-beat What If formula (cold-open demos, French premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question).
    **Location rule (\`set\`)**: every episode has its own world — describe the actual place on \`"defaultSet"\` and/or each beat's \`"set"\`
    (e.g. a bespoke bistro, a subway car, a lab, a rooftop, a courtroom, a bedroom, or any custom location). Never use \`<Classroom>\` unless the story is about school!
-2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API (\`POST /api/videos/<videoId>/tts/elevenlabs\`), on the same
-   video id (Fish Audio remains available with \`provider: "fish"\`). Both \`source\` and \`voice\` **automatically analyze the French phrasing and grammatical agreements** of the script (e.g. 1st-person feminine vs masculine agreements like *"je me suis remise / assise / confuse"* vs *"je me suis assis / confus"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). To force a specific voice manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
+2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
+   video id (Fish Audio remains available with \`provider: "fish"\`). **Automatic reuse of existing \`:8005\` audio**: \`whatif_run { step: "voice" }\` first checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\`; if the video already has a generated TTS audio file on \`:8005\`, \`voice\` **automatically downloads and reuses that existing audio** instead of regenerating a new TTS (saving credits and keeping the exact voice already validated on \`:8005\`). Therefore, just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\` and without \`--voice\` when \`source\` reports \`existingTts.exists: true\`! Only when no audio exists yet on \`:8005\` do \`source\` and \`voice\` **automatically analyze the French phrasing and grammatical agreements** of the script (e.g. 1st-person feminine vs masculine agreements like *"je me suis remise / assise / figée"* vs *"je me suis assis / confus"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). To force a specific voice manually when no audio exists yet, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
    words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
 3. whatif_run shotlist — cuts the measured words into clause-aligned shots (9–14 shots for 20s shorts, scaling up to 15–36 shots for multi-minute stories),
    keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`, \`insert\`, \`low angle\`),
@@ -515,29 +515,21 @@ export type BuildOptions = {
   maxChars: number;
 };
 
-/** Compact large write_file / edit_file tool call payloads from older steps so they don't blow up the context window. */
+/** Compact large write_file / edit_file tool call payloads from older steps while keeping real code framing so models never mistake the summary comment for a command. */
 function compactToolCalls(calls: ToolCall[] | undefined, age: number): ToolCall[] | undefined {
   if (!calls?.length) return undefined;
-  if (age <= 2) return calls;
+  if (age <= 4) return calls;
   return calls.map((c) => {
-    if (c.name === 'write_file' && typeof c.args?.content === 'string' && c.args.content.length > 600) {
-      const lines = c.args.content.split('\n').length;
-      const exportsInChunk = [...c.args.content.matchAll(/export\s+(?:const|function)\s+([A-Za-z0-9_$]+)\b/g)].map((m) => m[1]);
-      const expNote = exportsInChunk.length ? ` (exports: ${exportsInChunk.join(', ')})` : '';
+    if (c.name === 'write_file' && typeof c.args?.content === 'string' && c.args.content.length > 1_200) {
+      const allLines = c.args.content.split('\n');
+      const lines = allLines.length;
+      const head = allLines.slice(0, 6).join('\n');
+      const tail = allLines.slice(-4).join('\n');
       return {
         ...c,
         args: {
           ...c.args,
-          content: `[compacted: ${lines} lines (${c.args.content.length} chars)${expNote} written to ${String(c.args.path ?? 'file')} — current file & header are pinned above]`,
-        },
-      };
-    }
-    if (c.name === 'edit_file' && Array.isArray(c.args?.edits) && JSON.stringify(c.args.edits).length > 800) {
-      return {
-        ...c,
-        args: {
-          path: c.args.path,
-          edits: [{ oldText: '[compacted]', newText: `[${c.args.edits.length} edit(s) applied to ${String(c.args.path ?? 'file')}]` }],
+          content: `${head}\n/* [compacted: ${lines} lines (${c.args.content.length} chars) already on disk — always pass real TypeScript code in write_file] */\n${tail}`,
         },
       };
     }

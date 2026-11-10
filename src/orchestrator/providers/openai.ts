@@ -48,6 +48,9 @@ export function openAIProvider(cfg: {
       for await (const data of sseData(res.body)) {
         if (data === '[DONE]') break;
         const evt = safeJson(data);
+        if (evt?.error) {
+          throw new Error(`400 SSE error from ${base}/chat/completions: ${evt.error?.message ?? JSON.stringify(evt.error)}`);
+        }
         const choice = evt?.choices?.[0];
         if (choice?.finish_reason) finishReason = String(choice.finish_reason);
         const delta = choice?.delta;

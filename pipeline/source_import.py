@@ -246,6 +246,25 @@ def main(argv: List[str]) -> int:
         out = proj.out_dir(slug)
         (out / "source.fr.md").write_text(text + "\n", encoding="utf-8")
         voice_det = detect_narrator_voice(text, str(chosen.get("title") or title))
+        existing_tts: Dict[str, Any] = {}
+        try:
+            tts_chk = nv.tts_check(str(video_id))
+            if tts_chk.get("exists") and tts_chk.get("file_exists") and tts_chk.get("path"):
+                existing_tts = tts_chk
+                raw_v = str(tts_chk.get("voice") or "")
+                if ":" in raw_v:
+                    _, srv_vid = raw_v.split(":", 1)
+                    if srv_vid == "KSyQzmsYhFbuOhqj1Xxv":
+                        voice_det = {**voice_det, "gender": "female", "voiceId": srv_vid, "voiceName": "Léa"}
+                    elif srv_vid == "3Tp5mYhT9wrfnry9pzvV":
+                        voice_det = {**voice_det, "gender": "male", "voiceId": srv_vid, "voiceName": "Hugo"}
+                print(
+                    f"[source] existing TTS audio found on :8005 ({tts_chk.get('path')}, voice={tts_chk.get('voice')}, "
+                    f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it automatically",
+                    flush=True,
+                )
+        except NouveauError:
+            pass
         print(
             f"[source] narrator gender analysis -> {voice_det['gender']} ({voice_det['voiceName']} {voice_det['voiceId']}, "
             f"F={voice_det['femaleScore']} M={voice_det['maleScore']})",
@@ -266,6 +285,7 @@ def main(argv: List[str]) -> int:
                 "narratorGender": voice_det["gender"],
                 "recommendedVoiceId": voice_det["voiceId"],
                 "recommendedVoiceName": voice_det["voiceName"],
+                "existingTts": existing_tts or None,
                 "updatedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
             }
         )
@@ -309,6 +329,8 @@ def main(argv: List[str]) -> int:
         payload["applied"] = bool(apply_script)
         payload["blocks"] = len(ep.get("script") or [])
         payload["narratorVoice"] = voice_det
+        if existing_tts:
+            payload["existingTts"] = existing_tts
     else:
         proj.save_json(proj.out_dir(slug) / "source.json", payload)
 

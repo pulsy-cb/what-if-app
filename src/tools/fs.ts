@@ -20,6 +20,9 @@ const ENGINE_PATHS = /^src\/(engine|exports)\//;
 
 function assertWritableProjectPath(relPath: string): void {
   const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (/\(exports:|\[compacted/i.test(norm)) {
+    throw new Error(`writing to "${norm}" is refused: pass the clean file path (e.g. "src/episodes/<slug>/shots.tsx") without annotations`);
+  }
   if (
     norm === 'package.json' ||
     norm === 'package-lock.json' ||
@@ -35,6 +38,30 @@ function assertWritableProjectPath(relPath: string): void {
     `writing to "${norm}" is refused: write inside src/episodes/<slug>/ (shots.tsx, index.tsx, DIRECTOR.md…), a root note like PROJECT.md, or out/. ` +
       `The engine (src/engine) is shared by every episode and is not edited by the agent.`,
   );
+}
+
+function assertNotCompactedPlaceholder(text: string, toolName: string): void {
+  if (/\[compacted:\s*\d+\s*lines/i.test(text)) {
+    throw new Error(
+      `${toolName} refused: content contains a "[compacted: ...]" placeholder instead of real code. Write the actual TypeScript/JSX code for the shots.`,
+    );
+  }
+}
+
+/** Normalize lowercase `<shot ... />` JSX tags into `<Shot ... />` in shots.tsx so both `shot({...})` and `<Shot ... />` work. */
+function normalizeShotsJsx(relPath: string, code: string): string {
+  const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!/^src\/episodes\/[^/]+\/shots\.tsx$/.test(norm)) return code;
+  if (!/<shot(?=[\s/>])/.test(code)) return code;
+  let out = code.replace(/<shot(?=[\s/>])/g, '<Shot').replace(/<\/shot\s*>/g, '</Shot>');
+  out = out.replace(
+    /import\s*\{([^}]*)\}\s*from\s*(['"]\.\.\/\.\.\/engine['"])/,
+    (full, names: string, mod: string) => {
+      if (/\bShot\b/.test(names)) return full;
+      return `import {${names.replace(/\bshot\b/, 'shot, Shot')}} from ${mod}`;
+    },
+  );
+  return out;
 }
 
 /**
@@ -178,27 +205,30 @@ const writeFile: Tool = {
   async run(input: { path: string; content: string; append?: boolean }, ctx): Promise<ToolResult> {
     if (isBinaryPath(input.path)) throw new Error('write_file refuses binary extensions');
     assertWritableProjectPath(input.path);
+    assertNotCompactedPlaceholder(input.content, 'write_file');
+    const content = normalizeShotsJsx(input.path, input.content);
     const abs = safeJoin(ctx.projectRoot, input.path);
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (input.append && existed) {
       const prev = fs.readFileSync(abs, 'utf8');
       const sep = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
-      fs.appendFileSync(abs, sep + input.content, 'utf8');
-      const totalLines = fs.readFileSync(abs, 'utf8').split('\n').length;
+      const combined = normalizeShotsJsx(input.path, prev + sep + content);
+      fs.writeFileSync(abs, combined, 'utf8');
+      const totalLines = combined.split('\n').length;
       const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
       return {
         ok: true,
-        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
+        summary: `appended to ${input.path} (+${content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
         data: { path: input.path, created: false, appended: true, lines: totalLines },
       };
     }
-    fs.writeFileSync(abs, input.content, 'utf8');
-    const lines = input.content.split('\n').length;
+    fs.writeFileSync(abs, content, 'utf8');
+    const lines = content.split('\n').length;
     const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
     return {
       ok: true,
-      summary: `${existed ? 'replaced' : 'created'} ${input.path} (${lines} lines, ${Buffer.byteLength(input.content)} bytes)${tscNote}`,
+      summary: `${existed ? 'replaced' : 'created'} ${input.path} (${lines} lines, ${Buffer.byteLength(content)} bytes)${tscNote}`,
       data: { path: input.path, created: !existed, lines },
     };
   },
@@ -332,6 +362,7 @@ const editFile: Tool = {
   },
   async run(input: { path: string; edits: { oldText: string; newText: string }[] }, ctx) {
     assertWritableProjectPath(input.path);
+    for (const e of input.edits) assertNotCompactedPlaceholder(e.newText, 'edit_file');
     const src = readText(ctx.projectRoot, input.path, 2_000_000);
     if (src === null) throw new Error(`cannot read ${input.path}`);
     let out = src;
