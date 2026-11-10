@@ -106,6 +106,9 @@ const legSwing = (a: number, pose: PersonPose): number => {
   return 1 + (foldYaw(pose.yaw) - 1) * big;
 };
 
+/** How much a thigh points at the camera: 1 seated face-on, 0 standing or seen from the side. */
+export const lapOf = (pose: PersonPose, thighAngle: number): number => clamp01((Math.abs(thighAngle) - 45) / 25) * clamp01(1 - foldYaw(pose.yaw) / 0.72);
+
 /** Joint positions in local space (before the hip translate and scale), for this body. */
 export const jointsOf = (pose: PersonPose, b: Body = BODIES.adult) => {
   const arm = (s: 1 | -1, raw: Limb, root: P) => {
@@ -121,7 +124,9 @@ export const jointsOf = (pose: PersonPose, b: Body = BODIES.adult) => {
     const limb = normalizeLimb(raw, true);
     const k1 = legSwing(limb.a, pose);
     const d1 = { x: forward(pose) * Math.sin(rad(limb.a)) * k1, y: Math.cos(rad(limb.a)) };
-    const mid = { x: root.x + d1.x * b.thigh, y: root.y + d1.y * b.thigh };
+    // seated and seen from the front, the knees open a little: the lap then reads as a lap, not as short standing legs
+    const open = lapOf(pose, limb.a) * b.hip * 0.7 * Math.sign(root.x || 1);
+    const mid = { x: root.x + d1.x * b.thigh + open, y: root.y + d1.y * b.thigh };
     const a2 = limb.a + limb.b;
     const k2 = legSwing(a2, pose);
     const d2 = { x: forward(pose) * Math.sin(rad(a2)) * k2, y: Math.cos(rad(a2)) };
@@ -234,7 +239,9 @@ const Face: React.FC<{
   talk?: number;
   eyeR?: [number, number];
   browW?: number;
-}> = ({ expr, blink, look, glasses, yaw = 0, ink = C.ink, glint = 0, glintColor = '#8FF0FF', talk = 0, eyeR, browW = 5 }) => {
+  /** iris colours, screen-left eye then screen-right eye */
+  iris?: [string, string];
+}> = ({ expr, blink, look, glasses, yaw = 0, ink = C.ink, glint = 0, glintColor = '#8FF0FF', talk = 0, eyeR, browW = 5, iris }) => {
   const ex = look * 7;
   const ay = Math.min(1, Math.abs(yaw));
   const farHidden = ay > 0.72;
@@ -262,6 +269,10 @@ const Face: React.FC<{
     return (
       <g>
         <ellipse cx={cx + ex} cy={eyeY + (lid ? 3 : 0)} rx={rx} ry={ry} fill={ink} />
+        {/* a coloured iris inside the dark eye: it reads at close-up size, and two colours make heterochromia */}
+        {iris && open > 0.35 ? <ellipse cx={cx + ex} cy={eyeY + (lid ? 3 : 0) + 0.5} rx={rx * 0.62} ry={ry * 0.62} fill={iris[cx < 0 ? 0 : 1]} /> : null}
+        {iris && open > 0.35 ? <circle cx={cx + ex} cy={eyeY + (lid ? 3 : 0) + 0.5} r={Math.min(rx, ry) * 0.3} fill={ink} /> : null}
+        {iris && open > 0.35 && !big ? <circle cx={cx + ex + rx * 0.35} cy={eyeY - ry * 0.35} r={1.8} fill="#fff" /> : null}
         {big && open > 0.5 ? <circle cx={cx + ex + 3.5} cy={eyeY - 4} r={3.4} fill="#fff" /> : null}
         {lid ? <path d={expr === 'tired' ? `M ${cx - 13} ${eyeY - 1} Q ${cx} ${eyeY - 5} ${cx + 13} ${eyeY - 1}` : `M ${cx - 12} ${eyeY - 4} L ${cx + 12} ${eyeY - 2}`} stroke={ink} strokeWidth={4} strokeLinecap="round" fill="none" /> : null}
         {expr === 'tired' ? <path d={`M ${cx - 12} ${eyeY + 14} Q ${cx} ${eyeY + 21} ${cx + 12} ${eyeY + 14}`} stroke="#8C7AA6" strokeWidth={4.5} fill="none" strokeLinecap="round" opacity={0.85} /> : null}
@@ -436,6 +447,7 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
         talk={pose.talk}
         eyeR={(L as Partial<Character>).cast?.eyeR}
         browW={(L as Partial<Character>).cast?.browW}
+        iris={(L as Partial<Character>).cast?.iris}
       />
       {L.accessory === 'beard' ? (
         <path
@@ -516,7 +528,7 @@ export const Person: React.FC<{
   const view = viewOf(pose.yaw);
   const legLen = b.thigh + b.shin;
   // limbs are light with a dark outline, with a smooth quadratic elbow/knee curve and short sleeve cap when bare-armed
-  const limb = (o: { root: P; mid: P; end: P }, w: number, sleeve = false, paint?: { limb: string; cap?: string; capTo?: number }) => {
+  const limb = (o: { root: P; mid: P; end: P }, w: number, sleeve = false, paint?: { limb: string; cap?: string; capTo?: number; stripe?: string }) => {
     const limbC = paint?.limb ?? L.limb;
     const capC = paint ? paint.cap : sleeve && L.limb !== L.jacket ? L.jacket : undefined;
     const mx = o.mid.x;
@@ -530,6 +542,7 @@ export const Person: React.FC<{
       <g>
         <path d={d} stroke={L.line} strokeWidth={w + 7} fill="none" strokeLinecap="round" strokeLinejoin="round" />
         <path d={d} stroke={limbC} strokeWidth={w} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        {paint?.stripe ? <path d={d} stroke={paint.stripe} strokeWidth={Math.max(3, w * 0.2)} fill="none" strokeLinecap="round" strokeLinejoin="round" /> : null}
         {capC ? (
           <>
             <path d={slD} stroke={L.line} strokeWidth={w + 9} fill="none" strokeLinecap="round" />
@@ -602,7 +615,7 @@ export const Person: React.FC<{
   );
   const castView = view === 'profile' ? 'profile' : view === 'back' ? 'back' : 'front';
   const armPaint = !c ? undefined : c.over && c.over.id !== 'apron' ? { limb: c.over.color } : c.top.id === 'tshirt' ? { limb: L.skin, cap: c.top.color } : { limb: c.top.color };
-  const legPaint = !c ? undefined : c.legs.id === 'shorts' ? { limb: L.skin, cap: c.legs.color, capTo: 0.78 } : c.legs.id === 'skirt' ? { limb: L.skin } : { limb: c.legs.color };
+  const legPaint = !c ? undefined : c.legs.id === 'shorts' ? { limb: L.skin, cap: c.legs.color, capTo: 0.78 } : c.legs.id === 'skirt' || c.legs.id === 'dress' ? { limb: L.skin } : c.legs.accent ? { limb: c.legs.color, stripe: c.legs.accent } : { limb: c.legs.color };
   const torso = c ? (
     <g transform={view === 'profile' ? `rotate(${pose.tilt}) ${sized}${facingFlip}` : view === 'back' ? `rotate(${pose.tilt}) ${sized}` : `rotate(${pose.tilt}) translate(${shoulderShift(pose.yaw)} 0) scale(${kw} 1) ${sized}`}>
       <OutfitTorso view={castView} c={c} line={L.line} accent={L.accent} skin={L.skin} torsoGear={torsoGear} />
@@ -635,8 +648,23 @@ export const Person: React.FC<{
           {/* the far side is drawn first, so a turned body overlaps itself the right way */}
           {pose.yaw < 0 ? <>{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR)}{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL)}</> : <>{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL)}{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR)}</>}
           {c?.legs.id === 'skirt' ? <Skirt knees={[j.legL.mid, j.legR.mid]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
+          {/* a long dress falls to just above the ankles, and still follows the legs when the person sits */}
+          {c?.legs.id === 'dress' ? <Skirt knees={[{ x: lerp(j.legL.mid.x, j.legL.end.x, 0.82) - 8, y: lerp(j.legL.mid.y, j.legL.end.y, 0.82) }, { x: lerp(j.legR.mid.x, j.legR.end.x, 0.82) + 8, y: lerp(j.legR.mid.y, j.legR.end.y, 0.82) }]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
           {pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
           {torso}
+          {(() => {
+            // thighs pointing at the camera are seen end-on: a short lap from knee to knee, over the top of the shins
+            const lap = Math.max(lapOf(pose, normalizeLimb(pose.legL, true).a), lapOf(pose, normalizeLimb(pose.legR, true).a));
+            if (lap < 0.25) return null;
+            const w = b.leg;
+            const x0 = Math.min(j.legL.mid.x, j.legR.mid.x) - w / 2;
+            const x1 = Math.max(j.legL.mid.x, j.legR.mid.x) + w / 2;
+            const y0 = -w * 0.6;
+            const y1 = Math.max(j.legL.mid.y, j.legR.mid.y) + w * 0.9;
+            // a skirt or a dress covers the lap: same cloth
+            const fill = c && (c.legs.id === 'skirt' || c.legs.id === 'dress') ? c.legs.color : legPaint?.cap ?? legPaint?.limb ?? L.limb;
+            return <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx={w * 0.5} fill={fill} stroke={L.line} strokeWidth={4} opacity={Math.min(1, lap * 1.4)} />;
+          })()}
           {pose.yaw < 0 ? <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</> : <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>}
           <g transform={`${headShift}${headSize}`}>
           {L.extra === 'hood' ? (

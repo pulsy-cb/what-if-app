@@ -64,3 +64,26 @@ export const SBeats = shot({
     { who: nora, at: { u: 0.36, w: 0.4 }, look: 0, act: 'idle', face: 'neutral', beats: [{ at: 8, reach: { to: 0 } }, { at: 30, face: 'shock' }, { at: 48, reach: null, act: 'shrug' }] },
   ],
 });
+
+// Shot / reverse shot: the same two people, the camera on each side of the room.
+const talk = place('kitchen', { mood: 'dusk' });
+const pair = (view: 'front' | 'reverse', on: number) =>
+  shot({ place: talk, view, cam: 'medium', on, people: [
+    { who: lou, at: { u: 0.38, w: 0.5 }, look: 1, act: 'talk', face: 'neutral' },
+    { who: sam, at: { u: 0.62, w: 0.38 }, look: 0, act: 'cross-arms', face: 'worried' },
+  ] });
+export const SField = pair('front', 0);
+export const SReverse = pair('reverse', 1);
+export const SFieldWide = shot({ place: talk, cam: 'wide', people: [{ who: lou, at: { u: 0.38, w: 0.5 }, look: 1, act: 'talk' }, { who: sam, at: { u: 0.62, w: 0.38 }, look: 0, act: 'cross-arms' }] });
+export const SReverseWide = shot({ place: talk, view: 'reverse', cam: 'wide', people: [{ who: lou, at: { u: 0.38, w: 0.5 }, look: 1, act: 'talk' }, { who: sam, at: { u: 0.62, w: 0.38 }, look: 0, act: 'cross-arms' }] });
+
+// Every new place, empty, as an establishing shot.
+export const NEW_PLACES = ['street', 'garden', 'park', 'schoolyard', 'rooftop', 'corridor', 'hallway', 'hospital', 'clinic', 'police-office', 'cell', 'shop', 'diner', 'salon', 'reception', 'auditorium', 'cafeteria'] as const;
+export const PLACE_SHOTS = Object.fromEntries(NEW_PLACES.map((n) => [n, shot({ place: place(n), cam: 'establishing', move: 'still' })]));
+export const REVERSE_SHOTS = Object.fromEntries(NEW_PLACES.map((n) => [n, shot({ place: place(n), view: 'reverse', cam: 'establishing', move: 'still' })]));
+// seated, from the front, three-quarter and the side
+export const SSeated = shot({ place: place('blank', { pieces: [{ p: 'chair', id: 'a', at: { u: 0.25, w: 0.4 } }, { p: 'chair', id: 'b', at: { u: 0.47, w: 0.4 } }, { p: 'sofa', id: 'c', at: { u: 0.62, w: 0.34 }, len: 0.24 }] }), cam: 'wide', move: 'still', people: [
+  { who: lou, on: 'a', yaw: 0 }, { who: sam, on: 'b', yaw: 0.45 }, { who: prof, on: 'c', yaw: 1 },
+] });
+export const SLow = shot({ place: place('police-office'), cam: 'medium', angle: 'low', people: [{ who: prof, at: { u: 0.45, w: 0.45 }, yaw: 0.45, act: 'cross-arms' }] });
+export const SHigh = shot({ place: place('police-office'), cam: 'medium', angle: 'high', people: [{ who: lou, on: 'c1', yaw: 0.45, act: 'idle', face: 'worried' }] });

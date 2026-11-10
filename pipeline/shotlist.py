@@ -504,11 +504,13 @@ def main() -> int:
 
     # Genre pace (Pulsy, 2026-11-10): 15-28 s clips ~1.6 s a shot; shorts up to 2.5 min ~2.4 s; long videos ~4.5 s
     # (3 to 6 s), with no cap on the number of shots. A shot keeps at least a few words so a cut lands on a clause.
+    # A vertical video (9:16) keeps the short pace whatever its length (Pulsy, 2026-11-10).
+    vertical = str(ep.get("aspect", "")).strip() == "9:16"
     if args.shots:
         k = args.shots
     elif seconds <= 28:
         k = max(9, min(14, round(seconds / 1.6), len(words) // 3))
-    elif seconds <= 150:
+    elif seconds <= 150 or vertical:
         k = max(12, min(round(seconds / 2.4), len(words) // 3))
     else:
         k = max(36, min(round(seconds / 4.5), len(words) // 5))

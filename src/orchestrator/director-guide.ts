@@ -36,16 +36,22 @@ The frame of each word is given per shot in "When each word is said" (word@frame
 - person \`beats: [{ at, act, face, yaw, look, reach }]\`: from that frame the person does that (a clip like startle starts there; reach: null lets go).
 - shot \`beats: [{ at, cam, on, shake }]\`: a punch-in on the key word (cam: 'close'), a cut to the person who reacts (on: 1), a shake on an impact.
 - Act what the narrator says: someone touches, takes, looks, turns, reacts. \`idle\` alone and \`talk\` on a person who is not speaking are not acting.
+**Reverse angle and angles**
+- \`view: 'reverse'\`: the camera at the other end of the room, looking at the opposite wall. People keep their \`at\`; the engine mirrors them and turns them (a face becomes a back). In a dialogue alternate view 'front' on one person and 'reverse' on the other: shot / reverse shot. A recipe's opposite wall is its \`front\` list (change it with place(name, { front: [...] })).
+- \`angle: 'low'\` (looking up: the person looms, for power or threat) or \`'high'\` (looking down: small, alone, crushed); also as a camera beat. Use one whenever the shot list says "low angle" or "high angle".
 - To fix one shot later, send it whole with edit_shot { episode, id: 'S7', code: 'export const S7 = shot({...});' }: no need to read shots.tsx first.
 - \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
 **place(name, { mood, palette, add, remove, pieces, slots, lights })**
-- Names: classroom bedroom kitchen living office restaurant blank. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.
-- Pieces (use the name as \`p\`): desk table chair sofa coffee-table bed nightstand wardrobe bookshelf counter fridge plant bin floor-lamp rug / on the back wall: window board whiteboard pinboard frame clock tv door.
-  add: [{ p: 'sofa', id: 'couch', at: { u: 0.3, w: 0.4 }, len: 0.3, color: '#B0463A' }]. remove: ['clock', 'd3']. id is how \`on\` and \`slots\` refer to a piece; seats: desk table chair sofa bed. Ready recipes name their desks d1 d2 d3 d4 (classroom), d1 d2 (office), t1 t2 (restaurant), c1 c2 (kitchen).
+- Indoors: classroom bedroom kitchen living office restaurant corridor hallway hospital clinic police-office cell shop diner salon reception auditorium cafeteria blank.
+  Outdoors (sky and ground, no walls): street garden park schoolyard rooftop. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.
+- Pieces (use the name as \`p\`): desk table chair sofa coffee-table bed nightstand wardrobe bookshelf counter fridge plant bin floor-lamp rug hospital-bed monitor iv-stand curtain locker shelf stage podium seat-row round-table arch bars bench picnic-table flowers tree street-lamp car bus
+  / on the back wall: window board whiteboard pinboard frame clock tv door mirror screen wall-shelf alarm facade house skyline fence hedge / flat: road sidewalk path parapet.
+  Outdoors the back wall is the far side of the street: line it with facade (opt: { floors, door }), house, skyline, fence or hedge, with u from -0.3 to 1.3 so a 16:9 wide stays full.
+  add: [{ p: 'sofa', id: 'couch', at: { u: 0.3, w: 0.4 }, len: 0.3, color: '#B0463A' }]. remove: ['clock', 'd3']. id is how \`on\` and \`slots\` refer to a piece; seats: desk table chair sofa bed hospital-bed bench picnic-table round-table seat-row. Ready recipes name their desks d1 d2 d3 d4 (classroom), d1 d2 (office), t1 t2 (restaurant), c1 c2 (kitchen).
 - slots: what is on a piece by id (board, whiteboard, tv, table). A slot's origin (0, 0) is the centre of that piece.
 - In 9:16 keep important pieces within u 0.2-0.8 at mid-depth: the frame shows 1058 units across.
 **Not in the catalogue? Nothing blocks you, in this order:**
-1. place('blank', { pieces: [...] }): any room from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
+1. place('blank', { pieces: [...] }) for a room, or a close outdoor recipe with pieces: [...] for an open-air place (a beach: park with a palette and your pieces), from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
 2. definePiece('arcade', { kind: 'floor', len: 0.12, deep: 0.08, draw }) at the top of shots.tsx when several shots use it.
 3. Not a room at all (a street, a car, space, a diagram) or a staging shot() cannot do: write that shot by hand with <Stage>, or with camT and engine sets (Outdoor, Rooftop, Vehicle, Schematic). Hand-written and shot() shots mix freely in one episode.
 Something the list above does not have is never a reason to give up on the place the story needs.`;
@@ -99,8 +105,11 @@ Name what the person does: \`act\` needs <Stage t={t}>. The feet stay on the gro
 ### Characters: build them with cast()
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'], face: { marks: 'freckles' } }); then look={LOU} (the body comes with it).
 Whatever you leave out is filled from \`seed\`, always the same way, so one name is enough for a varied extra: cast({ seed: 'extra1', body: 'teen' }). One seed per character. kind: fem | masc | any.
-- hair: long braids bun buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white.
-- outfit: tshirt shirt hoodie sweater / blazer labcoat apron coat / jeans pants shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon: rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown, or a hex.
+- Ready types: cast({ as: 'mother', seed: 'mum' }); what you give wins over the type. as: heroine (the channel's lead: copper braided bun, one blue eye and one green, freckles, white tee "her", green joggers with a yellow stripe) mother father brother sister friend police doctor nurse waiter teacher bride groom boss.
+  The narrator of most stories is the heroine: keep her look across episodes and change only what the story needs (cast({ as: 'heroine', seed: 'her', outfit: ['dress:emerald'...] })).
+- eyes: blue green brown hazel grey amber, or two for heterochromia ['blue', 'green']. print: { text: 'her', color: 'coral' } on the chest.
+- hair: long braids bun braided-bun shag buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white.
+- outfit: tshirt shirt hoodie sweater dress / blazer labcoat apron coat / jeans pants joggers cargo shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon, a second one after + (joggers:green+mustard is the side stripe): rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown, or a hex.
 - face: eyes round almond sleepy wide; brows none thin thick arched; nose none button long wide; marks none freckles mole blush dimples wrinkles; facial none stubble mustache goatee beard.
 - acc: glasses:round glasses:square glasses:sun earrings headband:teal headphones headset. skin: porcelain peach sand tan bronze brown deep.
 Something the list does not have (a uniform, a crown, a costume)? Draw it in the torsoGear or headGear slot, or fall back on makeLook.`;

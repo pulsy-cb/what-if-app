@@ -134,6 +134,7 @@ export const OutfitTorso: React.FC<{ view: View; c: CastData; line: string; acce
         <path d={FRONT(2)} fill={top.color} {...st} />
         <path d="M 10 -116 Q 30 -114 46 -112 L 40 2 Q 26 8 12 9 Z" fill={top.shade} opacity={0.55} />
         <Collar kind={top.id} ink={ink} color={top.color} shade={top.shade} />
+        {c.print && !over ? <text x={-20} y={-72} fontSize={15} fontWeight={800} fontFamily="Arial, sans-serif" fill={c.print.color} textAnchor="middle">{c.print.text}</text> : null}
       </g>
     );
   return (

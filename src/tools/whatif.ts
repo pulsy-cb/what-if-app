@@ -313,9 +313,11 @@ export function timedChanges(body: string): number {
 }
 
 /** The pace the shot list must reach: shorts cut fast, long videos hold 3 to 6 s (Pulsy, 2026-11-10). */
-export function paceTarget(durSec: number): { minCutsPerMin: number; maxShotSec: number; label: string } {
+export function paceTarget(durSec: number, aspect: string = '16:9'): { minCutsPerMin: number; maxShotSec: number; label: string } {
   if (durSec <= 30) return { minCutsPerMin: 24, maxShotSec: 3.8, label: 'short clip' };
   if (durSec <= 150) return { minCutsPerMin: 20, maxShotSec: 5, label: 'short (under 2.5 min)' };
+  // A vertical video is a short whatever its length (Pulsy, 2026-11-10).
+  if (aspect === '9:16') return { minCutsPerMin: 20, maxShotSec: 5, label: 'vertical short (9:16, any length)' };
   return { minCutsPerMin: 10, maxShotSec: 9, label: 'long video (3-6 s per shot)' };
 }
 
@@ -329,7 +331,8 @@ export function paceProblem(projectRoot: string, slug: string): string | null {
   const shots = new Set(segs.map((s) => String(s.shot))).size;
   const cutsPerMin = ((shots - 1) / durSec) * 60;
   const longestSec = segs.reduce((m, s) => Math.max(m, (Number(s.b ?? 0) - Number(s.a ?? 0)) / fps), 0);
-  const want = paceTarget(durSec);
+  const ep = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'episode.json'));
+  const want = paceTarget(durSec, String(ep?.aspect ?? '16:9'));
   if (cutsPerMin >= want.minCutsPerMin && longestSec <= want.maxShotSec) return null;
   return (
     `PACE TOO SLOW for a ${want.label}: ${shots} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
@@ -662,7 +665,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // Catch stage positions off the ground: u is across the floor, w runs from the back wall (0) to the camera (1)
     for (const at of body.matchAll(/\bat(?:=\{\{|\s*:\s*\{)\s*u:\s*(-?\d*\.?\d+)\s*,\s*w:\s*(-?\d*\.?\d+)/g)) {
       const [u, w] = [Number(at[1]), Number(at[2])];
-      if (u < -0.1 || u > 1.1 || w < 0 || w > 1) {
+      if (u < -0.5 || u > 1.5 || w < 0 || w > 1) {
         errors.push(`${id} places something at u ${u}, w ${w}: u runs across the floor (0..1) and w from the back wall (0) to the camera (1)`);
       }
     }
@@ -757,6 +760,17 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       `${stillShots.length}/${actingShots} shots with people change nothing while they play (${stillShots.slice(0, 10).join(', ')}): give each one at least one beat on a word of its line — beats: [{ at: <frame of the word>, act: '...', face: '...' }], a reach, a look, or a camera beat (frames are listed per shot in "When each word is said").`,
     );
   }
+  // A whole file written by hand loses what shot() does for free: the 9:16 frame, seats, depth, the reviewer's
+  // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
+  if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
+    const framed = wanted.filter((id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')));
+    const byHand = framed.filter((id) => !/\bshot\s*\(/.test(bodies[id]!));
+    if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
+      errors.push(
+        `${byHand.length}/${framed.length} shots with people are written by hand instead of shot({...}) (${byHand.slice(0, 10).join(', ')}): rewrite them as export const Sx = shot({ place, people, cam, beats }) — shot() frames 9:16 correctly, seats people on real chairs and lets the audit and the reviewer see who is on screen. Keep hand-written code for what shot() cannot draw (a phone screen, a diagram), at most half the shots.`,
+      );
+    }
+  }
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
   if (heroShots < minHeroShots) {
     errors.push(
@@ -777,6 +791,24 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     return `shots.tsx failed the animation & composition check:\n- ${errors.slice(0, 10).join('\n- ')}`;
   }
   return null;
+}
+
+/**
+ * shots.tsx edited after the last board: the reviewer judged older pictures and the render would ship
+ * shots nobody looked at (telephone-salon, 2026-11-10). Null when the board is current.
+ */
+export function boardStale(projectRoot: string, slug: string): string | null {
+  const mtime = (file: string): number => {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  const board = mtime(path.join(projectRoot, 'out', slug, 'storyboard.jpg'));
+  const shots = mtime(path.join(projectRoot, 'src', 'episodes', slug, 'shots.tsx'));
+  if (!board || !shots || shots <= board + 1_000) return null;
+  return `shots.tsx changed after the last board, so nobody has looked at these shots yet: re-run whatif_run { step: "stills", args: [the shots you changed] } then { step: "board" } before render`;
 }
 
 /** Why the render must wait for the independent reviewer, or null. */
@@ -852,6 +884,8 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     if (!fs.existsSync(path.join(projectRoot, 'out', slug, 'storyboard.jpg'))) {
       return `out/${slug}/storyboard.jpg does not exist yet: run whatif_run { step: "stills" } and { step: "board" } and inspect the storyboard before rendering the full video`;
     }
+    const stale = boardStale(projectRoot, slug);
+    if (stale) return stale;
     const refusal = reviewRefusal(projectRoot, slug);
     if (refusal) return refusal;
   }

@@ -765,6 +765,10 @@ test('shot(): the audit sees its people and its motion, and a wrong name at the 
     assert.doesNotMatch(audit(), /is static/, 'the default slow push-in is motion');
     write(`cam: 'wide', move: 'still', people: [{ who: A, at: { u: 0.4, w: 0.5 } }]`);
     assert.match(audit(), /S1 is static/, 'held camera and nobody acting is static');
+    write(`cam: 'wide', people: [{ who: A, at: { u: -0.3, w: 0.2 }, act: 'talk', beats: [{ at: 9, face: 'shock' }] }]`);
+    assert.doesNotMatch(audit(), /places something at/, 'outdoor pieces line the far side from u -0.3 to 1.3');
+    write(`cam: 'wide', people: [{ who: A, at: { u: -0.7, w: 0.2 }, act: 'talk', beats: [{ at: 9, face: 'shock' }] }]`);
+    assert.match(audit(), /places something at u -0\.7/);
     write(`cam: 'wide', people: [{ who: A, at: { u: 0.4, w: 1.6 }, act: 'talk' }]`);
     assert.match(audit(), /places something at u 0\.4, w 1\.6/, 'floor positions are checked inside shot() too');
 
@@ -1014,6 +1018,43 @@ test('engine overlay: hidden files of the overlay folder are never copied into a
   }
 });
 
+test('cast types: the channel heroine in one line, types that a story changes, eyes, stripes and dresses', async () => {
+  const ts = (await import('typescript')).default;
+  const src = fs.readFileSync(new URL('../engine-overlay/files/src/engine/cast.ts', import.meta.url), 'utf8');
+  const out = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-cast2-'));
+  const file = path.join(dir, 'cast.mjs');
+  fs.writeFileSync(file, out);
+  try {
+    const { cast, CAST_TYPES, EYE_COLORS, COLORS } = await import(file);
+    const her = cast({ as: 'heroine', seed: 'her' });
+    assert.equal(her.cast.hairStyle, 'braided-bun');
+    assert.equal(her.cast.newHair, true, 'drawn by hair.tsx, the rig head stays bald');
+    assert.deepEqual(her.cast.iris, [EYE_COLORS.blue, EYE_COLORS.green], 'one blue eye, one green');
+    assert.equal(her.cast.face.marks, 'freckles');
+    assert.equal(her.cast.legs.id, 'joggers');
+    assert.equal(her.cast.legs.accent, COLORS.mustard, 'the yellow side stripe');
+    assert.deepEqual(her.cast.print, { text: 'her', color: COLORS.coral });
+    assert.deepEqual(cast({ as: 'heroine', seed: 'her' }), her, 'the same every time: she stays the same across episodes');
+
+    const party = cast({ as: 'heroine', seed: 'her', outfit: ['dress:green', 'formal:white'], face: { brows: 'arched' } });
+    assert.equal(party.cast.top.id, 'dress', 'what is given wins over the type');
+    assert.equal(party.cast.legs.id, 'dress', 'a dress is also the skirt');
+    assert.equal(party.cast.face.marks, 'freckles', 'face fields merge: the freckles stay');
+    assert.equal(party.cast.face.brows, 'arched');
+    assert.equal(party.cast.hairStyle, 'braided-bun');
+
+    assert.equal(cast({ seed: 'x', eyes: 'hazel' }).cast.iris[0], EYE_COLORS.hazel);
+    assert.equal(cast({ seed: 'x' }).cast.iris, undefined, 'no colour given: the plain dark eye of the style');
+    assert.equal(cast({ seed: 'x', outfit: ['joggers:navy'] }).cast.legs.accent, COLORS.white, 'joggers keep a stripe by default');
+    assert.equal(cast({ seed: 'x', outfit: ['jeans'] }).cast.legs.accent, undefined);
+    assert.throws(() => cast({ as: 'pirate' }), /unknown type "pirate" \(known: heroine, mother/);
+    for (const t of Object.keys(CAST_TYPES)) assert.doesNotThrow(() => cast({ as: t, seed: t }), `type ${t} builds`);
+    assert.equal(cast({ as: 'police', seed: 'p' }).hair, '#1E2A44', 'a navy cap, not the seed\'s hair colour');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('character audit resolves bounded component delegation without trusting text or unused declarations', async () => {
   const { shotsAudit } = await import('../dist/tools/whatif.js');
