@@ -1034,6 +1034,10 @@ test('character audit resolves bounded component delegation without trusting tex
  export const S1 = () => <g>{'<Hero/>'}</g>;`), /S1 .*has no character/);
     assert.match(audit(`const A = () => <B/>; const B = () => <A/>; export const S1 = () => <A/>;`), /character.*unknown|unknown.*character/i);
     assert.match(audit(`export const S1 = () => <Mystery/>;`), /character.*unknown|unknown.*character/i);
+    // Real phone close-ups delegate to a room with imported decor. Unknown imports
+    // must not be assumed empty or used as proof of a character.
+    assert.match(audit(`import { WallClock } from './engine'; const Room = () => <g><WallClock/></g>; const PhoneScreen = () => <g><rect/></g>; export const S1 = () => <g><Room/><PhoneScreen/></g>;`), /S1 .*character presence unknown/);
+    assert.match(audit(`const Room = () => <g><rect/></g>; const PhoneScreen = () => <g><circle/><path/></g>; export const S1 = () => <g><Room/><PhoneScreen/></g>;`), /S1 .*has no character/);
     const ids = ['S1','S2','S3'];
     fs.writeFileSync(path.join(epDir, 'index.tsx'), ids.join(' '));
     fs.writeFileSync(path.join(epDir, 'shots.tsx'), `const Prim = () => <Staged/>;\n` + ids.map(id => `export const ${id} = () => <Prim/>;`).join('\n'));
