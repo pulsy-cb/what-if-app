@@ -1052,7 +1052,7 @@ const runStep: Tool = {
       } else {
         argv = [PY, path.join(PIPELINE, 'modal_render.py'), slug, '--mode', 'video', '--project', '.', ...extra];
       }
-      timeoutMs = 1_800_000;
+      timeoutMs = 3_600_000;
     } else if (
       input.step === 'master' &&
       renderMode !== 'local' &&
@@ -1060,7 +1060,7 @@ const runStep: Tool = {
     ) {
       // the video came from Modal: master it instead of rendering it again locally
       argv = [PY, path.join(scripts, 'master.py'), slug, '--skip-render', ...extra.filter((a) => a !== '--skip-render')];
-      timeoutMs = 1_800_000;
+      timeoutMs = 3_600_000;
     } else {
       const step = STEPS[input.step]!;
       const dir = step.own ? PIPELINE : scripts;
