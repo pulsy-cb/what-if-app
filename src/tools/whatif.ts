@@ -321,6 +321,19 @@ export function paceTarget(durSec: number, aspect: string = '16:9'): { minCutsPe
   return { minCutsPerMin: 10, maxShotSec: 9, label: 'long video (3-6 s per shot)' };
 }
 
+/** The orientation the project renders at: episode.json first, else src/studio.config.ts. */
+export function projectAspect(projectRoot: string, ep?: any): '16:9' | '9:16' {
+  const a = String(ep?.aspect ?? '');
+  if (a === '9:16' || a === '16:9') return a;
+  try {
+    const cfg = fs.readFileSync(path.join(projectRoot, 'src', 'studio.config.ts'), 'utf8');
+    if (/aspect\s*:\s*['"]9:16['"]/.test(cfg) || (/width\s*:\s*1080\b/.test(cfg) && /height\s*:\s*1920\b/.test(cfg))) return '9:16';
+  } catch {
+    /* default 16:9 */
+  }
+  return '16:9';
+}
+
 /** Null when timeline.json keeps the pace, else what is wrong and how to fix it. */
 export function paceProblem(projectRoot: string, slug: string): string | null {
   const tl = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json'));
@@ -332,12 +345,115 @@ export function paceProblem(projectRoot: string, slug: string): string | null {
   const cutsPerMin = ((shots - 1) / durSec) * 60;
   const longestSec = segs.reduce((m, s) => Math.max(m, (Number(s.b ?? 0) - Number(s.a ?? 0)) / fps), 0);
   const ep = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'episode.json'));
-  const want = paceTarget(durSec, String(ep?.aspect ?? '16:9'));
+  const want = paceTarget(durSec, projectAspect(projectRoot, ep));
   if (cutsPerMin >= want.minCutsPerMin && longestSec <= want.maxShotSec) return null;
   return (
     `PACE TOO SLOW for a ${want.label}: ${shots} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
     `wanted >= ${want.minCutsPerMin} cuts/min and no shot over ${want.maxShotSec}s). Run whatif_run { step: "shotlist" } then { step: "plan" }.`
   );
+}
+
+function canonicalShotSize(raw: string): string | null {
+  const s = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!s) return null;
+  if (/\b(insert|macro|detail|objet)\b/.test(s)) return 'insert';
+  if (/\b(title|titre)\b/.test(s)) return 'title';
+  if (/\b(schematic|diagram|schema)\b/.test(s)) return 'schematic';
+  if (/\b(close|closeup|serre|gros\s+plan|portrait)\b/.test(s)) return 'close';
+  if (/\b(medium|moyen|americain|two-shot)\b/.test(s)) return 'medium';
+  if (/\b(wide|large|ensemble|establishing)\b/.test(s)) return 'wide';
+  return null;
+}
+
+/**
+ * Compare shot sizes declared in DIRECTOR.md tables/bullets ("| S6 | close | ...") against episode.json.shots
+ * ("S6": size "insert"), catching silent reclassifications made to dodge the character check.
+ */
+export function directorSizeMismatches(directorMd: string, episode: any): string[] {
+  if (!directorMd || !Array.isArray(episode?.shots)) return [];
+  const epById = new Map<string, string>();
+  for (const s of episode.shots) {
+    if (s?.id && s?.size) epById.set(String(s.id).trim().toUpperCase(), String(s.size).trim());
+  }
+  if (!epById.size) return [];
+  const dirSizes = new Map<string, string>();
+  for (const m of directorMd.matchAll(/^\s*\|\s*\*?\*?(S\d+)\*?\*?\s*\|\s*([^|\n]+)\|/gim)) {
+    dirSizes.set(m[1]!.toUpperCase(), m[2]!.trim());
+  }
+  for (const m of directorMd.matchAll(/^\s*(?:[-*]|#{2,4})\s*\*?\*?(S\d+)\*?\*?\s*(?:[\[(—–:-]\s*)([^|\n:—–)\]]+)/gim)) {
+    const id = m[1]!.toUpperCase();
+    if (!dirSizes.has(id)) dirSizes.set(id, m[2]!.trim());
+  }
+  const out: string[] = [];
+  for (const [id, dirRaw] of dirSizes) {
+    const epRaw = epById.get(id);
+    if (!epRaw) continue;
+    const dBucket = canonicalShotSize(dirRaw);
+    const eBucket = canonicalShotSize(epRaw);
+    if (dBucket && eBucket && dBucket !== eBucket) {
+      out.push(`${id} (DIRECTOR.md="${dirRaw}" vs episode.json="${epRaw}")`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Catch 16:9 canvas assumptions written by hand inside a 9:16 portrait episode (viewBox "510 -260 900 1600", y = -260..1340):
+ * - floor reflection flipped around y=1080 (translate(0 1080) scale(1 -1)),
+ * - ceiling/backdrop clamped to y=0..1080 (leaving y=-260..0 or 1080..1340 empty),
+ * - hand-written shots framed with a 16:9 wide zoom (zoom <= 1.05 around y=480..680).
+ */
+export function portraitFramingErrors(
+  shotsSource: string,
+  bodies?: Record<string, string>,
+  wanted?: string[],
+  epShots: Record<string, any> = {},
+): string[] {
+  const errs: string[] = [];
+  if (/translate\(\s*0[\s,]+1080\s*\)\s*scale\(\s*1[\s,]+-1\s*\)/.test(shotsSource)) {
+    errs.push(
+      `9:16 framing bug: shots.tsx flips a floor reflection around y=1080 (translate(0 1080) scale(1 -1)), which is the 16:9 bottom edge — in 9:16 the viewBox runs y=-260..1340, so the reflection floats in mid-floor. Use shot({ place }) or extend to y=1340.`,
+    );
+  }
+  const has16x9Rect =
+    /<rect\b[^>]*\bx\s*=\s*(?:\{\s*0\s*\}|["']0["'])[^>]*\by\s*=\s*(?:\{\s*0\s*\}|["']0["'])[^>]*\bwidth\s*=\s*(?:\{\s*1920\s*\}|["']1920["'])/.test(
+      shotsSource,
+    ) || /\bRY0\s*=\s*-?[012]?\d\b[\s\S]{0,40}\bRY1\s*=\s*10[0-8]\d\b/.test(shotsSource);
+  if (has16x9Rect && !/SHOT S1 — PLACEHOLDER/.test(shotsSource)) {
+    errs.push(
+      `9:16 framing bug: shots.tsx clamps its backdrop/ceiling to y=0..1080 on a 9:16 canvas (viewBox "510 -260 900 1600", y runs -260..1340), leaving empty strips at the top and bottom. Use shot({ place }) or cover y=-280..1360.`,
+    );
+  }
+  const checkBodies: Record<string, string> = bodies ?? {};
+  const ids = wanted ?? Object.keys(checkBodies);
+  const usesCamT = /\bcamT\s*\(/.test(shotsSource);
+  for (const id of ids) {
+    const body = checkBodies[id] ?? '';
+    if (!body || /\b(?:shot|phoneShot)\s*\(/.test(body)) continue;
+    const size = String(epShots[id]?.size ?? '').toLowerCase();
+    if (size.includes('establishing') || size.includes('title')) continue;
+    let badZoom: { y: number; z: number } | null = null;
+    for (const cm of body.matchAll(/\bcamT\s*\(\s*-?\d+(?:\.\d+)?\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)/g)) {
+      const y = Number(cm[1]), z = Number(cm[2]);
+      if (y >= 480 && y <= 680 && z <= 1.05) { badZoom = { y, z }; break; }
+    }
+    if (!badZoom && usesCamT) {
+      for (const om of body.matchAll(/\{\s*x\s*:\s*-?\d+(?:\.\d+)?\s*,\s*y\s*:\s*(\d+(?:\.\d+)?)\s*,\s*zoom\s*:\s*(\d+(?:\.\d+)?)\s*\}/g)) {
+        const y = Number(om[1]), z = Number(om[2]);
+        if (y >= 480 && y <= 680 && z <= 1.05) { badZoom = { y, z }; break; }
+      }
+    }
+    if (badZoom) {
+      errs.push(
+        `${id} frames a 9:16 shot with a 16:9 wide zoom (${badZoom.z} around y=${badZoom.y}): in 9:16 the visible slice is 900×1600 (y=-260..1340), so zoom <= 1.05 leaves empty ceiling and floor. Use shot({ place, cam: 'wide' }) or zoom >= 1.15.`,
+      );
+    }
+  }
+  return errs;
 }
 
 /** Bounded, syntactic character discovery. Never execute episode code. */
@@ -613,8 +729,9 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       /\b(poseAt|faceAt|actPose|walkPose|talkAt|camPush|camPan|parallax|kf|DrawOn|CountUp|TitleCard|Arrow|PlantIcon|easeOut|clamp)\b/.test(body) ||
       /\bt\s*[*+-]/.test(body) ||
       /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
-      // shot() pushes in slowly unless told to hold
-      ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body));
+      // shot() and phoneShot() push in slowly unless told to hold
+      ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body)) ||
+      (/\bphoneShot\s*\(/.test(body) && (!/\bpush\s*:\s*false\b/.test(body) || /\b(messages|notify|typing)\s*:/.test(body)));
     if (!hasMotion) {
       errors.push(`${id} is static: give someone an act, let shot() move the camera (no move: 'still'), or animate with kf(t, ...), poseAt(t, ...), faceAt(t, ...) or DrawOn`);
     }
@@ -764,11 +881,14 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
   if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
     const framed = wanted.filter((id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')));
-    const byHand = framed.filter((id) => !/\bshot\s*\(/.test(bodies[id]!));
+    const byHand = framed.filter((id) => !/\b(?:shot|phoneShot)\s*\(/.test(bodies[id]!));
     if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
       errors.push(
         `${byHand.length}/${framed.length} shots with people are written by hand instead of shot({...}) (${byHand.slice(0, 10).join(', ')}): rewrite them as export const Sx = shot({ place, people, cam, beats }) — shot() frames 9:16 correctly, seats people on real chairs and lets the audit and the reviewer see who is on screen. Keep hand-written code for what shot() cannot draw (a phone screen, a diagram), at most half the shots.`,
       );
+    }
+    if (projectAspect(projectRoot, episode) === '9:16') {
+      errors.push(...portraitFramingErrors(shotsSource, bodies, wanted, epShots));
     }
   }
   const minHeroShots = Math.max(2, Math.ceil(tlShots.length * 0.3));
@@ -1275,6 +1395,21 @@ const runStep: Tool = {
     }
 
     const artifacts = diffArtifacts(ctx.projectRoot, before);
+    if (input.step === 'stills' || input.step === 'board') {
+      try {
+        const epDir = path.join(ctx.projectRoot, 'src', 'episodes', slug);
+        const dirMd = fs.existsSync(path.join(epDir, 'DIRECTOR.md')) ? fs.readFileSync(path.join(epDir, 'DIRECTOR.md'), 'utf8') : '';
+        const epNow = readJsonFile(path.join(epDir, 'episode.json'));
+        const mismatches = directorSizeMismatches(dirMd, epNow);
+        if (mismatches.length) {
+          extraNotes.push(
+            `DIRECTOR.md / episode.json shot size mismatch (${mismatches.length}): ${mismatches.slice(0, 8).join(', ')}. Keep DIRECTOR.md and episode.json in sync (do not reclassify a character shot as "insert" just to bypass the character check).`,
+          );
+        }
+      } catch {
+        /* ignore optional mismatch check error */
+      }
+    }
     const layout = input.step === 'stills' || input.step === 'board' ? await layoutReport(path.join(ctx.projectRoot, 'out', slug, 'board')).catch(() => '') : '';
     let layoutFailure = '';
     if (layout.includes('\nEMPTY:')) {

@@ -56,4 +56,4 @@
 - Données du zip restaurées. Sauvegarde : `data/app.db.bak-avant-telephone-2026-11-10`.
 - `npm test` 28/29 : le test de main lié aux données échoue aussi sur `origin/main`.
 - Audit : `docs/audits/audit-run-telephone-salon-2026-11-10.md`. Cause principale : l'agent contourne `shot()`, et le Reviewer est aveugle (`episode.json` de plus de 25 Ko non lu). Solution P2 en attente de validation.
-- Suite (code partiel, tests à corriger) : `docs/feature-plans/suite-telephone-salon.md`
+- Suite (complétée, 32/32 tests + rendus 9:16/16:9 vérifiés + rendu Modal vidéo découpé en parallèle sur `main`) : `docs/feature-plans/suite-telephone-salon.md`

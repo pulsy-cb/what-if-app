@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatMessage, ImagePart, Provider } from './providers/types.js';
 import { readText } from '../tools/paths.js';
-import { timedChanges } from '../tools/whatif.js';
+import { directorSizeMismatches, timedChanges } from '../tools/whatif.js';
 
 export type ReviewIssue = {
   shot: string;
@@ -265,6 +265,15 @@ export async function reviewEpisodeBoard(
   for (const n of sheetFiles.slice(0, MAX_REVIEW_IMAGES)) addImage(path.join(sheetsDir, n), 'image/jpeg');
   if (!images.length) addImage(path.join(outDir, 'storyboard.jpg'), 'image/jpeg');
 
+  const sizeDrift = directorSizeMismatches(directorRaw, ep);
+  const autoMetrics = [
+    staticMetrics(shotsRaw),
+    timingMetrics(timeline),
+    sizeDrift.length ? `écarts de taille DIRECTOR.md ↔ episode.json (${sizeDrift.length}) : ${sizeDrift.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   const userPrompt = [
     `# Audit indépendant de l'épisode "${slug}" (orientation: ${aspect}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})`,
     `## 1. Script complet (narration FR)\n${scriptLines.slice(0, 9_000)}`,
@@ -272,7 +281,7 @@ export async function reviewEpisodeBoard(
     bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 2_000)}` : '',
     `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 12_000)}`,
     `## 5. Code des plans (shots.tsx)\n${summarizeShotsCode(shotsRaw)}`,
-    `## 6. Mesures automatiques (lues dans shots.tsx et timeline.json)\n${staticMetrics(shotsRaw)}\n${timingMetrics(timeline)}`,
+    `## 6. Mesures automatiques (lues dans shots.tsx et timeline.json)\n${autoMetrics}`,
     images.length
       ? `\n${images.length} planche(s) de contact jointe(s) (plans dans l'ordre, légende = numéro du plan, taille, début du texte)${sheetFiles.length > MAX_REVIEW_IMAGES ? `, les ${MAX_REVIEW_IMAGES} premières sur ${sheetFiles.length}` : ''}. Compare chaque vignette et le code des plans au récit et à DIRECTOR.md, puis renvoie ton verdict JSON.`
       : `\nInspecte la cohérence entre le récit, DIRECTOR.md et le code de shots.tsx, puis renvoie ton verdict JSON.`,

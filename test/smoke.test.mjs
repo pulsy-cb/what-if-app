@@ -466,7 +466,7 @@ test('reviewer: reads the contact sheets and the measured counts, not the tall s
     `export const S3 = ({ t }) => <g><Foreground blur={16}><Hero look={A} pose={tableSit(700)} /></Foreground></g>;\n`;
   assert.equal(
     staticMetrics(shots),
-    "2/3 plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · 1/3 plans avec amorce floue · 1 plans à 3 personnages ou plus · 3 plans avec personnages où rien ne change pendant le plan · 0 plans où l'unique action est idle",
+    "2/3 plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · 1/3 plans avec amorce floue au premier plan (Foreground) · 0 autres avec seulement un flou de profondeur (pas une amorce) · 1 plans à 3 personnages ou plus · 3 plans avec personnages où rien ne change pendant le plan · 0 plans où l'unique action est idle",
   );
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rev-'));
@@ -633,7 +633,7 @@ test('stage: the audit counts <Staged> as a character, checks ground positions, 
     assert.equal(hasGuide(), true, 'guide present once the engine has it');
 
     const three = `export const S1 = () => <Stage focus={0.6}><Staged at={{ u: 0.1, w: 0.2 }} /><Staged at={{ u: 0.5, w: 0.2 }} /><Staged at={{ u: 0.9, w: 0.2 }} /></Stage>;\n`;
-    assert.match(staticMetrics(three), /1\/1 plans avec amorce floue · 1 plans à 3 personnages/);
+    assert.match(staticMetrics(three), /0\/1 plans avec amorce floue au premier plan \(Foreground\) · 1 autres avec seulement un flou de profondeur \(pas une amorce\) · 1 plans à 3 personnages/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -774,7 +774,8 @@ test('shot(): the audit sees its people and its motion, and a wrong name at the 
 
     assert.match(staticMetrics(`export const S1 = shot({ people: [{ who: A, yaw: 0.5 }, { who: B }, { who: C }] });\n`), /1\/1 plans avec un personnage orienté.*1 plans à 3 personnages/);
     assert.match(staticMetrics(`export const S1 = () => <Stage><Staged yaw={-1} /></Stage>;\n`), /1\/1 plans avec un personnage orienté/);
-    assert.match(staticMetrics(`export const S1 = shot({ focus: 0.6, people: [{ who: A }] });\n`), /1\/1 plans avec amorce floue/);
+    assert.match(staticMetrics(`export const S1 = shot({ focus: 0.6, people: [{ who: A }] });\n`), /0\/1 plans avec amorce floue au premier plan \(Foreground\) · 1 autres avec seulement un flou de profondeur/);
+    assert.match(staticMetrics(`export const S1 = shot({ foreground: 'plant', people: [{ who: A }] });\n`), /1\/1 plans avec amorce floue au premier plan \(Foreground\)/);
 
     // the crash test runs when the project has react-dom: a stand-in is enough to reach the module load
     const nm = path.join(dir, 'node_modules');
@@ -1088,11 +1089,10 @@ test('character audit resolves bounded component delegation without trusting tex
 
 test('real telephone-salon shots do not falsely lose delegated characters', async () => {
   const { shotsAudit } = await import('../dist/tools/whatif.js');
-  const root = path.resolve('data/projects/telephone-salon-7609890127925513503');
-  if (!fs.existsSync(root)) return;
+  const root = path.resolve('test/fixtures/telephone-salon');
   const src = path.join(root, 'src/episodes/telephone-salon');
-  const episode = JSON.parse(fs.readFileSync(path.join(src, 'episode.json')));
-  const timeline = JSON.parse(fs.readFileSync(path.join(src, 'timeline.json')));
+  const episode = JSON.parse(fs.readFileSync(path.join(src, 'episode.json'), 'utf8'));
+  const timeline = JSON.parse(fs.readFileSync(path.join(src, 'timeline.json'), 'utf8'));
   const result = shotsAudit(root, 'telephone-salon', episode, timeline) ?? '';
   for (const id of ['S9','S10','S12']) {
     const one = shotsAudit(root, 'telephone-salon', episode, { ...timeline, shots: timeline.shots.filter(s => s.id === id) }) ?? '';
@@ -1100,4 +1100,250 @@ test('real telephone-salon shots do not falsely lose delegated characters', asyn
   }
   assert.match(result, /S6 .*character presence unknown/);
   assert.match(result, /S19 .*character presence unknown/);
+});
+
+test('vertical 9:16 pace: paceTarget and shotlist.py cut a 160s vertical episode at short rhythm (>= 20 cuts/min)', async () => {
+  const { paceTarget } = await import('../dist/tools/whatif.js');
+  const { execFileSync } = await import('node:child_process');
+  assert.deepEqual(
+    { minCutsPerMin: paceTarget(160, '9:16').minCutsPerMin, maxShotSec: paceTarget(160, '9:16').maxShotSec },
+    { minCutsPerMin: 20, maxShotSec: 5 },
+  );
+  assert.deepEqual(
+    { minCutsPerMin: paceTarget(160, '16:9').minCutsPerMin, maxShotSec: paceTarget(160, '16:9').maxShotSec },
+    { minCutsPerMin: 10, maxShotSec: 9 },
+  );
+
+  // Build a 160-second synthetic French narration + words.json and verify shotlist.py cuts ~60+ shots in 9:16 vs ~35 in 16:9
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-shotlist916-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'vert');
+    fs.mkdirSync(epDir, { recursive: true });
+    const sentences = Array.from(
+      { length: 40 },
+      (_, i) => `Ensuite Léa regarde le téléphone posé sur la table numéro ${i + 1}, et Marc répond tout bas devant Luisa.`,
+    );
+    const words = [];
+    let t = 0.2;
+    for (const s of sentences) {
+      const toks = s.split(/\s+/);
+      for (const w of toks) {
+        words.push({ w, s: Number(t.toFixed(3)), e: Number((t + 0.22).toFixed(3)) });
+        t += 0.25;
+      }
+      t += 0.25; // clause pause around ~160s total
+    }
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify(words));
+    const baseEp = {
+      id: 'Vert',
+      slug: 'vert',
+      title: ['CE QUE J’AI VU', 'SUR SON TÉLÉPHONE'],
+      defaultSet: 'salon',
+      script: sentences.map((text, i) => ({ beat: `b${i + 1}`, text })),
+      shots: [],
+    };
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ ...baseEp, aspect: '9:16' }));
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'vert', '--project', dir], { stdio: 'pipe' });
+    const ep916 = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    assert.ok(ep916.shots.length >= 55, `expected >= 55 shots for 160s 9:16, got ${ep916.shots.length}`);
+
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ ...baseEp, aspect: '16:9' }));
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'vert', '--project', dir], { stdio: 'pipe' });
+    const ep169 = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    assert.ok(ep916.shots.length > ep169.shots.length + 12, `9:16 (${ep916.shots.length}) must cut faster than 16:9 (${ep169.shots.length})`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reviewer: keeps >25KB episode.json script, reads 9:16 from studio.config.ts, extracts cast/components and DIRECTOR size mismatches', async () => {
+  const { summarizeShotsCode, reviewEpisodeBoard } = await import('../dist/orchestrator/reviewer.js');
+  const code = [
+    `const NARR = cast({ seed: 'narr' });`,
+    `const MARC = cast({ seed: 'marc' });`,
+    `const Prim = (p) => <Staged {...p} />;`,
+    `export const S1 = ({ t }) => <Stage><Prim who={NARR} at={{ u: 0.4, w: 0.5 }} /></Stage>;`,
+    `export const S2 = ({ t }) => <g><rect /></g>;`,
+  ].join('\n');
+  const summary = summarizeShotsCode(code);
+  assert.match(summary, /### Composants du fichier[\s\S]*const Prim =/);
+  assert.match(summary, /- S1 \(personnages cités : NARR\):/);
+  assert.match(summary, /- S2 \(personnages cités : aucun\):/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-bigrev-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'big');
+    const outDir = path.join(dir, 'out', 'big');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'studio.config.ts'), `export const STUDIO = { width: 1080, height: 1920, aspect: '9:16' };\n`);
+    // Build an episode.json > 28 KB without explicit aspect, plus a S6 size mismatch vs DIRECTOR.md
+    const bigScript = Array.from({ length: 180 }, (_, i) => ({
+      beat: `beat-${i + 1}`,
+      text: `Phrase narrative numéro ${i + 1} avec un témoin unique PHRASE_FINALE_${i + 1} dans le salon de manucure.`,
+    }));
+    const epJson = JSON.stringify(
+      {
+        id: 'Big',
+        slug: 'big',
+        script: bigScript,
+        shots: [
+          { id: 'S1', size: 'wide', set: 'nails', note: 'ouverture' },
+          { id: 'S6', size: 'insert', set: 'nails', note: 'reclassé en douce' },
+        ],
+      },
+      null,
+      2,
+    );
+    assert.ok(Buffer.byteLength(epJson) > 25_000, `episode.json should exceed 25 KB (got ${Buffer.byteLength(epJson)})`);
+    fs.writeFileSync(path.join(epDir, 'episode.json'), epJson);
+    fs.writeFileSync(
+      path.join(epDir, 'DIRECTOR.md'),
+      `# DIRECTOR\n\n| plan | cadrage | action |\n|---|---|---|\n| S1 | large | ouverture |\n| S6 | close | réaction visage de Léa |\n`,
+    );
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), code);
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'fake');
+
+    let capturedPrompt = '';
+    const provider = {
+      model: 'fake-rev',
+      label: 'fake',
+      chat: async ({ messages }) => {
+        capturedPrompt = messages.find((m) => m.role === 'user')?.content ?? '';
+        return { text: JSON.stringify({ pass: true, summary: 'OK', issues: [] }) };
+      },
+    };
+    await reviewEpisodeBoard(provider, dir, 'big');
+    assert.match(capturedPrompt, /orientation:\s*9:16/, 'falls back to studio.config.ts for 9:16');
+    assert.match(capturedPrompt, /Phrase narrative numéro 1\b/, 'script is NOT dropped when episode.json > 25 KB');
+    assert.match(capturedPrompt, /écarts de taille DIRECTOR\.md ↔ episode\.json \(1\) : S6 \(DIRECTOR\.md="close" vs episode\.json="insert"\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('suite-telephone-salon guards: boardStale, >50% hand-written shots, phoneShot, portraitFramingErrors & directorSizeMismatches', async () => {
+  const { boardStale, shotsAudit, portraitFramingErrors, directorSizeMismatches } = await import('../dist/tools/whatif.js');
+  const { defaultRegistry } = await import('../dist/tools/index.js');
+
+  // 1. Real telephone-salon fixture: portraitFramingErrors catches 16:9 ceiling rect + zoom 1.0, and directorSizeMismatches catches S6 close -> insert
+  const fixSrc = path.resolve('test/fixtures/telephone-salon/src/episodes/telephone-salon');
+  const fixShots = fs.readFileSync(path.join(fixSrc, 'shots.tsx'), 'utf8');
+  const fixDirMd = fs.readFileSync(path.join(fixSrc, 'DIRECTOR.md'), 'utf8');
+  const fixEp = JSON.parse(fs.readFileSync(path.join(fixSrc, 'episode.json'), 'utf8'));
+  assert.deepEqual(directorSizeMismatches(fixDirMd, fixEp), [], 'original 2b35574 DIRECTOR.md and episode.json match');
+  const mutatedEp = {
+    ...fixEp,
+    shots: fixEp.shots.map((s) => (s.id === 'S6' ? { ...s, size: 'insert' } : s)),
+  };
+  assert.deepEqual(directorSizeMismatches(fixDirMd, mutatedEp), ['S6 (DIRECTOR.md="close" vs episode.json="insert")']);
+
+  const fixFraming = portraitFramingErrors(fixShots, { S1: fixShots.slice(fixShots.indexOf('export const S1')) }, ['S1'], { S1: { size: 'wide' } });
+  assert.ok(fixFraming.some((e) => /clamps its backdrop\/ceiling to y=0\.\.1080/.test(e)), 'catches y=0 width=1920 ceiling rect');
+  assert.ok(fixFraming.some((e) => /S1 frames a 9:16 shot with a 16:9 wide zoom \(1 around y=620\)/.test(e)), 'catches zoom=1.0 at y=620');
+  const reflFraming = portraitFramingErrors(`<g transform="translate(0 1080) scale(1 -1)"><rect /></g>`);
+  assert.ok(reflFraming.some((e) => /flips a floor reflection around y=1080/.test(e)), 'catches translate(0 1080) scale(1 -1)');
+
+  // 2. Hand-written shot rule (>50% character shots without shot() refused; inserts & phoneShot accepted) + boardStale + 9:16 e2e gate simulation
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-guards-'));
+  try {
+    const slug = 'salon916';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const outDir = path.join(dir, 'out', slug);
+    const pubDir = path.join(dir, 'public', slug);
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'shot.tsx'), 'export const shot = () => () => null;\nexport const phoneShot = () => () => null;\n');
+
+    const ids = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const salon916 = defineEpisode("Salon", { timeline, shots: { ${ids.join(', ')} } });\n`);
+    const tl6 = { fps: 30, total: 360, segments: ids.map((id, i) => ({ shot: id, a: i * 60, b: (i + 1) * 60 })), shots: ids.map((id) => ({ id, len: 60, key: 18 })) };
+    const ep6Char = { aspect: '9:16', script: Array.from({ length: 4 }, (_, i) => ({ beat: `b${i}`, text: 'Un texte français complet et fluide dans le salon.' })), science: [{ claim: 'c', working: 'w', source: 's' }], shots: ids.map((id) => ({ id, size: 'medium', set: 'nails', note: 'scène' })) };
+
+    // 4/6 character shots written by hand -> refused
+    const fourByHand = [
+      `export const S1 = shot({ place: R, cam: 'medium', people: [{ who: A, on: 'tech1', act: 'talk', beats: [{ at: 12, face: 'shock' }] }] });`,
+      `export const S2 = shot({ place: R, cam: 'close', people: [{ who: A, on: 'tech1', act: 'talk', beats: [{ at: 12, face: 'happy' }] }] });`,
+      ...['S3', 'S4', 'S5', 'S6'].map(
+        (id) => `export const ${id} = ({ t }) => <Stage><Staged who={A} at={{ u: 0.4, w: 0.5 }} act="talk" face={faceAt(t, [[0, 'neutral'], [15, 'shock']])} /></Stage>;`,
+      ),
+    ].join('\n');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), fourByHand);
+    assert.match(shotsAudit(dir, slug, ep6Char, tl6) ?? '', /4\/6 shots with people are written by hand instead of shot/);
+
+    // Same 4 shots marked as "insert" (e.g. phoneShot / object inserts) -> accepted!
+    const epWithInserts = {
+      ...ep6Char,
+      shots: ids.map((id, i) => ({ id, size: i >= 2 ? 'insert' : 'medium', set: 'nails', note: 'insert téléphone' })),
+    };
+    const withPhoneShots = [
+      `export const S1 = shot({ place: R, cam: 'medium', people: [{ who: A, on: 'tech1', act: 'talk', beats: [{ at: 12, face: 'shock' }] }] });`,
+      `export const S2 = shot({ place: R, cam: 'close', people: [{ who: A, on: 'tech1', act: 'talk', beats: [{ at: 12, face: 'happy' }] }] });`,
+      `export const S3 = phoneShot({ contact: { name: 'Inconnu' }, messages: [{ from: 'them', text: 'Salut', at: 10 }] });`,
+      `export const S4 = phoneShot({ lock: { time: '21:14' }, notify: { title: 'Chloé', text: 'Tu me manques', at: 12 } });`,
+      `export const S5 = ({ t }) => <g transform={camPush(t, 60, 960, 540, 1.2, 1.3)}><rect x={800} y={400} width={320} height={200} /></g>;`,
+      `export const S6 = ({ t }) => <g transform={camPush(t, 60, 960, 540, 1.2, 1.3)}><circle cx={960} cy={540} r={90} /></g>;`,
+    ].join('\n');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), withPhoneShots + `\n// poseAt(t, []) act: 'talk' at: 10 at: 12 at: 15 at: 20\n`);
+    assert.equal(shotsAudit(dir, slug, epWithInserts, tl6), null, 'phoneShot + insert shots pass shotsAudit cleanly');
+
+    // boardStale check: storyboard older than shots.tsx blocks render; current storyboard passes
+    const boardPath = path.join(outDir, 'storyboard.jpg');
+    const shotsPath = path.join(epDir, 'shots.tsx');
+    fs.writeFileSync(boardPath, 'jpg');
+    const now = Date.now() / 1000;
+    fs.utimesSync(boardPath, now - 20, now - 20);
+    fs.utimesSync(shotsPath, now, now);
+    assert.match(boardStale(dir, slug) ?? '', /shots\.tsx changed after the last board/);
+
+    // End-to-end prerequisite simulation on a 160s 9:16 episode via whatif_run:
+    // (a) 36 shots over 160s in 9:16 -> refused by vertical pace gate (needs >= 20 cuts/min)
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify([{ w: 'un', s: 0, e: 0.5 }]));
+    fs.writeFileSync(path.join(pubDir, 'voice.wav'), 'wav');
+    fs.writeFileSync(path.join(epDir, 'DIRECTOR.md'), '# DIRECTOR\n'.padEnd(260, 'Mise en scène détaillée du salon de manucure en 9:16. '));
+    const slowIds = Array.from({ length: 36 }, (_, i) => `S${i + 1}`);
+    const slowSegs = slowIds.map((id, i) => ({ shot: id, a: Math.round((i * 4800) / 36), b: Math.round(((i + 1) * 4800) / 36) }));
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({ ...ep6Char, shots: slowIds.map((id) => ({ id, size: 'medium', set: 'nails', note: 'action' })) }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({ fps: 30, total: 4800, segments: slowSegs, shots: slowIds.map((id) => ({ id, len: 133, key: 18 })) }),
+    );
+    const ctx = { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: dir, log: () => {} };
+    const slowRes = await defaultRegistry().run('whatif_run', { episode: slug, step: 'stills' }, ctx);
+    assert.equal(slowRes.ok, false);
+    assert.match(slowRes.summary, /PACE TOO SLOW for a vertical short \(9:16, any length\)/);
+
+    // (b) 60 shots over 160s passes pace, then stale board blocks render!
+    const fastIds = Array.from({ length: 60 }, (_, i) => `S${i + 1}`);
+    const fastSegs = fastIds.map((id, i) => ({ shot: id, a: i * 80, b: (i + 1) * 80 }));
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({ ...ep6Char, shots: fastIds.map((id) => ({ id, size: 'medium', set: 'nails', note: 'action' })) }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({ fps: 30, total: 4800, segments: fastSegs, shots: fastIds.map((id) => ({ id, len: 80, key: 18 })) }),
+    );
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const salon916 = defineEpisode("Salon", { timeline, shots: { ${fastIds.join(', ')} } });\n`);
+    fs.writeFileSync(
+      shotsPath,
+      fastIds
+        .map((id) => `export const ${id} = shot({ place: R, cam: 'medium', people: [{ who: A, on: 'tech1', act: 'talk', beats: [{ at: 12, face: 'shock' }] }] });`)
+        .join('\n'),
+    );
+    fs.utimesSync(boardPath, now - 20, now - 20);
+    fs.utimesSync(shotsPath, now + 5, now + 5);
+    const staleRes = await defaultRegistry().run('whatif_run', { episode: slug, step: 'render' }, ctx);
+    assert.equal(staleRes.ok, false);
+    assert.match(staleRes.summary, /shots\.tsx changed after the last board/);
+    fs.utimesSync(boardPath, now + 10, now + 10);
+    assert.equal(boardStale(dir, slug), null, 'fresh storyboard clears boardStale');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -97,7 +97,7 @@ export const HairLayer: React.FC<{ style: string; view: View; part: Part; color:
             {path(`M 56 ${Y - 30} Q 72 ${Y + 10} 60 ${Y + 52} Q 54 ${Y + 20} 48 ${Y - 20} Z`)}
           </g>
         ) : view === 'profile' ? (
-          path(`M 30 ${Y - 40} Q 52 ${Y} 40 ${Y + 46} Q 36 ${Y + 10} 22 ${Y - 30} Z`)
+          path(`M 8 ${Y - 42} Q 20 ${Y - 2} 12 ${Y + 42} Q 6 ${Y + 8} 2 ${Y - 32} Z`)
         ) : null;
       if (part === 'behind') return view === 'back' ? null : braid;
       return view === 'back' ? <g>{path(BOWL)}{braid}</g> : <g>{cap}{strands}</g>;

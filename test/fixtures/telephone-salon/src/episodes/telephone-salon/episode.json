@@ -1,0 +1,836 @@
+{
+ "id": "TelephoneSalon",
+ "slug": "telephone-salon",
+ "aspect": "9:16",
+ "topic": "What I Saw On His Phone \n . \n \n #3danimation, #animationart,\n #digita...",
+ "title": [
+  "CE QUE J'AI VU",
+  "SUR SON TÉLÉPHONE"
+ ],
+ "defaultSet": "Un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. Récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+ "accent": "",
+ "power": {
+  "word": "",
+  "rule": "",
+  "look": ""
+ },
+ "script": [
+  {
+   "text": "Je me suis fait faire les ongles par un homme au lieu d'une femme, et je ne me suis toujours pas remise de ce que j'ai vu."
+  },
+  {
+   "text": "Quand ma technicienne habituelle, Luisa, m'a dit qu'elle n'avait pas de place pour moi mais que son mari pouvait me prendre, j'ai dit oui."
+  },
+  {
+   "text": "À la moitié de la séance, la batterie de mon téléphone était à deux pour cent et je m'ennuyais, alors j'ai regardé le téléphone de son mari."
+  },
+  {
+   "text": "Mais c'est à ce moment-là que c'est arrivé."
+  },
+  {
+   "text": "Une notification est apparue sur son écran qui disait : « Tu me manques tellement », et la photo de profil était clairement une fille, une fille qui n'était pas sa femme."
+  },
+  {
+   "text": "Je ne voulais pas supposer qu'il la trompait, alors j'ai continué à regarder l'écran."
+  },
+  {
+   "text": "Puis le message suivant est arrivé : « Si ce n'était pas pour Luisa, on aurait plus de temps ensemble."
+  },
+  {
+   "text": "» Ensuite : « Tu représentes tout pour moi. Je suis tellement heureux de t'avoir trouvée. » Mon cœur s'est serré."
+  },
+  {
+   "text": "Et c'est là que son mari a ouvert la conversation."
+  },
+  {
+   "text": "J'ai fait comme si je ne faisais pas attention, mais je regardais tout du coin de l'œil et j'ai pu mieux voir la photo de profil."
+  },
+  {
+   "text": "La personne à qui il écrivait semblait extrêmement jeune."
+  },
+  {
+   "text": "Elle ressemblait à une fille de treize ans, mais ensuite j'ai vu les messages plus clairement."
+  },
+  {
+   "text": "Il tapait des choses comme : « Je suis tellement fier de ta maturité » et « Je n'arrive pas à croire que tu aies déjà treize ans."
+  },
+  {
+   "text": "» Je l'ai regardé taper un message sur le fait qu'il avait hâte de la retrouver enfin ce soir-là."
+  },
+  {
+   "text": "Il disait qu'il attendait le bon moment, et que ce soir serait enfin le moment."
+  },
+  {
+   "text": "Il lui a même demandé de porter le joli tutu qu'elle possédait de Shein."
+  },
+  {
+   "text": "Puis, juste après avoir envoyé ça, il s'est tourné vers Luisa et a dit : « Je ne peux pas dîner avec toi ce soir."
+  },
+  {
+   "text": "Ma mère m'a texté, elle a dit qu'elle avait besoin d'aide pour quelque chose."
+  },
+  {
+   "text": "» C'était un mensonge pour cacher qu'il allait retrouver la fille de treize ans."
+  },
+  {
+   "text": "Alors, pendant qu'il était concentré sur mes ongles, j'ai discrètement sorti mon propre téléphone et j'ai texté la police."
+  },
+  {
+   "text": "Ils ont dit qu'ils étaient en route. Je savais que je devais être au salon quand ils arriveraient."
+  },
+  {
+   "text": "Alors j'ai fait traîner les choses pour gagner du temps."
+  },
+  {
+   "text": "J'ai commencé à demander des trucs en plus que je n'aimais même pas."
+  },
+  {
+   "text": "À un moment, j'ai même enlevé mes chaussettes, sorti mes pieds, et je lui ai demandé une pédicure."
+  },
+  {
+   "text": "Il venait de finir mon pied gauche quand, enfin, j'ai vu les voitures de police s'arrêter dehors."
+  },
+  {
+   "text": "Les officiers sont entrés et se sont dirigés droit vers le mari de Luisa."
+  },
+  {
+   "text": "J'ai regardé les officiers parler à son mari, et il leur a montré son téléphone."
+  },
+  {
+   "text": "Je m'attendais à ce qu'ils l'arrêtent sur-le-champ, mais ils ne l'ont pas fait. À la place, ils ont commencé à rire."
+  },
+  {
+   "text": "C'était un rire si profond qu'ils en avaient littéralement le ventre qui tremblait. « Qu'est-ce qui se passe ?"
+  },
+  {
+   "text": "» j'ai demandé, extrêmement confuse. Ils sont venus vers moi et m'ont expliqué ce qui se passait vraiment."
+  },
+  {
+   "text": "En fait, la fille à qui il écrivait était sa fille biologique."
+  },
+  {
+   "text": "Sa fille dont son ex ne lui avait jamais dit qu'elle existait."
+  },
+  {
+   "text": "Sa fille avec qui il venait tout juste de commencer à construire une relation."
+  },
+  {
+   "text": "Il le cachait à Luisa parce qu'il ne savait pas encore comment lui en parler."
+  },
+  {
+   "text": "La rencontre dont il parlait, c'était sa fête de treizième anniversaire."
+  }
+ ],
+ "science": [],
+ "cast": [
+  "pipHood"
+ ],
+ "shots": [
+  {
+   "id": "S1",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 87,
+   "note": "Je me suis fait faire les ongles par un homme au lieu"
+  },
+  {
+   "id": "S2",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 105,
+   "note": "Quand ma technicienne habituelle Luisa m'a dit qu'elle n'avait pas de place"
+  },
+  {
+   "id": "S3",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 114,
+   "note": "À la moitié de la séance la batterie de mon téléphone était"
+  },
+  {
+   "id": "S4",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 34,
+   "note": "Mais c'est à ce moment là que c'est arrivé"
+  },
+  {
+   "id": "S5",
+   "size": "insert",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 70,
+   "note": "Une notification est apparue sur son écran qui disait Tu me manques"
+  },
+  {
+   "id": "S6",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 73,
+   "note": "et la photo de profil était clairement une fille une fille qui"
+  },
+  {
+   "id": "S7",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 69,
+   "note": "Je ne voulais pas supposer qu'il la trompait alors j'ai continué à"
+  },
+  {
+   "id": "S8",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 82,
+   "note": "Puis le message suivant est arrivé Si ce n'était pas pour Luisa"
+  },
+  {
+   "id": "S9",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 103,
+   "note": "Ensuite Tu représentes tout pour moi Je suis tellement heureux de t'avoir"
+  },
+  {
+   "id": "S10",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 41,
+   "note": "Et c'est là que son mari a ouvert la conversation"
+  },
+  {
+   "id": "S11",
+   "size": "insert",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 96,
+   "note": "J'ai fait comme si je ne faisais pas attention mais je regardais"
+  },
+  {
+   "id": "S12",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 45,
+   "note": "La personne à qui il écrivait semblait extrêmement jeune"
+  },
+  {
+   "id": "S13",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 72,
+   "note": "Elle ressemblait à une fille de treize ans mais ensuite j'ai vu"
+  },
+  {
+   "id": "S14",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 109,
+   "note": "Il tapait des choses comme Je suis tellement fier de ta maturité"
+  },
+  {
+   "id": "S15",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 72,
+   "note": "Je l'ai regardé taper un message sur le fait qu'il avait hâte"
+  },
+  {
+   "id": "S16",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 70,
+   "note": "Il disait qu'il attendait le bon moment et que ce soir serait"
+  },
+  {
+   "id": "S17",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 64,
+   "note": "Il lui a même demandé de porter le joli tutu qu'elle possédait"
+  },
+  {
+   "id": "S18",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 95,
+   "note": "Puis juste après avoir envoyé ça il s'est tourné vers Luisa et"
+  },
+  {
+   "id": "S19",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 54,
+   "note": "Ma mère m'a texté elle a dit qu'elle avait besoin d'aide pour"
+  },
+  {
+   "id": "S20",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 61,
+   "note": "C'était un mensonge pour cacher qu'il allait retrouver la fille de treize"
+  },
+  {
+   "id": "S21",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 97,
+   "note": "Alors pendant qu'il était concentré sur mes ongles j'ai discrètement sorti mon"
+  },
+  {
+   "id": "S22",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 67,
+   "note": "Ils ont dit qu'ils étaient en route Je savais que je devais"
+  },
+  {
+   "id": "S23",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 41,
+   "note": "Alors j'ai fait traîner les choses pour gagner du temps"
+  },
+  {
+   "id": "S24",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 46,
+   "note": "J'ai commencé à demander des trucs en plus que je n'aimais même"
+  },
+  {
+   "id": "S25",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 73,
+   "note": "À un moment j'ai même enlevé mes chaussettes sorti mes pieds et"
+  },
+  {
+   "id": "S26",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 76,
+   "note": "Il venait de finir mon pied gauche quand enfin j'ai vu les"
+  },
+  {
+   "id": "S27",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 62,
+   "note": "Les officiers sont entrés et se sont dirigés droit vers le mari"
+  },
+  {
+   "id": "S28",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 55,
+   "note": "J'ai regardé les officiers parler à son mari et il leur a"
+  },
+  {
+   "id": "S29",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 92,
+   "note": "Je m'attendais à ce qu'ils l'arrêtent sur le champ mais ils ne"
+  },
+  {
+   "id": "S30",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 87,
+   "note": "C'était un rire si profond qu'ils en avaient littéralement le ventre qui"
+  },
+  {
+   "id": "S31",
+   "size": "wide",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 89,
+   "note": "j'ai demandé extrêmement confuse Ils sont venus vers moi et m'ont expliqué"
+  },
+  {
+   "id": "S32",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 58,
+   "note": "En fait la fille à qui il écrivait était sa fille biologique"
+  },
+  {
+   "id": "S33",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 50,
+   "note": "Sa fille dont son ex ne lui avait jamais dit qu'elle existait"
+  },
+  {
+   "id": "S34",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 57,
+   "note": "Sa fille avec qui il venait tout juste de commencer à construire"
+  },
+  {
+   "id": "S35",
+   "size": "close",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 59,
+   "note": "Il le cachait à Luisa parce qu'il ne savait pas encore comment"
+  },
+  {
+   "id": "S36",
+   "size": "medium",
+   "set": "un petit salon de manucure de quartier, le soir : tables de travail en formica crème, murs vert sauge, néons d'enseigne rose dehors, étagères de vernis, plante, fenêtre sur la rue et comptoir-manucure. récit raconté à la première personne par une cliente ; ce n'est pas un fait réel vérifié.",
+   "key": 56,
+   "note": "La rencontre dont il parlait c'était sa fête de treizième anniversaire"
+  }
+ ],
+ "edit": [
+  {
+   "shot": "S1",
+   "at": "f:0"
+  },
+  {
+   "shot": "S2",
+   "at": "quand"
+  },
+  {
+   "shot": "S3",
+   "at": "à"
+  },
+  {
+   "shot": "S4",
+   "at": "mais"
+  },
+  {
+   "shot": "S5",
+   "at": "une"
+  },
+  {
+   "shot": "S6",
+   "size": "insert",
+   "at": "et"
+  },
+  {
+   "shot": "S7",
+   "at": "je"
+  },
+  {
+   "shot": "S8",
+   "at": "puis"
+  },
+  {
+   "shot": "S9",
+   "at": "ensuite"
+  },
+  {
+   "shot": "S10",
+   "at": "et"
+  },
+  {
+   "shot": "S11",
+   "at": "j'ai"
+  },
+  {
+   "shot": "S12",
+   "at": "la#2"
+  },
+  {
+   "shot": "S13",
+   "at": "elle"
+  },
+  {
+   "shot": "S14",
+   "at": "il"
+  },
+  {
+   "shot": "S15",
+   "at": "je#3"
+  },
+  {
+   "shot": "S16",
+   "at": "il"
+  },
+  {
+   "shot": "S17",
+   "at": "il"
+  },
+  {
+   "shot": "S18",
+   "at": "puis"
+  },
+  {
+   "shot": "S19",
+   "size": "insert",
+   "at": "ma"
+  },
+  {
+   "shot": "S20",
+   "at": "c'était"
+  },
+  {
+   "shot": "S21",
+   "at": "alors"
+  },
+  {
+   "shot": "S22",
+   "at": "ils"
+  },
+  {
+   "shot": "S23",
+   "at": "alors"
+  },
+  {
+   "shot": "S24",
+   "at": "j'ai#2"
+  },
+  {
+   "shot": "S25",
+   "at": "à#2"
+  },
+  {
+   "shot": "S26",
+   "at": "il"
+  },
+  {
+   "shot": "S27",
+   "at": "les#2"
+  },
+  {
+   "shot": "S28",
+   "at": "j'ai"
+  },
+  {
+   "shot": "S29",
+   "at": "je"
+  },
+  {
+   "shot": "S30",
+   "at": "c'était"
+  },
+  {
+   "shot": "S31",
+   "at": "j'ai"
+  },
+  {
+   "shot": "S32",
+   "at": "en"
+  },
+  {
+   "shot": "S33",
+   "at": "sa#2"
+  },
+  {
+   "shot": "S34",
+   "at": "sa"
+  },
+  {
+   "shot": "S35",
+   "at": "il#2"
+  },
+  {
+   "shot": "S36",
+   "at": "la"
+  }
+ ],
+ "fx": [
+  {
+   "at": "S36",
+   "kind": "flash",
+   "color": "#FF3344",
+   "o": 0.4
+  },
+  {
+   "at": "S36",
+   "kind": "shake",
+   "len": 8,
+   "amp": 10
+  }
+ ],
+ "source": {
+  "provider": "nouveau",
+  "videoId": "7609890127925513503",
+  "title": "What I Saw On His Phone \n . \n \n #3danimation, #animationart,\n #digita...",
+  "url": "https://www.tiktok.com/@herytstory/video/7609890127925513503",
+  "durationSeconds": 123,
+  "proposalId": 1323,
+  "promptType": "elevenlabs",
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "chars": 3299,
+  "words": 609,
+  "narratorGender": "male",
+  "recommendedVoiceId": "3Tp5mYhT9wrfnry9pzvV",
+  "recommendedVoiceName": "Hugo",
+  "existingTts": {
+   "exists": true,
+   "id": 552,
+   "path": "/downloads/tts/tts_elevenlabs_7609890127925513503_eleven_v4_3Tp5mYhT9wrfnry9pzvV.mp3",
+   "filename": "tts_elevenlabs_7609890127925513503_eleven_v4_3Tp5mYhT9wrfnry9pzvV.mp3",
+   "voice": "elevenlabs:3Tp5mYhT9wrfnry9pzvV",
+   "model": "elevenlabs:eleven_v4",
+   "speaking_rate": "1.15",
+   "duration_seconds": 159.349625,
+   "has_transcript": true,
+   "file_exists": true
+  },
+  "updatedAt": "2026-11-10T14:31:53",
+  "appliedBlocks": 35
+ },
+ "voice": {
+  "provider": "elevenlabs",
+  "voiceId": "KSyQzmsYhFbuOhqj1Xxv",
+  "modelId": "eleven_v4",
+  "speakingRate": 1.15,
+  "voiceName": "Léa",
+  "narratorGender": "female"
+ },
+ "sound": {
+  "clips": {
+   "copy_click": [
+    "a crisp satisfying computer copy click with a tiny soft digital chime, short",
+    0.5
+   ],
+   "ding": [
+    "a correct answer ding, bright bell chime",
+    0.8
+   ],
+   "drone_hit": [
+    "a dark ominous low drone hit, deep cinematic horror sting",
+    2.6
+   ],
+   "music": [
+    "playful quirky cartoon background music, pizzicato strings, glockenspiel and soft bass, light and curious, 110 bpm, no vocals",
+    17.0
+   ],
+   "paper_land": [
+    "a thick stack of paper sheets dropped flat on a wooden desk, a soft slap and rustle",
+    0.7
+   ],
+   "paste_pop": [
+    "a bright magical pop as an object appears out of thin air, a soft shimmering whoosh into a pop",
+    0.7
+   ],
+   "pop": [
+    "a cartoon speech bubble pop, short and bright",
+    0.5
+   ],
+   "room_tone": [
+    "quiet indoor room tone in the evening, faint distant city hum, no voices",
+    12.5
+   ],
+   "select_draw": [
+    "a quick digital selection sound, a soft rising electronic shimmer as a box is drawn on screen, short",
+    0.6
+   ],
+   "sparkle": [
+    "a short bright magical sparkle twinkle, cartoon",
+    0.8
+   ],
+   "switch_off": [
+    "a heavy electrical breaker switching off with a dull clunk",
+    0.5
+   ],
+   "title_boom": [
+    "a cinematic whoosh rising into a deep boom impact",
+    1.6
+   ]
+  },
+  "events": [
+   [
+    "S1",
+    "room_tone",
+    0.12,
+    "onset",
+    "S36"
+   ],
+   [
+    "S1+3",
+    "select_draw",
+    0.24
+   ],
+   [
+    "S2+3",
+    "paper_land",
+    0.24
+   ],
+   [
+    "S3+3",
+    "pop",
+    0.24
+   ],
+   [
+    "S4+3",
+    "copy_click",
+    0.24
+   ],
+   [
+    "S5+3",
+    "paste_pop",
+    0.24
+   ],
+   [
+    "S6+3",
+    "sparkle",
+    0.24
+   ],
+   [
+    "S7+3",
+    "ding",
+    0.24
+   ],
+   [
+    "S8+3",
+    "select_draw",
+    0.24
+   ],
+   [
+    "S9+3",
+    "paper_land",
+    0.24
+   ],
+   [
+    "S10+3",
+    "pop",
+    0.24
+   ],
+   [
+    "S11+3",
+    "copy_click",
+    0.24
+   ],
+   [
+    "S12+3",
+    "paste_pop",
+    0.24
+   ],
+   [
+    "S13+3",
+    "sparkle",
+    0.24
+   ],
+   [
+    "S14+3",
+    "ding",
+    0.24
+   ],
+   [
+    "S15+3",
+    "select_draw",
+    0.24
+   ],
+   [
+    "S16+3",
+    "paper_land",
+    0.24
+   ],
+   [
+    "S17+3",
+    "pop",
+    0.24
+   ],
+   [
+    "S18+3",
+    "copy_click",
+    0.24
+   ],
+   [
+    "S19+3",
+    "paste_pop",
+    0.24
+   ],
+   [
+    "S20+3",
+    "sparkle",
+    0.24
+   ],
+   [
+    "S21+3",
+    "ding",
+    0.24
+   ],
+   [
+    "S22+3",
+    "select_draw",
+    0.24
+   ],
+   [
+    "S23+3",
+    "paper_land",
+    0.24
+   ],
+   [
+    "S24+3",
+    "pop",
+    0.24
+   ],
+   [
+    "S25+3",
+    "copy_click",
+    0.24
+   ],
+   [
+    "S26+3",
+    "paste_pop",
+    0.24
+   ],
+   [
+    "S27+3",
+    "sparkle",
+    0.24
+   ],
+   [
+    "S28+3",
+    "ding",
+    0.24
+   ],
+   [
+    "S29+3",
+    "select_draw",
+    0.24
+   ],
+   [
+    "S30+3",
+    "paper_land",
+    0.24
+   ],
+   [
+    "S31+3",
+    "pop",
+    0.24
+   ],
+   [
+    "S32+3",
+    "copy_click",
+    0.24
+   ],
+   [
+    "S33+3",
+    "paste_pop",
+    0.24
+   ],
+   [
+    "S34+3",
+    "sparkle",
+    0.24
+   ],
+   [
+    "S35+3",
+    "ding",
+    0.24
+   ],
+   [
+    "S36",
+    "drone_hit",
+    0.35
+   ],
+   [
+    "S36+18",
+    "switch_off",
+    0.28
+   ]
+  ],
+  "repeats": [],
+  "music": {
+   "clip": "music",
+   "until": "S36"
+  },
+  "levels": {
+   "sfx_lu": -1.5,
+   "music_lu": -9.5
+  }
+ }
+}

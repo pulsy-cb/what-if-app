@@ -166,20 +166,31 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const dx = spotOfPerson(j).x - spotOfPerson(i).x;
       return Math.sign(dx || 1) * Math.max(Math.abs(yaw ?? 0), 0.5);
     };
+    const baseYaw = (p: PersonSpec): number | undefined => p.yaw ?? (p.on ? pl.seatYaw?.(p.on) : undefined);
     const yawAt = (i: number): number => {
       const p = people[i]!;
-      let y = yawToward(i, p.look, flipYaw(p.yaw)) ?? 0;
+      let y = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
       for (const b of sortBeats(p.beats)) if (b.at <= t && (b.yaw !== undefined || b.look !== undefined)) y = yawToward(i, b.look, flipYaw(b.yaw) ?? y) ?? y;
       return y;
     };
+    const personFramePoint = (i: number) => {
+      const subject = people[i]!;
+      const g = spotOfPerson(i);
+      const b = legsOf(subject);
+      const sitting = subject.on !== undefined || subject.stance === 'sit';
+      return { x: g.x, y: g.y + (sitting ? b.thigh * g.scale * 0.85 : 0), scale: g.scale * ((b.thigh + b.shin) / 140) };
+    };
     const focusOn = (i: number) => {
-      const subject = people[i];
-      if (subject) {
-        const g = spotOfPerson(i);
-        const b = legsOf(subject);
-        const sitting = subject.on !== undefined || subject.stance === 'sit';
-        return { x: g.x, y: g.y + (sitting ? b.thigh * g.scale * 0.85 : 0), scale: g.scale * ((b.thigh + b.shin) / 140) };
+      if (i === -2 && people.length >= 2) {
+        const pts = people.slice(0, 3).map((_, k) => personFramePoint(k));
+        const xs = pts.map((p) => p.x);
+        return {
+          x: (Math.min(...xs) + Math.max(...xs)) / 2,
+          y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+          scale: pts.reduce((s, p) => s + p.scale, 0) / pts.length,
+        };
       }
+      if (people[i]) return personFramePoint(i);
       if (spec.duo) {
         const da = flipAt(spec.duo.a.at) as { u: number; w: number };
         const db = flipAt(spec.duo.b.at) as { u: number; w: number };
@@ -190,7 +201,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       return pl.ground.project(0.5, 0.45);
     };
     const cameraFor = (c: CamSpec, on: number) => {
-      const sized = typeof c === 'string' ? frameOn(c, focusOn(on), people[on] ? yawAt(on) : 0) : c;
+      const groupWide = c === 'wide' && on === 0 && spec.on === undefined && people.length >= 2;
+      const sized = typeof c === 'string' ? frameOn(c, focusOn(groupWide ? -2 : on), !groupWide && people[on] ? yawAt(on) : 0) : c;
       // a tall frame must not reach below the room's near floor edge, where nothing is drawn
       return typeof c === 'string' && c !== 'establishing' ? { ...sized, y: Math.min(sized.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * sized.zoom)) } : sized;
     };
@@ -250,14 +262,14 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             // faces given in beats join the face keyframes
             const baseFace: [number, FaceExpr][] = p.face === undefined ? [] : typeof p.face === 'string' ? [[0, p.face]] : p.face;
             const faces = [...baseFace, ...beats.filter((b) => b.face).map((b): [number, FaceExpr] => [b.at, b.face!])].sort((a, b) => a[0] - b[0]);
-            let yawRun = yawToward(i, p.look, flipYaw(p.yaw)) ?? 0;
+            let yawRun = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
             const stageBeats: StageBeat[] = beats.map((b) => {
               if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
               return { at: b.at, act: b.act, yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
             });
             const reach = targetOf(p.reach);
             return (
-              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(p.yaw))} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
+              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
                 pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
                 rimId={rimId} headGear={headGear} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
             );
@@ -329,6 +341,7 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
       ) : null}
     </g>
   );
+  const bannerTop = spec.screen === 'lock' ? H * 0.28 : H * 0.065;
   const banner = spec.notify
     ? (() => {
         const k = ease01((t - spec.notify.at) / 7);
@@ -336,7 +349,7 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
         const lines = wrapText(spec.notify.text, 26).slice(0, 3);
         const bh = fs * (2.6 + lines.length * 1.25);
         return (
-          <g transform={`translate(${pad * 0.6} ${H * 0.065 - (1 - k) * (bh + H * 0.08)})`} opacity={k}>
+          <g transform={`translate(${pad * 0.6} ${bannerTop - (1 - k) * (bh + H * 0.08)})`} opacity={k}>
             <rect width={W - pad * 1.2} height={bh} rx={fs * 0.9} fill="#F7F4EE" opacity={0.97} />
             <rect x={fs * 0.6} y={fs * 0.6} width={fs * 1.5} height={fs * 1.5} rx={fs * 0.4} fill="#35C759" />
             <text x={fs * 2.5} y={fs * 1.6} fontSize={fs * 0.9} fontWeight={700} fill="#1C1C22" fontFamily={font}>{spec.notify.from ?? spec.name}</text>
@@ -353,33 +366,38 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
         <rect width={W} height={H} fill="#1B2440" />
         <rect width={W} height={H} fill="url(#phoneLockGlow)" />
         {status}
-        <text x={W / 2} y={H * 0.26} textAnchor="middle" fontSize={fs * 4.2} fontWeight={300} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
+        <text x={W / 2} y={H * 0.21} textAnchor="middle" fontSize={fs * 4.2} fontWeight={300} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
         {banner}
       </g>
     );
   }
   // chat: header, bubbles stacked from the top and scrolled so the newest stays above the input bar
   const headerH = H * 0.13;
-  const inputH = H * 0.09;
+  const inputH = H * 0.095;
   const shown = (spec.messages ?? []).filter((m) => t >= m.at);
   const lineH = fs * 1.3;
   const blocks = shown.map((m) => {
-    const lines = wrapText(m.text, 22);
+    const lines = wrapText(m.text, 20);
     return { m, lines, h: lines.length * lineH + fs * 1.1 };
   });
   const gap = fs * 0.55;
   const total = blocks.reduce((s, b) => s + b.h + gap, 0);
-  const room = H - headerH - inputH - fs;
+  const room = H - headerH - inputH - fs * 1.8;
   let y = headerH + fs * 0.6 - Math.max(0, total - room);
   const typed = spec.typing ? spec.typing.text.slice(0, Math.floor(spec.typing.text.length * clamp((t - spec.typing.at) / (spec.typing.dur ?? 30), 0, 1))) : '';
   return (
     <g>
+      <defs>
+        <clipPath id="phoneChatClip">
+          <rect x={0} y={headerH} width={W} height={H - headerH - inputH} />
+        </clipPath>
+      </defs>
       <rect width={W} height={H} fill="#10141C" />
-      <g>
+      <g clipPath="url(#phoneChatClip)">
         {blocks.map(({ m, lines, h }, i) => {
           const mine = m.from === 'me';
           const k = ease01((t - m.at) / 6);
-          const bw = Math.min(W * 0.74, Math.max(...lines.map((l) => l.length)) * fs * 0.56 + fs * 1.4);
+          const bw = Math.min(W * 0.8, Math.max(fs * 2.6, Math.max(...lines.map((l) => l.length)) * fs * 0.58 + fs * 1.5));
           const x = mine ? W - pad * 0.7 - bw : pad * 0.7;
           const top = y;
           y += h + gap;
@@ -429,7 +447,7 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
       <g>
         {Back ? (
           <g filter="url(#blur6)" opacity={0.85}>
-            <Back t={0} len={len} />
+            <Back t={t} len={len} f={t} />
           </g>
         ) : (
           <rect x={-2000} y={-2000} width={6000} height={6000} fill="#2A2730" />
@@ -451,12 +469,12 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
           <rect x={cx - W * 0.12} y={cy - H / 2 + bezel * 1.6} width={W * 0.24} height={bezel * 1.1} rx={bezel * 0.55} fill="#05070A" />
           {skin ? (
             <g>
-              {/* the hand holding it: fingers on the left edge, the thumb over the bottom right of the screen */}
+              {/* the hand holding it: fingers on the left edge, the thumb over the bottom input bar */}
               {[0.18, 0.3, 0.42].map((v, i) => (
                 <rect key={i} x={cx - W / 2 - W * 0.07} y={cy - H / 2 + H * (0.45 + v * 0.6)} width={W * 0.12} height={H * 0.06} rx={H * 0.03} fill={skin} />
               ))}
-              <path d={`M ${cx - W * 0.3} ${cy + H * 0.62} Q ${cx - W * 0.1} ${cy + H * 0.3} ${cx + W * 0.62} ${cy + H * 0.36} L ${cx + W * 0.7} ${cy + H * 0.7} Z`} fill={skin} />
-              <ellipse cx={cx + W * 0.14} cy={cy + H * 0.34 - tap} rx={W * 0.13} ry={W * 0.075} fill={skin} transform={`rotate(-28 ${cx + W * 0.14} ${cy + H * 0.34 - tap})`} />
+              <path d={`M ${cx - W * 0.28} ${cy + H * 0.66} Q ${cx - W * 0.08} ${cy + H * 0.38} ${cx + W * 0.62} ${cy + H * 0.43} L ${cx + W * 0.7} ${cy + H * 0.74} Z`} fill={skin} />
+              <ellipse cx={cx + W * 0.16} cy={cy + H * 0.42 - tap} rx={W * 0.12} ry={W * 0.068} fill={skin} transform={`rotate(-26 ${cx + W * 0.16} ${cy + H * 0.42 - tap})`} />
             </g>
           ) : null}
         </g>

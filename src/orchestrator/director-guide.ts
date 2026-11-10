@@ -6,7 +6,7 @@
  */
 /** The default way to write a shot. Sent only when the project's engine has src/engine/shot.tsx (the overlay). */
 export const SHOT_GUIDE = `## shot(): describe a shot, the engine draws it (the default in this project)
-import { shot, place, cast, definePiece } from '../../engine';
+import { shot, phoneShot, place, cast, definePiece } from '../../engine';
 
 const ROOM = place('classroom', { mood: 'day', slots: { board: <text y={20} textAnchor="middle" fontSize={64} fill="#EDE8DE">x = 2y + 3</text> } });
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'] });
@@ -23,6 +23,7 @@ export const S3 = shot({ place: ROOM, cam: 'medium', on: 0, beats: [{ at: 30, ca
   { who: PROF, at: { u: 0.25, w: 0.3 }, look: 0, act: 'cross-arms', face: 'neutral', beats: [{ at: 30, face: 'smug', reach: { to: 'd4' } }] },
 ] });
 export const S4 = shot({ place: ROOM, cam: 'wide', duo: { a: { who: LOU, at: { u: 0.36, w: 0.55 } }, b: { who: PROF, at: { u: 0.62, w: 0.55 } }, action: 'handshake', from: 10 } });
+export const S5 = phoneShot({ name: 'Camille', back: ROOM, messages: [{ at: 14, text: 'Tu me manques' }, { at: 38, text: 'Ce soir ?', from: 'me' }], typing: { at: 52, text: 'Oui', dur: 18 } });
 
 Every shot of a place reuses the same \`place(...)\` constant, so layout and props stay identical from shot to shot. Register S1, S2... in index.tsx as usual.
 **shot({...})**
@@ -41,19 +42,20 @@ The frame of each word is given per shot in "When each word is said" (word@frame
 - \`angle: 'low'\` (looking up: the person looms, for power or threat) or \`'high'\` (looking down: small, alone, crushed); also as a camera beat. Use one whenever the shot list says "low angle" or "high angle".
 - To fix one shot later, send it whole with edit_shot { episode, id: 'S7', code: 'export const S7 = shot({...});' }: no need to read shots.tsx first.
 - \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
+- \`phoneShot({ name, screen, messages, notify, typing, battery, time, back, case, skin })\`: full-frame phone insert (16:9 & 9:16), \`screen: 'chat' | 'lock'\`, bubbles arriving on \`at\` (word frame), \`notify: { at, text }\` banner, \`typing: { at, text, dur }\`, \`skin: null\` to hide the hand. Set \`"size": "insert"\` in episode.json for every \`phoneShot\`.
 **place(name, { mood, palette, add, remove, pieces, slots, lights })**
-- Indoors: classroom bedroom kitchen living office restaurant corridor hallway hospital clinic police-office cell shop diner salon reception auditorium cafeteria blank.
+- Indoors: classroom bedroom kitchen living office restaurant corridor hallway hospital clinic police-office cell shop diner salon nails reception auditorium cafeteria blank.
   Outdoors (sky and ground, no walls): street garden park schoolyard rooftop. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.
 - Pieces (use the name as \`p\`): desk table chair sofa coffee-table bed nightstand wardrobe bookshelf counter fridge plant bin floor-lamp rug hospital-bed monitor iv-stand curtain locker shelf stage podium seat-row round-table arch bars bench picnic-table flowers tree street-lamp car bus
   / on the back wall: window board whiteboard pinboard frame clock tv door mirror screen wall-shelf alarm facade house skyline fence hedge / flat: road sidewalk path parapet.
   Outdoors the back wall is the far side of the street: line it with facade (opt: { floors, door }), house, skyline, fence or hedge, with u from -0.3 to 1.3 so a 16:9 wide stays full.
-  add: [{ p: 'sofa', id: 'couch', at: { u: 0.3, w: 0.4 }, len: 0.3, color: '#B0463A' }]. remove: ['clock', 'd3']. id is how \`on\` and \`slots\` refer to a piece; seats: desk table chair sofa bed hospital-bed bench picnic-table round-table seat-row. Ready recipes name their desks d1 d2 d3 d4 (classroom), d1 d2 (office), t1 t2 (restaurant), c1 c2 (kitchen).
+  add: [{ p: 'sofa', id: 'couch', at: { u: 0.3, w: 0.4 }, len: 0.3, color: '#B0463A' }]. remove: ['clock', 'd3']. id is how \`on\` and \`slots\` refer to a piece; seats: desk table chair sofa bed hospital-bed bench picnic-table round-table seat-row. Ready recipes name their desks d1 d2 d3 d4 (classroom), d1 d2 (office), t1 t2 (restaurant), c1 c2 (kitchen), t1/t2 + tech1/client1/tech2/client2 (nails).
 - slots: what is on a piece by id (board, whiteboard, tv, table). A slot's origin (0, 0) is the centre of that piece.
 - In 9:16 keep important pieces within u 0.2-0.8 at mid-depth: the frame shows 1058 units across.
 **Not in the catalogue? Nothing blocks you, in this order:**
 1. place('blank', { pieces: [...] }) for a room, or a close outdoor recipe with pieces: [...] for an open-air place (a beach: park with a palette and your pieces), from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
 2. definePiece('arcade', { kind: 'floor', len: 0.12, deep: 0.08, draw }) at the top of shots.tsx when several shots use it.
-3. Not a room at all (a street, a car, space, a diagram) or a staging shot() cannot do: write that shot by hand with <Stage>, or with camT and engine sets (Outdoor, Rooftop, Vehicle, Schematic). Hand-written and shot() shots mix freely in one episode.
+3. Write a shot by hand ONLY for what \`shot()\` and \`phoneShot()\` cannot draw (a vehicle interior, a custom diagram), one shot at a time. Never rewrite a whole episode by hand: the audit refuses a board when more than half the character shots bypass \`shot()\`, or when a 9:16 hand-written shot uses a 1920x1080 backdrop / y=1080 reflection. Keep DIRECTOR.md shot sizes in sync when you change a shot to \`insert\`.
 Something the list above does not have is never a reason to give up on the place the story needs.`;
 
 /** How to place people in depth. Sent only when the project's engine has src/engine/stage.tsx (the overlay). */
@@ -128,7 +130,7 @@ export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.ts
   Allowed range is 0.6-4.5. A wide shows the character small inside a lit, full room.
 - Cuts come from CHANGING SIZE and ANGLE, not from motion. Two neighbouring shots never share size + angle.
   A board has wides, inserts, mediums, close-ups and at least one high or low angle. Keep a hold under ~3 s unless
-  something moves inside it (dust, steam, a sway, a slow push-in with camPush).
+  something moves inside it (dust, steam, a sway, a slow push-in with camPush). In 9:16 vertical episodes (any duration), keep a brisk short pace (>= 20 cuts/min, ~2.4 s per shot, no shot over 5 s).
 - A shot may have NO character (an establishing wide, an object insert, a UI screen): set its "size" to
   "establishing" or "insert" in episode.json and the audit accepts it. Use it when the line is about a place or a thing.
 

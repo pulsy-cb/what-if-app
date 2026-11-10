@@ -98,7 +98,19 @@ export const PIECES: Record<string, PieceDef> = {
   table: { kind: 'floor', len: 0.34, deep: 0.16, stool: true, seats: (c, i) => ({ u: c.u + c.len * (0.25 + 0.5 * (i % 2)), w: c.w + c.deep + 0.03 }),
     draw: (c) => { const s = tone(c.color, c.T.wood); return <g>{shadow(c)}{legs(c, 0.84)}<Box r={c.r} u={[c.u, c.u + c.len]} v={[0.8, 0.84]} w={[c.w, c.w + c.deep]} front={s.front} top={s.top} side={s.side} rim />{slotAt(c.r.P(c.u + c.len / 2, 0.8, c.w + c.deep / 2).x, c.r.P(c.u + c.len / 2, 0.8, c.w + c.deep / 2).y, c.slot)}</g>; } },
   chair: { kind: 'floor', len: 0.07, deep: 0.05, seats: (c) => ({ u: c.u + c.len / 2, w: c.w + c.deep / 2 + 0.01 }),
-    draw: (c) => { const s = tone(c.color, c.T.wood); return <g>{shadow(c)}{legs(c, 0.88)}<Box r={c.r} u={[c.u, c.u + c.len]} v={[0.86, 0.89]} w={[c.w, c.w + c.deep]} front={s.front} top={s.top} side={s.side} /><Box r={c.r} u={[c.u, c.u + c.len]} v={[0.68, 0.87]} w={[c.w, c.w + 0.008]} front={s.front} top={s.top} side={s.side} /></g>; } },
+    draw: (c) => {
+      const s = tone(c.color, c.T.wood);
+      const face = String(c.opt.face ?? 'front');
+      const back =
+        face === 'right'
+          ? <Box r={c.r} u={[c.u, c.u + 0.012]} v={[0.68, 0.87]} w={[c.w, c.w + c.deep]} front={s.front} top={s.top} side={s.side} />
+          : face === 'left'
+            ? <Box r={c.r} u={[c.u + c.len - 0.012, c.u + c.len]} v={[0.68, 0.87]} w={[c.w, c.w + c.deep]} front={s.front} top={s.top} side={s.side} />
+            : face === 'back'
+              ? <Box r={c.r} u={[c.u, c.u + c.len]} v={[0.68, 0.87]} w={[c.w + c.deep - 0.008, c.w + c.deep]} front={s.front} top={s.top} side={s.side} />
+              : <Box r={c.r} u={[c.u, c.u + c.len]} v={[0.68, 0.87]} w={[c.w, c.w + 0.008]} front={s.front} top={s.top} side={s.side} />;
+      return <g>{shadow(c)}{legs(c, 0.88)}<Box r={c.r} u={[c.u, c.u + c.len]} v={[0.86, 0.89]} w={[c.w, c.w + c.deep]} front={s.front} top={s.top} side={s.side} />{back}</g>;
+    } },
   sofa: { kind: 'floor', len: 0.34, deep: 0.16, seats: (c, i) => ({ u: c.u + c.len * (0.25 + 0.5 * (i % 2)), w: c.w + c.deep * 0.7 }),
     draw: (c) => { const s = tone(c.color, c.T.fabric); return (
       <g>
@@ -432,10 +444,10 @@ Object.assign(PLACES, {
     pieces: [{ p: 'mirror', at: { u: 0.43 } }, { p: 'wall-shelf', at: { u: 0.12 } }, { p: 'chair', id: 'seat', at: { u: 0.47, w: 0.3 }, color: '#1B1B22' }, { p: 'counter', id: 'counter', at: { u: 0.72, w: 0 }, len: 0.26 }, { p: 'plant', at: { u: 0.08, w: 0.2 } }],
     front: [{ p: 'window', at: { u: 0.15 }, len: 0.3 }, { p: 'door', at: { u: 0.62 } }] },
   // a nail salon: two manicure tables, the technician on one side and the client on the other (telephone-salon, 2026-11-10)
-  nails: { mood: 'dusk', floor: 'boards', palette: { wall: '#7E9C86', side: '#6C8A74', floor: '#4A3629', wood: '#EFE4D2' }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
+  nails: { mood: 'dusk', floor: 'boards', palette: { wall: '#7E9C86', side: '#6C8A74', floor: '#4A3629', wood: '#EFE4D2' }, lights: [{ u: 0.32, w: 0.35 }, { u: 0.68, w: 0.35 }],
     pieces: [{ p: 'window', at: { u: 0.04 }, len: 0.2, opt: { curtains: false } }, { p: 'wall-shelf', at: { u: 0.3 } }, { p: 'wall-shelf', at: { u: 0.52 } }, { p: 'frame', at: { u: 0.8 }, opt: { art: 2 } },
-      { p: 'table', id: 't1', at: { u: 0.2, w: 0.42 }, len: 0.18, deep: 0.1 }, { p: 'chair', id: 'tech1', at: { u: 0.15, w: 0.44 } }, { p: 'chair', id: 'client1', at: { u: 0.41, w: 0.44 } },
-      { p: 'table', id: 't2', at: { u: 0.58, w: 0.42 }, len: 0.18, deep: 0.1 }, { p: 'chair', id: 'tech2', at: { u: 0.53, w: 0.44 } }, { p: 'chair', id: 'client2', at: { u: 0.79, w: 0.44 } },
+      { p: 'table', id: 't1', at: { u: 0.24, w: 0.43 }, len: 0.16, deep: 0.1 }, { p: 'chair', id: 'tech1', at: { u: 0.16, w: 0.44 }, opt: { face: 'right' } }, { p: 'chair', id: 'client1', at: { u: 0.41, w: 0.44 }, opt: { face: 'left' } },
+      { p: 'table', id: 't2', at: { u: 0.58, w: 0.43 }, len: 0.16, deep: 0.1 }, { p: 'chair', id: 'tech2', at: { u: 0.5, w: 0.44 }, opt: { face: 'right' } }, { p: 'chair', id: 'client2', at: { u: 0.75, w: 0.44 }, opt: { face: 'left' } },
       { p: 'plant', at: { u: 0.92, w: 0.16 } }],
     front: [{ p: 'counter', id: 'desk', at: { u: 0.3, w: 0 }, len: 0.3 }, { p: 'door', at: { u: 0.72 } }, { p: 'wall-shelf', at: { u: 0.08 } }] },
   // ---------------------------------------- big rooms: receptions, stages
@@ -474,6 +486,7 @@ export type Placed = {
   /** the room and what hangs on its walls; goes first in a Stage */ Shell: React.FC<{ t: number; id?: string }>;
   /** the furniture, as stage elements sorted by depth with the people */ items: (t: number) => React.ReactNode[];
   /** floor position of seat `i` on piece `id` */ seat: (id: string, i?: number) => { u: number; w: number };
+  /** natural yaw of seat on piece `id` when the chair faces sideways (e.g. across a manicure table) */ seatYaw?: (id: string) => number | undefined;
   has: (id: string) => boolean;
   /** true when someone sitting at piece `id` needs a stool under them */ wantsStool: (id: string) => boolean;
   /** the world point a hand goes to on piece `id` (its top, or the middle of a wall piece) */ pointOf: (id: string) => { x: number; y: number };
@@ -542,10 +555,17 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
   };
   const frontList = keep([...(opts.pieces ?? base.pieces), ...(opts.add ?? [])]).map(resolve);
   // the reverse view: floor pieces seen from the other end (those right behind the camera drop out), and the opposite wall
+  const mirrorFace = (f: unknown): string | undefined =>
+    f === 'right' ? 'left' : f === 'left' ? 'right' : f === 'back' ? 'front' : f === 'front' ? 'back' : undefined;
   const reverseList = [
     ...frontList
       .filter((x) => x.def.kind !== 'wall')
-      .map((x) => ({ ...x, u: 1 - x.u - x.len, w: x.def.kind === 'flat' ? Math.max(0, 1 - x.w - x.deep) : 1 - x.w - x.deep }))
+      .map((x) => ({
+        ...x,
+        u: 1 - x.u - x.len,
+        w: x.def.kind === 'flat' ? Math.max(0, 1 - x.w - x.deep) : 1 - x.w - x.deep,
+        opt: x.name === 'chair' ? { ...(x.opt ?? {}), face: mirrorFace(x.opt?.face ?? 'front') } : x.opt,
+      }))
       .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.9),
     ...keep(opts.front ?? base.front ?? [{ p: 'door', at: { u: 0.45 } }]).map(resolve),
   ];
@@ -594,7 +614,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       );
     const items: Placed['items'] = (t) =>
       resolved.filter((x) => x.def.kind === 'floor').map((x, i) => (
-        <StageItem key={i} depth={x.w + x.deep / 2}>
+        <StageItem key={i} depth={x.name === 'chair' && x.opt?.face === 'back' ? x.w + x.deep + 0.025 : x.w + x.deep / 2}>
           {x.def.draw(ctx(x, t))}
         </StageItem>
       ));
@@ -607,11 +627,16 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       if (!x.def.seats) throw new Error(`piece "${id}" has no seat: give the person an \`at\` instead.`);
       return x.def.seats(x, idx);
     };
+    const frontSeatYaw = (id: string): number | undefined => {
+      const face = findFront(id)?.piece.opt?.face;
+      return face === 'right' ? 0.75 : face === 'left' ? -0.75 : undefined;
+    };
     return {
       ground: roomGround(r),
       Shell,
       items,
       seat: frontSeat,
+      seatYaw: frontSeatYaw,
       has: (id) => !!findPiece(id),
       wantsStool: (id) => !!findFront(id)?.piece.def.stool || /^stool[1-4]?$/i.test(id),
       pointOf: (id) => {
