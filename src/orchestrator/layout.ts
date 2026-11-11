@@ -79,12 +79,18 @@ export async function inkBox(
 }
 
 /** One line per still: where the ink is, a warning when sparse, EMPTY when blank or half-dead (blocks the pipeline). */
-export async function layoutReport(dir: string): Promise<string> {
+export async function layoutReport(dir: string, onlyIds?: string[]): Promise<string> {
   let names: string[] = [];
   try {
     names = fs.readdirSync(dir).filter((n) => /\.png$/i.test(n)).sort();
   } catch {
     return '';
+  }
+  if (onlyIds?.length) {
+    const wanted = new Set(onlyIds.map((s) => s.trim().toUpperCase()).filter(Boolean));
+    if (wanted.size > 0) {
+      names = names.filter((n) => wanted.has(n.replace(/\.png$/i, '').toUpperCase()));
+    }
   }
   const lines: string[] = [];
   const warn: string[] = [];

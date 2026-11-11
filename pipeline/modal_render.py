@@ -163,7 +163,7 @@ def make_app(project: pathlib.Path):
         memory=int(os.environ.get("WHATIF_MODAL_MEMORY_MIB", "12288")),
         timeout=2400,
         max_containers=int(os.environ.get("WHATIF_MODAL_MAX_CONTAINERS", "12")),
-        scaledown_window=300,
+        scaledown_window=int(os.environ.get("WHATIF_MODAL_SCALEDOWN_SEC", "20")),
         retries=0,
         serialized=True,  # the function lives in a closure: it carries its own image
     )
@@ -400,7 +400,7 @@ def main(argv: list[str]) -> int:
                 total_frames = int(json.loads(tl_path.read_text(encoding="utf-8")).get("total") or 0)
             except Exception:
                 total_frames = 0
-        chunk_target = int(os.environ.get("WHATIF_MODAL_CHUNK_FRAMES", "1200"))
+        chunk_target = int(os.environ.get("WHATIF_MODAL_CHUNK_FRAMES", "300"))
         max_chunks = int(os.environ.get("WHATIF_MODAL_MAX_CHUNKS", "24"))
         if total_frames > chunk_target:
             n_chunks = min(max_chunks, max(2, (total_frames + chunk_target - 1) // chunk_target))
@@ -603,8 +603,17 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    import signal
+
+    def _handle_sigterm(_signum, _frame):
+        raise KeyboardInterrupt("SIGTERM received: tearing down Modal app cleanly")
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     try:
         sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt as exc:
+        result(ok=False, error=f"Interrupted: {exc}")
+        sys.exit(143)
     except Exception as exc:  # keep the failure machine-readable for the orchestrator
         result(ok=False, error=f"{type(exc).__name__}: {exc}")
         sys.exit(1)

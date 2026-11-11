@@ -1394,12 +1394,6 @@ const runStep: Tool = {
           : undefined;
     let failed = payload ? payload.ok === false : res.code !== 0;
 
-    // After rendering the video, automatically build the motion grids (`out/<slug>/motion/*.jpg`) so motion is inspected
-    if (input.step === 'render' && !failed && fs.existsSync(safeJoin(ctx.projectRoot, rawMp4))) {
-      const mg = await stepOnce('motiongrid');
-      if (mg.code === 0) extraNotes.push(`motion grids generated in out/${slug}/motion/:\n${mg.text}`);
-    }
-
     // The skill's storyboard.jpg is one tall strip (a 36-shot 9:16 episode is ~2280x10410): cut readable sheets of 8-9 shots
     // so the agent and the Reviewer can actually see each shot.
     if (input.step === 'board' && !failed) {
@@ -1434,7 +1428,14 @@ const runStep: Tool = {
         /* ignore optional mismatch check error */
       }
     }
-    const layout = input.step === 'stills' || input.step === 'board' ? await layoutReport(path.join(ctx.projectRoot, 'out', slug, 'board')).catch(() => '') : '';
+    const requestedShots = input.step === 'stills' ? extra.map((a) => a.trim()).filter((a) => /^S\d+$/i.test(a)) : [];
+    const layout =
+      input.step === 'stills' || input.step === 'board'
+        ? await layoutReport(
+            path.join(ctx.projectRoot, 'out', slug, 'board'),
+            requestedShots.length ? requestedShots : undefined,
+          ).catch(() => '')
+        : '';
     let layoutFailure = '';
     if (layout.includes('\nEMPTY:')) {
       failed = true;

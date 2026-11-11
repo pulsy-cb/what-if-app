@@ -9,8 +9,9 @@ import { Bus } from './bus.js';
 import { Approvals } from './approvals.js';
 import { defaultRegistry, type ToolContext, type ToolRegistry } from '../tools/index.js';
 import {
-  PROVIDER_MODEL_CATALOG,
-  PROVIDER_PRESETS,
+  discoverProviderModels,
+  getEnvProviderSummary,
+  getProviderPresets,
   hasAgyCli,
   hasCodexAuth,
   providerConfig,
@@ -149,6 +150,7 @@ export function createApp(config: Config = loadConfig()): App {
         const revCfg = reviewProviderConfig(db);
         const codexReady = hasCodexAuth();
         const agyReady = hasAgyCli();
+        const envProvider = getEnvProviderSummary();
         return json(res, 200, {
           provider: cfg.provider,
           baseURL: cfg.baseURL,
@@ -156,9 +158,9 @@ export function createApp(config: Config = loadConfig()): App {
           hasKey: cfg.provider === 'codex' ? codexReady : cfg.provider === 'agy' ? agyReady : Boolean(cfg.apiKey),
           codexReady,
           agyReady,
+          envProvider,
           reviewer: revCfg ? { provider: revCfg.provider, model: revCfg.model, baseURL: revCfg.baseURL } : null,
-          presets: PROVIDER_PRESETS,
-          catalog: PROVIDER_MODEL_CATALOG,
+          presets: getProviderPresets(),
           skillDir: config.skillDir,
           maxSteps: config.maxSteps,
         });
@@ -175,8 +177,29 @@ export function createApp(config: Config = loadConfig()): App {
       }
     }
 
-    // ---- providers (models you can pick, for the UI)
-    if (parts[1] === 'presets') return json(res, 200, PROVIDER_PRESETS);
+    // ---- live model discovery per provider
+    if (parts[1] === 'models') {
+      if (method === 'GET') {
+        const provider = url.searchParams.get('provider') || undefined;
+        const baseURL = url.searchParams.get('baseURL') || undefined;
+        const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
+        const result = await discoverProviderModels(db, { provider, baseURL, forceRefresh });
+        return json(res, 200, result);
+      }
+      if (method === 'POST') {
+        const body = await readJson(req);
+        const result = await discoverProviderModels(db, {
+          provider: typeof body.provider === 'string' ? body.provider : undefined,
+          baseURL: typeof body.baseURL === 'string' ? body.baseURL : undefined,
+          apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+          forceRefresh: Boolean(body.refresh),
+        });
+        return json(res, 200, result);
+      }
+    }
+
+    // ---- providers (presets you can pick, for the UI)
+    if (parts[1] === 'presets') return json(res, 200, getProviderPresets());
 
     // ---- projects
     if (parts[1] === 'projects') {

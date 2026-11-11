@@ -57,11 +57,17 @@ const AGY_MODEL_ALIASES: Record<string, string> = {
   '4-argon-high': 'gemini-4-argon-high',
 };
 
-/** Normalize user-friendly Antigravity model labels ("3.8 flash medium", "carbon low", "aragon low/medium") to canonical agy IDs. */
+/** Normalize user-friendly Antigravity model labels or preserve canonical agy model IDs untouched. */
 export function normalizeAgyModel(raw: string): string {
-  const cleaned = String(raw ?? '')
-    .trim()
-    .toLowerCase()
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return 'gemini-3.8-flash-medium';
+  const lower = trimmed.toLowerCase();
+  if (AGY_MODEL_ALIASES[lower]) return AGY_MODEL_ALIASES[lower]!;
+  // Preserve already-canonical CLI model IDs (e.g. claude-sonnet-4-6, gemini-3.8-flash-high, gpt-oss-120b-medium)
+  if (/^[a-z0-9][a-z0-9._:-]*$/i.test(trimmed) && !/\baragon\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  const cleaned = lower
     .replace(/\b(google|antigravity|agy)\b/g, '')
     .replace(/[()_]+/g, ' ')
     .trim()
@@ -71,6 +77,83 @@ export function normalizeAgyModel(raw: string): string {
     .replace(/^-|-$/g, '');
   if (!cleaned) return 'gemini-3.8-flash-medium';
   return AGY_MODEL_ALIASES[cleaned] ?? cleaned;
+}
+
+export function parseAgyModelsOutput(stdout: string): Array<{ id: string; label: string }> {
+  const out: Array<{ id: string; label: string }> = [];
+  const seen = new Set<string>();
+  for (const rawLine of String(stdout ?? '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^(telemetry\b|fetching\s+available\s+models|warning:|error:|available models|id\s+name)/i.test(line)) continue;
+    const m = line.match(/^([a-z0-9][a-z0-9._:-]*)(?:\t+|\s{2,})(.+)$/i) ?? line.match(/^([a-z0-9][a-z0-9._:-]+)$/);
+    if (!m) continue;
+    const id = m[1]!.trim();
+    const label = (m[2] ?? m[1]!).trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, label });
+  }
+  return out;
+}
+
+export async function listAgyModels(opts?: {
+  agyBin?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}): Promise<{ models: Array<{ id: string; label: string }>; error?: string }> {
+  const bin = resolveAgyBinary(opts?.agyBin);
+  if (!bin) {
+    return { models: [], error: 'Binaire agy introuvable' };
+  }
+  const timeoutMs = opts?.timeoutMs ?? 8_000;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...opts?.env,
+    GEMINI_FORCE_FILE_STORAGE: process.env.GEMINI_FORCE_FILE_STORAGE || 'true',
+    PATH: `${process.env.PATH ?? ''}:/usr/local/bin:${path.join(os.homedir(), '.local', 'bin')}`,
+  };
+
+  return await new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(bin, ['models'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      resolve({ models: parseAgyModelsOutput(stdout), error: `agy models timeout (${timeoutMs}ms)` });
+    }, timeoutMs);
+
+    child.stdout?.on('data', (c: Buffer) => {
+      stdout += c.toString('utf8');
+    });
+    child.stderr?.on('data', (c: Buffer) => {
+      stderr += c.toString('utf8');
+    });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ models: [], error: err.message });
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const models = parseAgyModelsOutput(stdout);
+      if (models.length > 0) {
+        resolve({ models });
+      } else {
+        const msg = (stderr || stdout).trim().slice(0, 300) || `agy models exited with code ${code}`;
+        resolve({ models: [], error: msg });
+      }
+    });
+  });
 }
 
 export function resolveAgyBinary(explicit?: string): string | null {

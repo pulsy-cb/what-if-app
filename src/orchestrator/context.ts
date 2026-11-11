@@ -89,8 +89,7 @@ commands for a human to paste: you call the tools.
      fix \`shots.tsx\` and re-run \`stills\` (for the changed shot IDs) and \`board\`.
 7. whatif_run sfx — generates/mixes \`public/<slug>/sfx.wav\` and \`public/<slug>/music.wav\` and sets stem
    volumes in \`timeline.json\`.
-8. whatif_run render — renders the video on **Modal** (and automatically builds the per-shot motion grids
-   in \`out/<slug>/motion/\`). Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
+8. whatif_run render — renders the video on **Modal**. Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
    \`out/<slug>/report.json\`.
 
 ## How you work
@@ -188,23 +187,32 @@ function memory(projectRoot: string): string {
 
 const TOOL_BUDGET = 2_500;
 
-function imagesFromPayload(payload: any, projectRoot: string, budget: { left: number }): ImagePart[] {
+type ImageBudget = { left: number; seen: Set<string> };
+
+function imagesFromPayload(payload: any, projectRoot: string, budget: ImageBudget): { images: ImagePart[]; skippedDuplicate: number } {
   const paths: string[] = Array.isArray(payload?.images) ? payload.images : [];
   const out: ImagePart[] = [];
+  let skippedDuplicate = 0;
   for (const rel of paths) {
-    if (out.length >= 3 || budget.left <= 0) break;
     if (!/\.(png|jpe?g|webp)$/i.test(rel)) continue;
+    const norm = path.posix.normalize(rel.replace(/\\/g, '/'));
+    if (budget.seen.has(norm)) {
+      skippedDuplicate++;
+      continue;
+    }
+    if (out.length >= 3 || budget.left <= 0) continue;
     try {
       const abs = path.join(projectRoot, rel);
       const st = fs.statSync(abs);
       if (st.size > budget.left || st.size > 4_000_000) continue;
       budget.left -= st.size;
+      budget.seen.add(norm);
       out.push({ mime: rel.toLowerCase().endsWith('.png') ? 'image/png' : rel.toLowerCase().endsWith('.webp') ? 'image/webp' : 'image/jpeg', data: fs.readFileSync(abs).toString('base64') });
     } catch {
       /* missing file: skip */
     }
   }
-  return out;
+  return { images: out, skippedDuplicate };
 }
 
 
@@ -635,7 +643,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
   const kept: ChatMessage[] = [];
   let used = headChars;
   let dropped = 0;
-  const imageBudget = { left: 4_500_000 };
+  const imageBudget: ImageBudget = { left: 4_500_000, seen: new Set<string>() };
 
   for (let i = history.length - 1; i >= 0; i--) {
     const row = history[i]!;
@@ -686,7 +694,7 @@ function toChatMessage(
   payload: any,
   content: string,
   projectRoot: string,
-  imageBudget: { left: number },
+  imageBudget: ImageBudget,
   age = 0,
 ): ChatMessage {
   if (row.role === 'tool') {
@@ -696,7 +704,12 @@ function toChatMessage(
     return { role: 'assistant', content, toolCalls: compactToolCalls(payload?.toolCalls, age) };
   }
   if (row.role === 'system') return { role: 'system', content };
-  return { role: 'user', content, images: imagesFromPayload(payload, projectRoot, imageBudget) };
+  const { images, skippedDuplicate } = imagesFromPayload(payload, projectRoot, imageBudget);
+  const finalContent =
+    skippedDuplicate > 0 && images.length === 0
+      ? `${content}\n(fichier(s) image mis à jour sur disque et attachés uniquement au message le plus récent)`
+      : content;
+  return { role: 'user', content: finalContent, images };
 }
 
 /** The text a tool result is stored as: what the model reads on the next turn. */

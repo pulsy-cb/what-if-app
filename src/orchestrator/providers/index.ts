@@ -6,83 +6,181 @@ import { codexProvider, CODEX_DEFAULT_BASE_URL, hasCodexAuth } from './codex.js'
 import { agyProvider, hasAgyCli } from './agy.js';
 import { mockProvider } from './mock.js';
 
-export type ModelChoice = { id: string; label: string };
+export type ProviderPreset = {
+  label: string;
+  baseURL: string;
+  model: string;
+  reviewModel?: string;
+  authMode: 'oauth' | 'env' | 'api_key' | 'none';
+};
 
-export const PROVIDER_MODEL_CATALOG: Record<
-  string,
-  {
-    label: string;
-    agent: ModelChoice[];
-    reviewer: ModelChoice[];
-    defaultAgentModel: string;
-    defaultReviewerModel: string;
+export type EnvProviderSummary = {
+  available: boolean;
+  underlyingKind: string;
+  host: string;
+  baseURL: string;
+  reviewBaseURL: string;
+  model: string;
+  reviewModel: string;
+  hasKey: boolean;
+  hasReviewKey: boolean;
+};
+
+function hostOf(rawUrl?: string): string {
+  const clean = String(rawUrl ?? '').trim();
+  if (!clean) return '';
+  try {
+    return new URL(clean).host;
+  } catch {
+    return clean.replace(/^https?:\/\//, '').split('/')[0] ?? clean;
   }
-> = {
+}
+
+export function getEnvProviderSummary(env: NodeJS.ProcessEnv = process.env): EnvProviderSummary {
+  const underlyingKind = (env.WHATIF_PROVIDER || 'openai').trim().toLowerCase();
+  const baseURL = (env.WHATIF_BASE_URL || '').trim();
+  const reviewBaseURL = (env.WHATIF_REVIEW_BASE_URL || baseURL).trim();
+  const model = (env.WHATIF_MODEL || '').trim();
+  const reviewModel = (env.WHATIF_REVIEW_MODEL || model).trim();
+  const hasKey = Boolean((env.WHATIF_API_KEY || '').trim());
+  const hasReviewKey = Boolean((env.WHATIF_REVIEW_API_KEY || env.WHATIF_API_KEY || '').trim());
+  const isApiKind = !['mock', 'codex', 'agy'].includes(underlyingKind);
+  const available = isApiKind && Boolean(baseURL || hasKey || model);
+  return {
+    available,
+    underlyingKind: isApiKind ? underlyingKind : 'openai',
+    host: hostOf(baseURL) || underlyingKind,
+    baseURL: baseURL || 'https://api.openai.com/v1',
+    reviewBaseURL: reviewBaseURL || baseURL || 'https://api.openai.com/v1',
+    model: model || 'gpt-4.1',
+    reviewModel: reviewModel || model || 'gpt-4.1',
+    hasKey,
+    hasReviewKey,
+  };
+}
+
+export const STATIC_PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   codex: {
     label: 'codex (Abonnement ChatGPT)',
-    agent: [
-      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-    ],
-    reviewer: [
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
-    ],
-    defaultAgentModel: 'gpt-6.1-terra',
-    defaultReviewerModel: 'gpt-6.1-sol',
+    baseURL: CODEX_DEFAULT_BASE_URL,
+    model: 'gpt-6.1-terra',
+    reviewModel: 'gpt-6-sol',
+    authMode: 'oauth',
   },
   agy: {
     label: 'agy (Google Antigravity)',
-    agent: [
-      { id: 'gemini-3.8-flash-medium', label: 'Gemini 3.8 Flash (Medium)' },
-      { id: 'gemini-4-carbon-low', label: 'Gemini 4 Carbon (Low)' },
-      { id: 'gemini-4-argon-low', label: 'Gemini 4 Argon (Low)' },
-    ],
-    reviewer: [
-      { id: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)' },
-      { id: 'gemini-4-carbon-medium', label: 'Gemini 4 Carbon (Medium)' },
-    ],
-    defaultAgentModel: 'gemini-3.8-flash-medium',
-    defaultReviewerModel: 'gemini-4-argon-medium',
+    baseURL: '',
+    model: 'gemini-3.8-flash-medium',
+    reviewModel: 'claude-sonnet-4-6',
+    authMode: 'oauth',
+  },
+  openai: {
+    label: 'openai (API OpenAI / compatible)',
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-4.1',
+    authMode: 'api_key',
+  },
+  openrouter: {
+    label: 'openrouter (OpenRouter API)',
+    baseURL: 'https://openrouter.ai/api/v1',
+    model: 'anthropic/claude-sonnet-4',
+    authMode: 'api_key',
+  },
+  anthropic: {
+    label: 'anthropic (Claude API)',
+    baseURL: 'https://api.anthropic.com',
+    model: 'claude-sonnet-4-5',
+    authMode: 'api_key',
+  },
+  google: {
+    label: 'google (Gemini API)',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-2.5-pro',
+    authMode: 'api_key',
+  },
+  mistral: {
+    label: 'mistral (Mistral API)',
+    baseURL: 'https://api.mistral.ai/v1',
+    model: 'mistral-large-latest',
+    authMode: 'api_key',
+  },
+  groq: {
+    label: 'groq (Groq API)',
+    baseURL: 'https://api.groq.com/openai/v1',
+    model: 'llama-3.3-70b-versatile',
+    authMode: 'api_key',
+  },
+  local: {
+    label: 'local (Ollama / LM Studio)',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    model: 'qwen2.5vl',
+    authMode: 'none',
+  },
+  mock: {
+    label: 'mock (Test hors-ligne)',
+    baseURL: '',
+    model: 'mock',
+    authMode: 'none',
   },
 };
 
-export const PROVIDER_PRESETS: Record<string, { baseURL: string; model: string; reviewModel?: string }> = {
-  codex: { baseURL: CODEX_DEFAULT_BASE_URL, model: 'gpt-6.1-terra', reviewModel: 'gpt-6.1-sol' },
-  agy: { baseURL: '', model: 'gemini-3.8-flash-medium', reviewModel: 'gemini-4-argon-medium' },
-  openai: { baseURL: 'https://api.openai.com/v1', model: 'gpt-4.1' },
-  openrouter: { baseURL: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4' },
-  anthropic: { baseURL: 'https://api.anthropic.com', model: 'claude-sonnet-4-5' },
-  google: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-pro' },
-  mistral: { baseURL: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
-  groq: { baseURL: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-  local: { baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl' },
-  mock: { baseURL: '', model: 'mock' },
-};
+export function getProviderPresets(env: NodeJS.ProcessEnv = process.env): Record<string, ProviderPreset> {
+  const envInfo = getEnvProviderSummary(env);
+  if (!envInfo.available) return { ...STATIC_PROVIDER_PRESETS };
+  return {
+    env: {
+      label: `env (API personnalisée .env — ${envInfo.host})`,
+      baseURL: envInfo.baseURL,
+      model: envInfo.model,
+      reviewModel: envInfo.reviewModel,
+      authMode: 'env',
+    },
+    ...STATIC_PROVIDER_PRESETS,
+  };
+}
+
+export const PROVIDER_PRESETS = STATIC_PROVIDER_PRESETS;
 
 /** Read the provider settings from the project (if overridden), else DB settings, else env vars. */
 export function providerConfig(db: Db, project?: Pick<Project, 'provider' | 'model'> | null): ProviderConfig {
   const s = db.settings();
   const env = process.env;
+  const presets = getProviderPresets(env);
+  const envInfo = getEnvProviderSummary(env);
+
   const projProvider = project?.provider?.trim() || '';
   const projModel = project?.model?.trim() || '';
-  const globalKind = (s.provider || env.WHATIF_PROVIDER || 'mock') as ProviderConfig['provider'];
-  const kind = (projProvider || globalKind) as ProviderConfig['provider'];
-  const preset = PROVIDER_PRESETS[kind] ?? PROVIDER_PRESETS.openai!;
+  const defaultGlobal = envInfo.available && !s.provider ? 'env' : s.provider || env.WHATIF_PROVIDER || 'mock';
+  const kind = (projProvider || defaultGlobal) as ProviderConfig['provider'];
+  const preset = presets[kind] ?? presets.openai!;
   const sameAsGlobal = kind === s.provider;
-  const sameAsEnv = !projProvider && (!s.provider || !env.WHATIF_PROVIDER || s.provider === env.WHATIF_PROVIDER);
 
+  if (kind === 'env') {
+    return {
+      provider: 'env',
+      baseURL: envInfo.baseURL,
+      apiKey: (env.WHATIF_API_KEY || s.apiKey || '').trim(),
+      model: projModel || (sameAsGlobal ? s.model || '' : '') || envInfo.model,
+      maxTokens: Number(s.maxTokens || env.WHATIF_MAX_TOKENS || 8_000),
+    };
+  }
+
+  const matchesEnvKind = envInfo.available && kind === envInfo.underlyingKind;
   return {
     provider: kind,
     baseURL:
       kind === 'agy'
         ? ''
-        : (sameAsGlobal ? s.baseURL : '') || (sameAsEnv ? env.WHATIF_BASE_URL : '') || preset.baseURL,
-    apiKey: (sameAsGlobal ? s.apiKey : s.apiKey) || (sameAsEnv ? env.WHATIF_API_KEY : '') || '',
+        : (sameAsGlobal ? s.baseURL : '') || (matchesEnvKind ? env.WHATIF_BASE_URL : '') || preset.baseURL,
+    apiKey:
+      (sameAsGlobal ? s.apiKey : '') ||
+      (matchesEnvKind ? env.WHATIF_API_KEY : '') ||
+      s.apiKey ||
+      '',
     model:
       projModel ||
       (sameAsGlobal ? s.model : '') ||
-      (sameAsEnv ? env.WHATIF_MODEL : '') ||
+      (matchesEnvKind ? env.WHATIF_MODEL : '') ||
       preset.model,
     maxTokens: Number(s.maxTokens || env.WHATIF_MAX_TOKENS || 8_000),
   };
@@ -90,7 +188,10 @@ export function providerConfig(db: Db, project?: Pick<Project, 'provider' | 'mod
 
 export function resolveProvider(db: Db, project?: Pick<Project, 'provider' | 'model'> | null): Provider {
   const cfg = providerConfig(db, project);
-  switch (cfg.provider) {
+  const envInfo = getEnvProviderSummary(process.env);
+  const effectiveDriver = cfg.provider === 'env' ? envInfo.underlyingKind : cfg.provider;
+
+  switch (effectiveDriver) {
     case 'mock':
       return mockProvider(cfg.model);
     case 'codex':
@@ -98,11 +199,11 @@ export function resolveProvider(db: Db, project?: Pick<Project, 'provider' | 'mo
     case 'agy':
       return agyProvider({ model: cfg.model });
     case 'anthropic':
-      if (!cfg.apiKey) throw new Error('no API key for anthropic: set it in the settings panel');
+      if (!cfg.apiKey) throw new Error(`no API key for ${cfg.provider}: set it in the settings panel or .env`);
       return anthropicProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
     default:
       if (!cfg.apiKey && !/127\.0\.0\.1|localhost/.test(cfg.baseURL)) {
-        throw new Error(`no API key for ${cfg.provider}: set it in the settings panel`);
+        throw new Error(`no API key for ${cfg.provider}: set it in the settings panel or .env`);
       }
       return openAIProvider({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens });
   }
@@ -118,6 +219,9 @@ export function reviewProviderConfig(
 ): ProviderConfig | null {
   const s = db.settings();
   const env = process.env;
+  const presets = getProviderPresets(env);
+  const envInfo = getEnvProviderSummary(env);
+
   const rawEnabled = (s.reviewerEnabled ?? env.WHATIF_REVIEWER_ENABLED ?? '').trim().toLowerCase();
   if (rawEnabled === 'false' || rawEnabled === '0' || rawEnabled === 'off' || rawEnabled === 'no') {
     return null;
@@ -140,22 +244,33 @@ export function reviewProviderConfig(
   const primary = providerConfig(db, project);
   if (!enabled && primary.provider === 'mock') return null;
 
-  // If the project overrode its primary provider (e.g. to 'agy') without setting a project review_provider,
-  // prefer that project's provider for the reviewer as well unless review_provider is explicitly set on the project!
   const projOverrodePrimary = Boolean(project?.provider?.trim());
+  const defaultEnvRev = envInfo.available && !s.reviewProvider && !s.provider ? 'env' : env.WHATIF_REVIEW_PROVIDER || '';
   const kind = (
     projRevProv ||
     (projOverrodePrimary ? primary.provider : '') ||
     s.reviewProvider ||
-    env.WHATIF_REVIEW_PROVIDER ||
+    defaultEnvRev ||
     primary.provider
   ) as ProviderConfig['provider'];
   if (kind === 'mock' && !hasExplicitReviewModel) return null;
 
-  const preset = PROVIDER_PRESETS[kind] ?? PROVIDER_PRESETS.openai!;
+  const preset = presets[kind] ?? presets.openai!;
   const defaultReviewModel = preset.reviewModel ?? preset.model;
   const sameAsGlobalRev = !projRevProv && !projOverrodePrimary && kind === s.reviewProvider;
-  const sameAsEnv = !projRevProv && !projOverrodePrimary && (!s.reviewProvider || !env.WHATIF_REVIEW_PROVIDER || s.reviewProvider === env.WHATIF_REVIEW_PROVIDER);
+
+  if (kind === 'env') {
+    return {
+      provider: 'env',
+      baseURL: envInfo.reviewBaseURL,
+      apiKey: (env.WHATIF_REVIEW_API_KEY || env.WHATIF_API_KEY || s.reviewApiKey || s.apiKey || '').trim(),
+      model: projRevModel || (sameAsGlobalRev ? s.reviewModel || '' : '') || envInfo.reviewModel,
+      maxTokens: Number(env.WHATIF_REVIEW_MAX_TOKENS || 12_000),
+    };
+  }
+
+  const matchesEnvRevKind =
+    envInfo.available && kind === (env.WHATIF_REVIEW_PROVIDER || envInfo.underlyingKind).trim().toLowerCase();
   const sameProviderAsPrimary = !projRevProv && !s.reviewProvider && !env.WHATIF_REVIEW_PROVIDER && kind === primary.provider;
 
   return {
@@ -164,17 +279,18 @@ export function reviewProviderConfig(
       kind === 'agy'
         ? ''
         : (sameAsGlobalRev ? s.reviewBaseURL : '') ||
-          (sameAsEnv ? env.WHATIF_REVIEW_BASE_URL : '') ||
+          (matchesEnvRevKind ? env.WHATIF_REVIEW_BASE_URL || env.WHATIF_BASE_URL : '') ||
           (sameProviderAsPrimary ? primary.baseURL : preset.baseURL),
     apiKey:
-      s.reviewApiKey ||
-      (sameAsEnv ? env.WHATIF_REVIEW_API_KEY : '') ||
+      (sameAsGlobalRev ? s.reviewApiKey : '') ||
+      (matchesEnvRevKind ? env.WHATIF_REVIEW_API_KEY || env.WHATIF_API_KEY : '') ||
       (kind === primary.provider ? primary.apiKey : '') ||
+      s.reviewApiKey ||
       '',
     model:
       projRevModel ||
       (sameAsGlobalRev ? s.reviewModel : '') ||
-      (sameAsEnv ? env.WHATIF_REVIEW_MODEL : '') ||
+      (matchesEnvRevKind ? env.WHATIF_REVIEW_MODEL || env.WHATIF_MODEL : '') ||
       (sameProviderAsPrimary && !preset.reviewModel ? primary.model : defaultReviewModel),
     maxTokens: Number(env.WHATIF_REVIEW_MAX_TOKENS || 12_000),
   };
@@ -186,7 +302,10 @@ export function resolveReviewProvider(
 ): Provider | null {
   const cfg = reviewProviderConfig(db, project);
   if (!cfg) return null;
-  switch (cfg.provider) {
+  const envInfo = getEnvProviderSummary(process.env);
+  const effectiveDriver = cfg.provider === 'env' ? (env.WHATIF_REVIEW_PROVIDER || envInfo.underlyingKind) : cfg.provider;
+
+  switch (effectiveDriver) {
     case 'mock':
       return mockProvider(cfg.model);
     case 'codex':
@@ -202,9 +321,12 @@ export function resolveReviewProvider(
   }
 }
 
+const env = process.env;
+
 export * from './types.js';
+export * from './models.js';
 export { mockProvider } from './mock.js';
 export { openAIProvider } from './openai.js';
 export { anthropicProvider } from './anthropic.js';
 export { codexProvider, hasCodexAuth } from './codex.js';
-export { agyProvider, hasAgyCli, normalizeAgyModel, buildAgyPrompt } from './agy.js';
+export { agyProvider, hasAgyCli, normalizeAgyModel, buildAgyPrompt, parseAgyModelsOutput, listAgyModels } from './agy.js';

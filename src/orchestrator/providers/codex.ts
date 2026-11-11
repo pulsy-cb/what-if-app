@@ -123,6 +123,17 @@ async function refreshCodexAuth(auth: CodexAuthData, tokenUrl = CODEX_OAUTH_TOKE
   };
 }
 
+export async function loadValidCodexAuth(
+  authPath = defaultCodexAuthPath(),
+  oauthTokenUrl = CODEX_OAUTH_TOKEN_URL,
+): Promise<CodexAuthData> {
+  let auth = readCodexAuth(authPath);
+  if (jwtExpiresSoon(auth.accessToken)) {
+    auth = await refreshCodexAuth(auth, oauthTokenUrl);
+  }
+  return auth;
+}
+
 export function toCodexResponsesPayload(
   messages: ChatMessage[],
   tools: ToolSchema[],
@@ -224,10 +235,7 @@ export function codexProvider(cfg: {
     label: cfg.label ?? `codex (${normalizedModel})`,
     model: normalizedModel,
     async chat(req: ChatRequest): Promise<ChatResult> {
-      let auth = readCodexAuth(authPath);
-      if (jwtExpiresSoon(auth.accessToken)) {
-        auth = await refreshCodexAuth(auth, cfg.oauthTokenUrl);
-      }
+      let auth = await loadValidCodexAuth(authPath, cfg.oauthTokenUrl);
 
       const converted = toCodexResponsesPayload(req.messages, req.tools, cfg.model);
       const body: Record<string, unknown> = {

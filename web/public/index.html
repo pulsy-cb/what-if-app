@@ -169,16 +169,21 @@
         <label>Fournisseur IA pour ce projet
           <select id="np-provider-mode">
             <option value="">Défaut global du Studio</option>
-            <option value="codex">codex — Abonnement ChatGPT (Terra / Sol)</option>
-            <option value="agy">agy — Google Antigravity (3.8 Flash / Carbon / Argon)</option>
           </select>
         </label>
-        <div id="np-models-grid" class="form-grid-2" hidden>
-          <label>Modèle Agent
-            <select id="np-agent-model"></select>
-          </label>
+        <div id="np-models-grid" hidden>
+          <div class="form-grid-2">
+            <label>Modèle Agent
+              <select id="np-agent-model" hidden></select>
+              <input id="np-agent-model-input" placeholder="ID du modèle Agent" />
+            </label>
+            <label>Fournisseur Reviewer
+              <select id="np-rev-provider"></select>
+            </label>
+          </div>
           <label>Modèle Reviewer
-            <select id="np-rev-model"></select>
+            <select id="np-rev-model" hidden></select>
+            <input id="np-rev-model-input" placeholder="ID du modèle Reviewer" />
           </label>
         </div>
         <p class="info-callout small">
@@ -199,8 +204,11 @@
     <dialog id="settings">
       <form method="dialog" class="settings-form">
         <div class="dialog-head">
-          <h2>Réglages globaux du Studio</h2>
-          <p class="muted small">Valeurs par défaut pour l'Agent, le Reviewer visuel et l'apparence (chaque projet peut aussi avoir ses propres modèles).</p>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <h2>Réglages globaux du Studio</h2>
+            <button id="s-refresh-models" type="button" class="pill-btn" title="Interroger les fournisseurs en direct pour rafraîchir la liste des modèles">↻ Rafraîchir les modèles</button>
+          </div>
+          <p class="muted small">Les listes de modèles sont récupérées directement auprès de chaque fournisseur (abonnement AGY, Codex ou API personnalisée).</p>
         </div>
         <label>Apparence
           <select id="s-theme">
@@ -235,6 +243,7 @@
         <label>Token d'accès serveur (facultatif)
           <input id="s-token" type="password" placeholder="(facultatif)" autocomplete="off" />
         </label>
+        <p id="s-env-status" class="info-callout small" hidden></p>
         <p id="s-codex-status" class="info-callout small" hidden></p>
         <p id="s-agy-status" class="info-callout small" hidden></p>
         <p id="s-skill" class="muted small"></p>
@@ -248,7 +257,10 @@
     <dialog id="project-model-dialog">
       <form method="dialog" class="settings-form">
         <div class="dialog-head">
-          <h2 id="pm-title">Modèles du projet</h2>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <h2 id="pm-title">Modèles du projet</h2>
+            <button id="pm-refresh-models" type="button" class="pill-btn" title="Rafraîchir la liste des modèles disponibles">↻ Modèles</button>
+          </div>
           <p class="muted small">Permet d'utiliser un fournisseur et des modèles dédiés sur ce projet en parallèle des autres projets.</p>
         </div>
         <label>Configuration

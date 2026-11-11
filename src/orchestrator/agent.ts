@@ -291,9 +291,17 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           });
 
           // Stop expensive Modal/FFmpeg retries on repeated runtime crashes/timeouts,
-          // but do NOT count fast local pre-flight checks ("cannot run ... yet") where Modal never ran.
+          // but do NOT count fast local pre-flight checks ("cannot run ... yet") or composition layout/ink checks ("FAILED_SHOTS:")
+          // where Modal rendered cleanly (exit 0) and the agent is actively adjusting shot framing.
           const isLocalPrecheck = /cannot run \w+ yet/i.test(result.summary);
-          if (!result.ok && !isLocalPrecheck && call.name === 'whatif_run' && ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))) {
+          const isLayoutCheck = /FAILED_SHOTS:|failed the layout\/ink check/i.test(result.summary);
+          if (
+            !result.ok &&
+            !isLocalPrecheck &&
+            !isLayoutCheck &&
+            call.name === 'whatif_run' &&
+            ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))
+          ) {
             const stage = String(call.args.step);
             const errLines = result.summary.split('\n').filter((l) => l.trim());
             const firstErrIdx = errLines.findIndex((l) => /error|failed|cannot/i.test(l));
@@ -363,11 +371,13 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (epSlug) {
               try {
                 const prevRev = JSON.parse(fs.readFileSync(path.join(project.root, 'out', epSlug, 'review.json'), 'utf8'));
-                if (prevRev?.blocking && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
-                  reviewRounds = prevRev.round;
+                if (prevRev?.ok && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
+                  reviewRounds = prevRev.blocking
+                    ? prevRev.round
+                    : Math.min(prevRev.round, Math.max(1, config.reviewMaxRounds - 1));
                 }
               } catch {
-                /* no prior blocking review */
+                /* no prior review */
               }
             }
             const reviewer = reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;

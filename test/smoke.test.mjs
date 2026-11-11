@@ -1782,39 +1782,46 @@ test('codex run fixes: precheck skips expensiveFails, delegated shot() helpers, 
   }
 });
 
-test('agy provider + per-project models: model catalog, mock agy CLI (tools, images & auth fast-fail), and isolated project overrides', async () => {
+test('agy provider + per-project models: live CLI model parsing, mock agy CLI (tools, images & auth fast-fail), and isolated project overrides', async () => {
   const {
-    PROVIDER_MODEL_CATALOG,
     agyProvider,
     normalizeAgyModel,
+    parseAgyModelsOutput,
     providerConfig,
     reviewProviderConfig,
   } = await import('../dist/orchestrator/providers/index.js');
   const { createApp } = await import('../dist/orchestrator/main.js');
   const { loadConfig } = await import('../dist/orchestrator/config.js');
 
-  // 1. Exact model normalization & catalog choices requested by user
+  // 1. Model normalization + canonical IDs + live `agy models` stdout parsing
   assert.equal(normalizeAgyModel('3.8 flash medium'), 'gemini-3.8-flash-medium');
   assert.equal(normalizeAgyModel('carbon low'), 'gemini-4-carbon-low');
   assert.equal(normalizeAgyModel('aragon low'), 'gemini-4-argon-low');
-  assert.equal(normalizeAgyModel('aragon medium'), 'gemini-4-argon-medium');
-  assert.equal(normalizeAgyModel('carbon medium'), 'gemini-4-carbon-medium');
+  assert.equal(normalizeAgyModel('claude-sonnet-4-6'), 'claude-sonnet-4-6');
+  assert.equal(normalizeAgyModel('claude-opus-4-6-thinking'), 'claude-opus-4-6-thinking');
+  assert.equal(normalizeAgyModel('gpt-oss-120b-medium'), 'gpt-oss-120b-medium');
 
-  assert.deepEqual(
-    PROVIDER_MODEL_CATALOG.agy.agent.map((m) => m.id),
-    ['gemini-3.8-flash-medium', 'gemini-4-carbon-low', 'gemini-4-argon-low'],
+  const parsedAgy = parseAgyModelsOutput(
+    [
+      'Fetching available models...',
+      'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+      'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+      'gemini-3.8-flash-low      Gemini 3.8 Flash (Low)',
+      'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+      'claude-opus-4-6-thinking  Claude Opus 4.6 (Thinking)',
+      'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+    ].join('\n'),
   );
   assert.deepEqual(
-    PROVIDER_MODEL_CATALOG.agy.reviewer.map((m) => m.id),
-    ['gemini-4-argon-medium', 'gemini-4-carbon-medium'],
-  );
-  assert.deepEqual(
-    PROVIDER_MODEL_CATALOG.codex.agent.map((m) => m.id),
-    ['gpt-6.1-terra', 'gpt-6.1-sol'],
-  );
-  assert.deepEqual(
-    PROVIDER_MODEL_CATALOG.codex.reviewer.map((m) => m.id),
-    ['gpt-6.1-sol', 'gpt-6.1-terra'],
+    parsedAgy.map((m) => m.id),
+    [
+      'gemini-3.8-flash-high',
+      'gemini-3.8-flash-medium',
+      'gemini-3.8-flash-low',
+      'claude-sonnet-4-6',
+      'claude-opus-4-6-thinking',
+      'gpt-oss-120b-medium',
+    ],
   );
 
   // 2. Mock agy binary: test structured tool calls, reviewer image streaming, and instant auth-prompt abort
@@ -2245,6 +2252,361 @@ test('two-mode reviewer: Round 1 audits 100% of 9 sheets (66 shots) & Round 2 ru
     assert.match(deltaUser.content, /#### S65/);
     assert.doesNotMatch(deltaUser.content, /#### S20/, 'untouched shots are NOT re-audited in delta mode');
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('live model discovery & .env custom API: queries agy CLI, Codex models, and OpenAI /models + preserves .env provider alongside codex/agy', async () => {
+  const http = await import('node:http');
+  const {
+    clearModelDiscoveryCache,
+    discoverProviderModels,
+    getEnvProviderSummary,
+    getProviderPresets,
+    providerConfig,
+    reviewProviderConfig,
+  } = await import('../dist/orchestrator/providers/index.js');
+  const { createApp } = await import('../dist/orchestrator/main.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-live-models-'));
+  const fakeAgy = path.join(dir, 'fake-agy');
+  fs.writeFileSync(
+    fakeAgy,
+    `#!/usr/bin/env node
+if (process.argv.includes('models')) {
+  process.stdout.write([
+    'gemini-3.8-flash-high     Gemini 3.8 Flash (High)',
+    'gemini-3.8-flash-medium   Gemini 3.8 Flash (Medium)',
+    'gemini-3.8-flash-low      Gemini 3.8 Flash (Low)',
+    'claude-sonnet-4-6         Claude Sonnet 4.6 (Thinking)',
+    'claude-opus-4-6-thinking  Claude Opus 4.6 (Thinking)',
+    'gpt-oss-120b-medium       GPT-OSS 120B (Medium)',
+  ].join('\\n') + '\\n');
+  process.exit(0);
+}
+process.exit(1);
+`,
+    { mode: 0o755 },
+  );
+
+  // Mock Codex cache + auth + custom OpenAI-compatible API server (like river.ai)
+  const codexDir = path.join(dir, 'codex');
+  fs.mkdirSync(codexDir, { recursive: true });
+  const codexAuth = path.join(codexDir, 'auth.json');
+  fs.writeFileSync(codexAuth, JSON.stringify({ tokens: { access_token: 'codex-tok', account_id: 'acc_1' } }));
+
+  let customApiAuthHeader = '';
+  const apiSrv = http.createServer((req, res) => {
+    if (req.url?.startsWith('/v1/models')) {
+      customApiAuthHeader = req.headers.authorization || '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'GLM-5.3' },
+            { id: 'deepseek-ai/DeepSeek-V4.1-Flash-1017' },
+            { id: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4' },
+            { id: 'moonshotai/Kimi-K3.1-Pro' },
+            { id: 'text-embedding-3-small' }, // should be filtered out
+          ],
+        }),
+      );
+      return;
+    }
+    if (req.url?.startsWith('/codex/models')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          models: [
+            { slug: 'gpt-6-astra', display_name: 'GPT-6-Astra', visibility: 'list', input_modalities: ['text', 'image'] },
+            { slug: 'gpt-6.1-terra', display_name: 'GPT-6.1 Terra', visibility: 'list', input_modalities: ['text', 'image'] },
+            { slug: 'gpt-6-sol', display_name: 'GPT-6-Sol', visibility: 'list', input_modalities: ['text', 'image'] },
+            { slug: 'codex-auto-review', display_name: 'Internal Helper', visibility: 'hide', input_modalities: ['text'] },
+          ],
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => apiSrv.listen(0, '127.0.0.1', r));
+  const apiPort = apiSrv.address().port;
+
+  const savedEnv = {
+    WHATIF_PROVIDER: process.env.WHATIF_PROVIDER,
+    WHATIF_BASE_URL: process.env.WHATIF_BASE_URL,
+    WHATIF_MODEL: process.env.WHATIF_MODEL,
+    WHATIF_API_KEY: process.env.WHATIF_API_KEY,
+    WHATIF_REVIEW_PROVIDER: process.env.WHATIF_REVIEW_PROVIDER,
+    WHATIF_REVIEW_BASE_URL: process.env.WHATIF_REVIEW_BASE_URL,
+    WHATIF_REVIEW_MODEL: process.env.WHATIF_REVIEW_MODEL,
+    WHATIF_REVIEW_API_KEY: process.env.WHATIF_REVIEW_API_KEY,
+    WHATIF_AGY_BIN: process.env.WHATIF_AGY_BIN,
+    WHATIF_CODEX_AUTH: process.env.WHATIF_CODEX_AUTH,
+  };
+
+  process.env.WHATIF_PROVIDER = 'openai';
+  process.env.WHATIF_BASE_URL = `http://127.0.0.1:${apiPort}/v1`;
+  process.env.WHATIF_MODEL = 'deepseek-ai/DeepSeek-V4.1-Flash-1017';
+  process.env.WHATIF_API_KEY = 'sk-river-secret';
+  process.env.WHATIF_REVIEW_PROVIDER = 'openai';
+  process.env.WHATIF_REVIEW_BASE_URL = `http://127.0.0.1:${apiPort}/v1`;
+  process.env.WHATIF_REVIEW_MODEL = 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4';
+  process.env.WHATIF_REVIEW_API_KEY = 'sk-river-secret';
+  process.env.WHATIF_AGY_BIN = fakeAgy;
+  process.env.WHATIF_CODEX_AUTH = codexAuth;
+
+  clearModelDiscoveryCache();
+  const app = createApp({
+    ...loadConfig(),
+    dataRoot: dir,
+    projectsDir: path.join(dir, 'projects'),
+    dbPath: path.join(dir, 'app.db'),
+    skillDir: null,
+  });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const appBase = `http://127.0.0.1:${app.server.address().port}`;
+
+  try {
+    // 1. `.env` custom provider appears as first-class `env` preset
+    const envSummary = getEnvProviderSummary();
+    assert.equal(envSummary.available, true);
+    assert.ok('env' in getProviderPresets(), 'presets expose env custom API provider');
+
+    // 2. Live discovery via HTTP `/api/models` for agy, env, and codex
+    const agyRes = await (await fetch(`${appBase}/api/models?provider=agy&refresh=1`)).json();
+    assert.equal(agyRes.source, 'live');
+    assert.deepEqual(
+      agyRes.models.map((m) => m.id),
+      [
+        'gemini-3.8-flash-high',
+        'gemini-3.8-flash-medium',
+        'gemini-3.8-flash-low',
+        'claude-sonnet-4-6',
+        'claude-opus-4-6-thinking',
+        'gpt-oss-120b-medium',
+      ],
+    );
+    assert.equal(agyRes.defaultAgentModel, 'gemini-3.8-flash-medium');
+    assert.equal(agyRes.defaultReviewerModel, 'claude-sonnet-4-6');
+
+    const envRes = await (await fetch(`${appBase}/api/models?provider=env&refresh=1`)).json();
+    assert.equal(envRes.source, 'live');
+    assert.equal(customApiAuthHeader, 'Bearer sk-river-secret');
+    assert.ok(envRes.models.some((m) => m.id === 'moonshotai/Kimi-K3.1-Pro'), 'discovers all chat models on custom API');
+    assert.ok(!envRes.models.some((m) => m.id === 'text-embedding-3-small'), 'filters out embedding models');
+    assert.equal(envRes.defaultAgentModel, 'deepseek-ai/DeepSeek-V4.1-Flash-1017');
+    assert.equal(envRes.defaultReviewerModel, 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4');
+
+    const codexRes = await discoverProviderModels(app.db, {
+      provider: 'codex',
+      baseURL: `http://127.0.0.1:${apiPort}/codex`,
+      codexAuthPath: codexAuth,
+      forceRefresh: true,
+    });
+    assert.equal(codexRes.source, 'live');
+    assert.deepEqual(
+      codexRes.models.map((m) => m.id),
+      ['gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol'],
+      'filters out visibility:hide codex-auto-review and returns real subscription models',
+    );
+
+    // 3. Even when global DB settings are switched to `agy`, a project selecting `env` (or switching back to `env`)
+    // preserves `.env` baseURL, API key, Agent model, and Reviewer model!
+    await fetch(`${appBase}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'agy',
+        model: 'gemini-3.8-flash-medium',
+        reviewProvider: 'agy',
+        reviewModel: 'claude-sonnet-4-6',
+      }),
+    });
+
+    const pEnvRes = await fetch(`${appBase}/api/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Projet River Env',
+        provider: 'env',
+        model: 'moonshotai/Kimi-K3.1-Pro',
+        reviewProvider: 'env',
+        reviewModel: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4',
+      }),
+    });
+    const { project: pEnv } = await pEnvRes.json();
+    const pEnvDb = app.db.getProject(pEnv.id);
+    const effAgent = providerConfig(app.db, pEnvDb);
+    const effRev = reviewProviderConfig(app.db, pEnvDb);
+    assert.equal(effAgent.provider, 'env');
+    assert.equal(effAgent.baseURL, `http://127.0.0.1:${apiPort}/v1`);
+    assert.equal(effAgent.apiKey, 'sk-river-secret');
+    assert.equal(effAgent.model, 'moonshotai/Kimi-K3.1-Pro');
+    assert.equal(effRev.provider, 'env');
+    assert.equal(effRev.apiKey, 'sk-river-secret');
+    assert.equal(effRev.model, 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4');
+  } finally {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await app.close();
+    await new Promise((r) => apiSrv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reliability & speed fixes: image deduplication, targeted layoutReport, layout skips expensiveFails, SSE retry, SIGTERM cleanup', async () => {
+  const { buildMessages } = await import('../dist/orchestrator/context.js');
+  const { layoutReport } = await import('../dist/orchestrator/layout.js');
+  const { openAIProvider } = await import('../dist/orchestrator/providers/openai.js');
+  const { exec } = await import('../dist/tools/exec.js');
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { ToolRegistry } = await import('../dist/tools/index.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+  const http = await import('node:http');
+  const { execFileSync } = await import('node:child_process');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rel-'));
+  let sseSrv = null;
+  try {
+    // 1. Historical mutable PNG deduplication in buildMessages: only newest turn attaches S8.png
+    const boardDir = path.join(dir, 'out', 'ep', 'board');
+    fs.mkdirSync(boardDir, { recursive: true });
+    // Create S28.png (blank black = fails layoutReport) and S63.png (balanced drawing across left & right halves = passes)
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=320x180', '-frames:v', '1', path.join(boardDir, 'S28.png')]);
+    execFileSync('ffmpeg', [
+      '-y', '-v', 'error', '-f', 'lavfi',
+      '-i', 'color=c=black:s=320x180,drawbox=x=30:y=30:w=110:h=110:color=white:t=fill,drawbox=x=180:y=30:w=110:h=110:color=yellow:t=fill',
+      '-frames:v', '1',
+      path.join(boardDir, 'S63.png'),
+    ]);
+
+    const history = [
+      { id: 1, thread_id: 't1', role: 'user', content: 'Ancien rendu S63', payload: JSON.stringify({ images: ['out/ep/board/S63.png'] }), created_at: '2026-11-11T00:01:00Z' },
+      { id: 2, thread_id: 't1', role: 'assistant', content: 'Je corrige S63', payload: null, created_at: '2026-11-11T00:02:00Z' },
+      { id: 3, thread_id: 't1', role: 'user', content: 'Nouveau rendu S63', payload: JSON.stringify({ images: ['out/ep/board/S63.png'] }), created_at: '2026-11-11T00:03:00Z' },
+    ];
+    const msgs = buildMessages({ projectRoot: dir, history, maxChars: 90_000 });
+    const userMsgs = msgs.filter((m) => m.role === 'user');
+    assert.equal(userMsgs.length, 2);
+    assert.equal(userMsgs[0].images?.length ?? 0, 0, 'older turn must not re-attach overwritten S63.png');
+    assert.match(userMsgs[0].content, /attachés uniquement au message le plus récent/);
+    assert.equal(userMsgs[1].images?.length ?? 0, 1, 'newest turn attaches current S63.png');
+
+    // 2. Targeted layoutReport(dir, ['S63']) ignores un-regenerated S28.png, while full layoutReport(dir) flags S28
+    const targetedLayout = await layoutReport(boardDir, ['S63']);
+    assert.ok(!targetedLayout.includes('EMPTY:'), `targeted S63 check should pass, got: ${targetedLayout}`);
+    const fullLayout = await layoutReport(boardDir);
+    assert.match(fullLayout, /FAILED_SHOTS:\s*S28/);
+
+    // 3. runTurn: 4 layout/ink checks ("FAILED_SHOTS: S...") on different shots do NOT trigger expensiveFails
+    const db = new Db(path.join(dir, 'app.db'));
+    db.createProject('lay-test', 'LayTest', dir);
+    const thread = db.createThread('lay-test', 'Run');
+    db.addMessage(thread.id, 'user', 'Go');
+    let stillsCount = 0;
+    const reg = new ToolRegistry([
+      {
+        name: 'whatif_run',
+        description: 'mock pipeline',
+        policy: 'auto',
+        schema: { type: 'object' },
+        async run(input) {
+          stillsCount++;
+          const shot = input.args?.[0] ?? `S${stillsCount}`;
+          if (stillsCount <= 4) {
+            return {
+              ok: false,
+              summary: `layout (measured on the stills):\nEMPTY: ${shot} leaves the right half dead\nFAILED_SHOTS: ${shot}\nOne or more shots failed the layout/ink check (see EMPTY above)`,
+            };
+          }
+          return { ok: true, summary: 'all stills balanced' };
+        },
+      },
+      { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+    ]);
+    let llmCalls = 0;
+    const fakeProv = {
+      id: 'fake',
+      label: 'fake',
+      model: 'fake',
+      async chat() {
+        llmCalls++;
+        if (llmCalls <= 5) {
+          return {
+            text: '',
+            toolCalls: [{ id: `c${llmCalls}`, name: 'whatif_run', args: { episode: 'ep', step: 'stills', args: [`S${llmCalls}`] } }],
+            finishReason: 'tool_calls',
+          };
+        }
+        return { text: 'Épisode terminé sans faux arrêt !', toolCalls: [], finishReason: 'stop' };
+      },
+    };
+    const config = { ...loadConfig(), maxSteps: 12, reviewMaxRounds: 0, approvalsMode: 'off', contextChars: 60_000 };
+    await runTurn(
+      {
+        db,
+        bus: { emit() {} },
+        config,
+        registry: reg,
+        approvals: null,
+        provider: () => fakeProv,
+        reviewProvider: () => null,
+      },
+      thread.id,
+      new AbortController().signal,
+    );
+    assert.equal(stillsCount, 5, '4 FAILED_SHOTS layout warnings did not kill the turn via expensiveFails');
+    const finalMsgs = db.listMessages(thread.id);
+    assert.equal(finalMsgs.at(-1).content, 'Épisode terminé sans faux arrêt !');
+    db.close();
+
+    // 4. openAIProvider retries transient in-stream SSE error ("Inference is temporarily unavailable. Please retry.")
+    let sseHits = 0;
+    sseSrv = http.createServer((_req, res) => {
+      sseHits++;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (sseHits === 1) {
+        res.end('data: {"error":{"message":"Inference is temporarily unavailable. Please retry."}}\n\n');
+        return;
+      }
+      res.write('data: {"choices":[{"delta":{"content":"Reprise SSE OK"},"finish_reason":null}]}\n\n');
+      res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    });
+    await new Promise((r) => sseSrv.listen(0, '127.0.0.1', r));
+    const ssePort = sseSrv.address().port;
+    const oai = openAIProvider({
+      baseURL: `http://127.0.0.1:${ssePort}/v1`,
+      apiKey: 'test',
+      model: 'deepseek-ai/DeepSeek-V4.1-Flash-1017',
+      sseRetryBaseMs: 15,
+    });
+    const sseRes = await oai.chat({ messages: [{ role: 'user', content: 'ping' }], tools: [] });
+    assert.equal(sseHits, 2, 'retried after transient SSE error');
+    assert.equal(sseRes.text, 'Reprise SSE OK');
+
+    // 5. exec sends SIGTERM before SIGKILL so child processes can tear down external resources (e.g. Modal app)
+    const cleanupMarker = path.join(dir, 'sigterm_cleaned.txt');
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 120);
+    await exec(
+      [
+        process.execPath,
+        '-e',
+        `const fs = require('node:fs'); process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(cleanupMarker)}, 'cleaned'); process.exit(143); }); setInterval(() => {}, 1000);`,
+      ],
+      { cwd: dir, timeoutMs: 5_000, signal: ac.signal },
+    );
+    assert.equal(fs.readFileSync(cleanupMarker, 'utf8'), 'cleaned', 'child received SIGTERM and ran cleanup handler');
+  } finally {
+    if (sseSrv) await new Promise((r) => sseSrv.close(r));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

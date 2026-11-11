@@ -9,35 +9,7 @@ const S = {
   deliverablesCollapsed: false,
   deliverablesCount: 0,
   presets: {},
-  catalog: {
-    codex: {
-      label: 'codex (Abonnement ChatGPT)',
-      agent: [
-        { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
-        { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-      ],
-      reviewer: [
-        { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-        { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
-      ],
-      defaultAgentModel: 'gpt-6.1-terra',
-      defaultReviewerModel: 'gpt-6.1-sol',
-    },
-    agy: {
-      label: 'agy (Google Antigravity)',
-      agent: [
-        { id: 'gemini-3.8-flash-medium', label: 'Gemini 3.8 Flash (Medium)' },
-        { id: 'gemini-4-carbon-low', label: 'Gemini 4 Carbon (Low)' },
-        { id: 'gemini-4-argon-low', label: 'Gemini 4 Argon (Low)' },
-      ],
-      reviewer: [
-        { id: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)' },
-        { id: 'gemini-4-carbon-medium', label: 'Gemini 4 Carbon (Medium)' },
-      ],
-      defaultAgentModel: 'gemini-3.8-flash-medium',
-      defaultReviewerModel: 'gemini-4-argon-medium',
-    },
-  },
+  modelsByProvider: {},
   settings: null,
   projects: [],
   project: null,
@@ -1303,89 +1275,175 @@ function kickoffMessage({ episode, video, aspect }) {
   ].join('\n');
 }
 
-function populateProviderSelect(selectEl, presets, role = 'agent') {
+const CUSTOM_MODEL_SENTINEL = '__custom__';
+
+async function fetchProviderModels(provider, opts = {}) {
+  if (!provider) return { provider: '', models: [], defaultAgentModel: '', defaultReviewerModel: '', error: null };
+  const hasInlineCreds = Boolean((opts.baseURL && opts.baseURL.trim()) || (opts.apiKey && opts.apiKey.trim()));
+  if (!opts.refresh && !hasInlineCreds && S.modelsByProvider[provider]) {
+    return S.modelsByProvider[provider];
+  }
+  try {
+    const res = hasInlineCreds
+      ? await api('/api/models', {
+          method: 'POST',
+          body: JSON.stringify({
+            provider,
+            baseURL: opts.baseURL || '',
+            apiKey: opts.apiKey || '',
+            refresh: Boolean(opts.refresh),
+          }),
+        })
+      : await api(`/api/models?provider=${encodeURIComponent(provider)}${opts.refresh ? '&refresh=1' : ''}`);
+    if (!hasInlineCreds || opts.refresh) {
+      S.modelsByProvider[provider] = res;
+    }
+    return res;
+  } catch (err) {
+    return {
+      provider,
+      models: [],
+      defaultAgentModel: S.presets[provider]?.model || '',
+      defaultReviewerModel: S.presets[provider]?.reviewModel || S.presets[provider]?.model || '',
+      error: err?.message || String(err),
+    };
+  }
+}
+
+function formatModelOptionText(opt) {
+  if (!opt.label || opt.label === opt.id || opt.label.includes(opt.id)) return opt.label || opt.id;
+  return `${opt.label} (${opt.id})`;
+}
+
+function populateProviderSelect(selectEl, presets, opts = {}) {
   if (!selectEl) return;
   selectEl.replaceChildren();
+  if (opts.includeInheritLabel) {
+    selectEl.append(el('option', { value: '', text: opts.includeInheritLabel }));
+  }
   for (const [key, preset] of Object.entries(presets || {})) {
-    const cat = S.catalog[key];
-    let text;
-    if (cat) {
-      const defM = role === 'reviewer' ? cat.defaultReviewerModel : cat.defaultAgentModel;
-      text = `${cat.label} — ${defM}`;
-    } else {
-      text = `${key} — ${preset.model || '(clé requise)'}`;
-    }
+    if (key === 'mock' && S.settings?.provider !== 'mock') continue;
+    const text = preset.label || `${key} — ${preset.model || ''}`;
     selectEl.append(el('option', { value: key, text }));
   }
 }
 
-function syncModelControl(provider, role, selectEl, inputEl, desiredValue) {
-  const cat = S.catalog[provider];
-  if (cat && selectEl) {
-    const list = role === 'reviewer' ? cat.reviewer : cat.agent;
-    const defVal = role === 'reviewer' ? cat.defaultReviewerModel : cat.defaultAgentModel;
+let modelSyncSeq = 0;
+
+async function syncModelControl(provider, role, selectEl, inputEl, desiredValue, fetchOpts = {}) {
+  const seq = ++modelSyncSeq;
+  if (selectEl) selectEl.dataset.syncSeq = String(seq);
+  if (inputEl) inputEl.dataset.syncSeq = String(seq);
+
+  if (selectEl && !S.modelsByProvider[provider]) {
+    selectEl.replaceChildren(el('option', { value: desiredValue || '', text: 'Chargement des modèles disponibles…' }));
+    selectEl.hidden = false;
+    if (inputEl) inputEl.hidden = true;
+  }
+
+  const disc = await fetchProviderModels(provider, fetchOpts);
+  if (selectEl && selectEl.dataset.syncSeq !== String(seq)) return disc;
+  if (inputEl && inputEl.dataset.syncSeq !== String(seq)) return disc;
+
+  const list = Array.isArray(disc?.models) ? disc.models : [];
+  const preset = S.presets[provider];
+  const defVal =
+    role === 'reviewer'
+      ? disc?.defaultReviewerModel || preset?.reviewModel || preset?.model || ''
+      : disc?.defaultAgentModel || preset?.model || '';
+
+  if (list.length > 0 && selectEl) {
     selectEl.replaceChildren();
     for (const opt of list) {
-      selectEl.append(el('option', { value: opt.id, text: `${opt.label} (${opt.id})` }));
+      selectEl.append(el('option', { value: opt.id, text: formatModelOptionText(opt) }));
     }
     const val = (desiredValue || '').trim();
     const exists = list.some((o) => o.id === val);
     if (val && !exists) {
-      selectEl.append(el('option', { value: val, text: `${val} (personnalisé)` }));
+      selectEl.append(el('option', { value: val, text: `${val} (actuel)` }));
     }
-    selectEl.value = val && (exists || val) ? val : defVal;
+    selectEl.append(el('option', { value: CUSTOM_MODEL_SENTINEL, text: '✎ Saisir un autre ID manuellement…' }));
+
+    const chosen = val || defVal || list[0].id;
+    selectEl.value = chosen;
     selectEl.hidden = false;
     if (inputEl) {
       inputEl.hidden = true;
       inputEl.value = selectEl.value;
     }
     selectEl.onchange = () => {
-      if (inputEl) inputEl.value = selectEl.value;
+      if (!inputEl) return;
+      if (selectEl.value === CUSTOM_MODEL_SENTINEL) {
+        inputEl.hidden = false;
+        inputEl.value = '';
+        inputEl.focus();
+      } else {
+        inputEl.hidden = true;
+        inputEl.value = selectEl.value;
+      }
     };
   } else {
     if (selectEl) selectEl.hidden = true;
     if (inputEl) {
       inputEl.hidden = false;
-      const preset = S.presets[provider];
-      inputEl.value = desiredValue ?? preset?.model ?? '';
+      inputEl.value = (desiredValue || '').trim() || defVal;
     }
   }
+  return disc;
 }
 
-function readModelValue(provider, selectEl, inputEl) {
-  if (S.catalog[provider] && selectEl && !selectEl.hidden) return selectEl.value.trim();
+function readModelValue(_provider, selectEl, inputEl) {
+  if (selectEl && !selectEl.hidden && selectEl.value && selectEl.value !== CUSTOM_MODEL_SENTINEL) {
+    return selectEl.value.trim();
+  }
   return (inputEl?.value || '').trim();
 }
 
-function syncNewProjectModelFields() {
+async function syncNewProjectModelFields() {
   const mode = $('#np-provider-mode')?.value || '';
   const grid = $('#np-models-grid');
-  const agentSel = $('#np-agent-model');
-  const revSel = $('#np-rev-model');
-  if (!grid || !agentSel || !revSel) return;
-  if (!mode || !S.catalog[mode]) {
+  const revProvSel = $('#np-rev-provider');
+  if (!grid) return;
+  if (!mode) {
     grid.hidden = true;
     return;
   }
   grid.hidden = false;
-  const cat = S.catalog[mode];
-  agentSel.replaceChildren(...cat.agent.map((o) => el('option', { value: o.id, text: `${o.label}` })));
-  revSel.replaceChildren(...cat.reviewer.map((o) => el('option', { value: o.id, text: `${o.label}` })));
-  agentSel.value = cat.defaultAgentModel;
-  revSel.value = cat.defaultReviewerModel;
+  if (revProvSel) revProvSel.value = mode;
+  await Promise.all([
+    syncModelControl(mode, 'agent', $('#np-agent-model'), $('#np-agent-model-input'), ''),
+    syncModelControl(mode, 'reviewer', $('#np-rev-model'), $('#np-rev-model-input'), ''),
+  ]);
 }
 
 $('#np-provider-mode')?.addEventListener('change', syncNewProjectModelFields);
+$('#np-rev-provider')?.addEventListener('change', () => {
+  const revProv = $('#np-rev-provider')?.value || '';
+  if (revProv) syncModelControl(revProv, 'reviewer', $('#np-rev-model'), $('#np-rev-model-input'), '');
+});
 
-function openNewProject() {
+async function openNewProject() {
   if (location.hash === '#nouveau') location.hash = '';
+  if (!S.settings || !Object.keys(S.presets || {}).length) {
+    try {
+      const s = await api('/api/settings');
+      S.settings = s;
+      S.presets = s.presets || S.presets;
+    } catch {
+      /* ignore */
+    }
+  }
+  const globalSummary = S.settings ? `Défaut global du Studio (${S.settings.provider} · ${S.settings.model})` : 'Défaut global du Studio';
+  populateProviderSelect($('#np-provider-mode'), S.presets, { includeInheritLabel: globalSummary });
+  populateProviderSelect($('#np-rev-provider'), S.presets);
+
   $('#np-name').value = '';
   $('#np-episode').value = '';
   $('#np-episode').dataset.touched = '';
   $('#np-video').value = '';
   if ($('#np-aspect')) $('#np-aspect').value = '16:9';
   if ($('#np-provider-mode')) $('#np-provider-mode').value = '';
-  syncNewProjectModelFields();
+  await syncNewProjectModelFields();
   $('#np-kick').checked = true;
   $('#new-project-dialog').showModal();
   setTimeout(() => $('#np-name')?.focus(), 40);
@@ -1410,6 +1468,7 @@ $('#np-create').addEventListener('click', async (e) => {
   const video = $('#np-video').value.trim();
   const aspect = ($('#np-aspect')?.value || '16:9').trim();
   const npProvider = ($('#np-provider-mode')?.value || '').trim();
+  const npRevProvider = ($('#np-rev-provider')?.value || npProvider).trim();
   if (!name) return;
   const dialog = $('#new-project-dialog');
   const button = $('#np-create');
@@ -1425,9 +1484,9 @@ $('#np-create').addEventListener('click', async (e) => {
       ...(npProvider
         ? {
             provider: npProvider,
-            model: $('#np-agent-model')?.value || '',
-            reviewProvider: npProvider,
-            reviewModel: $('#np-rev-model')?.value || '',
+            model: readModelValue(npProvider, $('#np-agent-model'), $('#np-agent-model-input')),
+            reviewProvider: npRevProvider || npProvider,
+            reviewModel: readModelValue(npRevProvider || npProvider, $('#np-rev-model'), $('#np-rev-model-input')),
           }
         : {}),
     };
@@ -1480,69 +1539,104 @@ function formatModelSummary(s) {
 function syncSettingsApiKeyVisibility() {
   const p1 = $('#s-provider')?.value || '';
   const p2 = $('#s-rev-provider')?.value || '';
-  const noApiNeeded = (p) => p === 'codex' || p === 'agy' || p === 'mock';
-  const hideExtra = noApiNeeded(p1) && noApiNeeded(p2);
-  if ($('#s-baseurl-wrap')) $('#s-baseurl-wrap').hidden = p1 === 'agy' || p1 === 'mock';
-  if ($('#s-key-wrap')) $('#s-key-wrap').hidden = hideExtra;
+  const managedCreds = (p) => p === 'codex' || p === 'agy' || p === 'env' || p === 'mock';
+  const noKeyNeeded = (p) => managedCreds(p) || p === 'local';
+  if ($('#s-baseurl-wrap')) $('#s-baseurl-wrap').hidden = managedCreds(p1);
+  if ($('#s-key-wrap')) $('#s-key-wrap').hidden = noKeyNeeded(p1) && noKeyNeeded(p2);
 }
 
 async function openSettings() {
   const s = await api('/api/settings');
   S.settings = s;
   S.presets = s.presets || S.presets;
-  if (s.catalog) S.catalog = s.catalog;
 
   const select = $('#s-provider');
   const revSelect = $('#s-rev-provider');
-  populateProviderSelect(select, S.presets, 'agent');
-  populateProviderSelect(revSelect, S.presets, 'reviewer');
+  populateProviderSelect(select, S.presets);
+  populateProviderSelect(revSelect, S.presets);
 
   select.value = s.provider;
   const revProv = s.reviewer?.provider || s.provider;
   if (revSelect) revSelect.value = revProv;
 
-  syncModelControl(s.provider, 'agent', $('#s-model-select'), $('#s-model'), s.model);
-  syncModelControl(revProv, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), s.reviewer?.model || '');
-
   if ($('#s-theme')) $('#s-theme').value = S.theme;
   $('#s-baseurl').value = s.baseURL || '';
   $('#s-key').value = '';
   $('#s-key').placeholder =
-    s.provider === 'codex' || s.provider === 'agy' ? '(session OAuth locale — aucune clé requise)' : s.hasKey ? '(clé enregistrée)' : 'sk-…';
+    s.provider === 'codex' || s.provider === 'agy'
+      ? '(session OAuth locale — aucune clé requise)'
+      : s.provider === 'env'
+        ? '(clé lue depuis .env)'
+        : s.hasKey
+          ? '(clé enregistrée)'
+          : 'sk-…';
   $('#s-token').value = S.token;
   syncSettingsApiKeyVisibility();
 
+  const envStatus = $('#s-env-status');
+  if (envStatus) {
+    if (s.envProvider?.available) {
+      envStatus.hidden = false;
+      envStatus.textContent = `✓ API personnalisée (.env — ${s.envProvider.host}) disponible — défaut Agent : ${s.envProvider.model} · Reviewer : ${s.envProvider.reviewModel}.`;
+    } else {
+      envStatus.hidden = true;
+    }
+  }
   const codexStatus = $('#s-codex-status');
   if (codexStatus) {
     codexStatus.hidden = false;
     codexStatus.textContent = s.codexReady
-      ? '✓ Codex prêt (~/.codex/auth.json) — choix : gpt-6.1-terra ou gpt-6.1-sol (Agent & Reviewer).'
+      ? '✓ Codex prêt (~/.codex/auth.json) — liste des modèles récupérée automatiquement depuis ton abonnement.'
       : 'Session Codex absente : lance « codex login » sur la machine hôte pour activer ton abonnement ChatGPT.';
   }
   const agyStatus = $('#s-agy-status');
   if (agyStatus) {
     agyStatus.hidden = false;
     agyStatus.textContent = s.agyReady
-      ? '✓ Binaire Google Antigravity (agy) détecté — Agent : 3.8-flash-medium / carbon-low / argon-low · Reviewer : argon-medium / carbon-medium.'
+      ? '✓ Google Antigravity (agy) détecté — modèles récupérés directement via « agy models ».'
       : 'Binaire agy non détecté dans le conteneur : vérifie ~/.local/bin/agy.';
   }
   $('#s-skill').textContent = `skill : ${s.skillDir || 'introuvable (WHATIF_SKILL_DIR)'}`;
   $('#settings').showModal();
+
+  await Promise.all([
+    syncModelControl(s.provider, 'agent', $('#s-model-select'), $('#s-model'), s.model),
+    syncModelControl(revProv, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), s.reviewer?.model || ''),
+  ]);
 }
 
 $('#s-provider').addEventListener('change', () => {
   const key = $('#s-provider').value;
   const preset = S.presets[key];
   if (preset) $('#s-baseurl').value = preset.baseURL || '';
-  syncModelControl(key, 'agent', $('#s-model-select'), $('#s-model'), S.catalog[key]?.defaultAgentModel || preset?.model || '');
   syncSettingsApiKeyVisibility();
+  syncModelControl(key, 'agent', $('#s-model-select'), $('#s-model'), '');
 });
 
 $('#s-rev-provider')?.addEventListener('change', () => {
   const key = $('#s-rev-provider').value;
-  const preset = S.presets[key];
-  syncModelControl(key, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), S.catalog[key]?.defaultReviewerModel || preset?.reviewModel || preset?.model || '');
   syncSettingsApiKeyVisibility();
+  syncModelControl(key, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), '');
+});
+
+$('#s-refresh-models')?.addEventListener('click', async () => {
+  const btn = $('#s-refresh-models');
+  if (btn) btn.disabled = true;
+  try {
+    S.modelsByProvider = {};
+    const p1 = $('#s-provider').value;
+    const p2 = $('#s-rev-provider')?.value || p1;
+    const curAgent = readModelValue(p1, $('#s-model-select'), $('#s-model'));
+    const curRev = readModelValue(p2, $('#s-rev-model-select'), $('#s-rev-model'));
+    const agentOpts =
+      p1 !== 'codex' && p1 !== 'agy' && p1 !== 'env'
+        ? { refresh: true, baseURL: $('#s-baseurl').value, apiKey: $('#s-key').value }
+        : { refresh: true };
+    await syncModelControl(p1, 'agent', $('#s-model-select'), $('#s-model'), curAgent, agentOpts);
+    await syncModelControl(p2, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), curRev, { refresh: p2 !== p1 });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 });
 
 $('#settings-btn').addEventListener('click', openSettings);
@@ -1578,6 +1672,7 @@ $('#s-save').addEventListener('click', async (e) => {
   $('#settings').close();
   const s = await api('/api/settings');
   S.settings = s;
+  S.presets = s.presets || S.presets;
   $('#model').textContent = formatModelSummary(s);
   await loadProjects();
 });
@@ -1594,11 +1689,10 @@ async function openProjectModelDialog() {
     const s = await api('/api/settings');
     S.settings = s;
     S.presets = s.presets || {};
-    if (s.catalog) S.catalog = s.catalog;
   }
   $('#pm-title').textContent = `Modèles du projet #${S.project.name}`;
-  populateProviderSelect($('#pm-provider'), S.presets, 'agent');
-  populateProviderSelect($('#pm-rev-provider'), S.presets, 'reviewer');
+  populateProviderSelect($('#pm-provider'), S.presets);
+  populateProviderSelect($('#pm-rev-provider'), S.presets);
 
   const hasCustom = Boolean(S.project.provider || S.project.model || S.project.review_provider || S.project.review_model);
   $('#pm-mode').value = hasCustom ? 'custom' : 'inherit';
@@ -1611,22 +1705,38 @@ async function openProjectModelDialog() {
 
   $('#pm-provider').value = prov;
   $('#pm-rev-provider').value = revProv;
-  syncModelControl(prov, 'agent', $('#pm-model-select'), $('#pm-model'), model);
-  syncModelControl(revProv, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), revModel);
   syncProjectModelModeUI();
   $('#project-model-dialog').showModal();
+
+  await Promise.all([
+    syncModelControl(prov, 'agent', $('#pm-model-select'), $('#pm-model'), model),
+    syncModelControl(revProv, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), revModel),
+  ]);
 }
 
 $('#pm-mode')?.addEventListener('change', syncProjectModelModeUI);
 $('#pm-provider')?.addEventListener('change', () => {
   const key = $('#pm-provider').value;
-  const preset = S.presets[key];
-  syncModelControl(key, 'agent', $('#pm-model-select'), $('#pm-model'), S.catalog[key]?.defaultAgentModel || preset?.model || '');
+  syncModelControl(key, 'agent', $('#pm-model-select'), $('#pm-model'), '');
 });
 $('#pm-rev-provider')?.addEventListener('change', () => {
   const key = $('#pm-rev-provider').value;
-  const preset = S.presets[key];
-  syncModelControl(key, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), S.catalog[key]?.defaultReviewerModel || preset?.reviewModel || preset?.model || '');
+  syncModelControl(key, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), '');
+});
+$('#pm-refresh-models')?.addEventListener('click', async () => {
+  const btn = $('#pm-refresh-models');
+  if (btn) btn.disabled = true;
+  try {
+    S.modelsByProvider = {};
+    const p1 = $('#pm-provider').value;
+    const p2 = $('#pm-rev-provider').value;
+    const curAgent = readModelValue(p1, $('#pm-model-select'), $('#pm-model'));
+    const curRev = readModelValue(p2, $('#pm-rev-model-select'), $('#pm-rev-model'));
+    await syncModelControl(p1, 'agent', $('#pm-model-select'), $('#pm-model'), curAgent, { refresh: true });
+    await syncModelControl(p2, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), curRev, { refresh: p2 !== p1 });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 });
 $('#project-model-btn')?.addEventListener('click', openProjectModelDialog);
 $('#project-model-dialog')?.addEventListener('click', (e) => {
@@ -1664,7 +1774,6 @@ $('#pm-save')?.addEventListener('click', async (e) => {
     const s = await api('/api/settings');
     S.settings = s;
     S.presets = s.presets || S.presets;
-    if (s.catalog) S.catalog = s.catalog;
     $('#model').textContent = formatModelSummary(s);
     if (!s.skillDir) $('#model').title = 'WHATIF_SKILL_DIR introuvable : le scaffold et les scripts ne marcheront pas';
     await loadProjects();

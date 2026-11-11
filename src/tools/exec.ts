@@ -57,10 +57,12 @@ export function exec(
     let timedOut = false;
     let settled = false;
     const max = opts.maxBytes ?? MAX_OUT;
+    let killEscalation: NodeJS.Timeout | undefined;
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (killEscalation) clearTimeout(killEscalation);
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({ code, stdout: out, stderr: err, timedOut, argv });
     };
@@ -69,13 +71,32 @@ export function exec(
       env: opts.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const terminateGracefully = () => {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      if (!killEscalation) {
+        killEscalation = setTimeout(() => {
+          if (!settled) {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              /* ignore */
+            }
+          }
+        }, 4_000);
+        killEscalation.unref?.();
+      }
+    };
     const onAbort = () => {
-      child.kill('SIGKILL');
+      terminateGracefully();
     };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      terminateGracefully();
     }, opts.timeoutMs ?? 180_000);
 
     let lineBuf = '';

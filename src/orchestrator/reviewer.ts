@@ -504,8 +504,8 @@ export async function reviewEpisodeBoard(
   // Determine whether this review is Round 1 (Global 100% Audit) or Round 2+ (Targeted High-Res Delta Re-check)
   const prevReview = loadPreviousReview(outDir);
   const prevErrors = prevReview?.ok && !prevReview.pass ? prevReview.issues.filter((i) => i.severity === 'error') : [];
-  const prevRound = typeof prevReview?.round === 'number' && prevReview.blocking ? prevReview.round : 0;
-  const round = opts.round ?? (prevReview?.blocking ? prevRound + 1 : 1);
+  const prevRound = typeof prevReview?.round === 'number' ? prevReview.round : 0;
+  const round = opts.round ?? (prevReview?.ok ? prevRound + 1 : 1);
 
   const requestedMode = opts.mode ?? 'auto';
   const prevCreatedMs = prevReview?.createdAt ? Date.parse(prevReview.createdAt) || 0 : 0;
@@ -528,7 +528,11 @@ export async function reviewEpisodeBoard(
   const useDeltaMode =
     requestedMode === 'delta' ||
     (requestedMode === 'auto' &&
-      Boolean(prevReview?.ok && !prevReview.pass && prevReview.blocking && prevErrors.length > 0 && deltaTargetShots.length > 0));
+      Boolean(
+        prevReview?.ok &&
+          deltaTargetShots.length > 0 &&
+          ((!prevReview.pass && prevReview.blocking && prevErrors.length > 0) || prevReview.pass),
+      ));
 
   const sizeDrift = directorSizeMismatches(directorRaw, ep);
   const autoMetrics = [
