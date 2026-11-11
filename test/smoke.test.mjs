@@ -3310,3 +3310,99 @@ print(json.dumps(out))
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('character casting & rendering fixes: rich palette + strict colour validation, sober defaults, cap/ponytail yaw orientation & macro hand skin inheritance', async () => {
+  const ts = (await import('typescript')).default;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-char-fixes-'));
+  try {
+    const transpileEsm = (relPath) => {
+      const src = fs.readFileSync(new URL(relPath, import.meta.url), 'utf8');
+      return ts.transpileModule(src, {
+        compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+    };
+
+    const castFile = path.join(dir, 'cast.mjs');
+    fs.writeFileSync(castFile, transpileEsm('../engine-overlay/files/src/engine/cast.ts'));
+    const { cast, COLORS, SKINS } = await import(castFile);
+
+    // 1. Expanded palette works for charcoal, bordeaux, emerald, beige, indigo; unknown color throws explicitly
+    const stalker = cast({ seed: 'stalker', kind: 'masc', outfit: ['hoodie:charcoal', 'pants:anthracite', 'boots'] });
+    assert.equal(stalker.cast.top.color, COLORS.charcoal, 'charcoal hoodie stays dark charcoal, never random turquoise');
+    assert.equal(stalker.cast.feet.color, COLORS.black, 'boots default to black when no colour is given');
+
+    const tech = cast({ seed: 'tech', kind: 'masc', outfit: ['shirt:white', 'apron:bordeaux', 'pants:black'] });
+    assert.equal(tech.cast.over.color, COLORS.bordeaux, 'bordeaux apron resolves cleanly');
+
+    const dressHer = cast({ as: 'heroine', seed: 'her', outfit: ['dress:emerald', 'formal'] });
+    assert.equal(dressHer.cast.top.color, COLORS.emerald);
+    assert.equal(dressHer.cast.feet.color, COLORS.black);
+
+    assert.throws(() => cast({ seed: 'bad', outfit: ['hoodie:neonchartreuse'] }), /unknown colour for hoodie "neonchartreuse"/);
+    assert.throws(() => cast({ seed: 'bad2', skin: 'martian_green' }), /unknown skin tone "martian_green"/);
+
+    // 2. Sober defaults: no random beard/mustache/blush/missing brows or neon shoes across 30 masc/fem seeds
+    for (let i = 0; i < 30; i++) {
+      const m = cast({ seed: `m${i}`, body: 'adult', kind: 'masc' });
+      assert.equal(m.cast.face.facial, 'none', 'masc character has no surprise beard/mustache unless specified');
+      assert.equal(m.cast.face.marks, 'none', 'no random blush/freckles unless specified');
+      assert.notEqual(m.cast.face.brows, 'none', 'no eyebrowless random characters');
+      assert.notEqual(m.shoe, '#2FB7A6');
+      assert.notEqual(m.shoe, '#F2545B');
+    }
+    assert.equal(cast({ seed: 'dad', kind: 'masc', facial: 'stubble' }).cast.face.facial, 'stubble', 'top-level facial alias works');
+
+    // 3. Headwear crown colour (L.accent) matches cap colour or uniform instead of random pastel
+    const cop = cast({ as: 'police', seed: 'sami' });
+    assert.equal(cop.accent, '#1E2A44', 'police cap crown uses navy #1E2A44, not random pastel');
+    const customCop = cast({ seed: 'sami2', hair: { style: 'cap', color: 'navy' }, outfit: ['shirt:navy', 'pants:navy'] });
+    assert.equal(customCop.accent, COLORS.navy);
+
+    // 4. person.tsx FrontHead uses forward(pose) for ponytail & cap when yaw < 0 even if facing === 1
+    const personSrc = fs.readFileSync(new URL('../engine-overlay/files/src/engine/person.tsx', import.meta.url), 'utf8');
+    assert.match(personSrc, /const f = forward\(pose\);/);
+    assert.doesNotMatch(personSrc, /pose\.facing \* 52/, 'ponytail no longer uses raw pose.facing');
+    assert.doesNotMatch(personSrc, /pose\.facing > 0 \? -10 : -82/, 'cap visor no longer uses raw pose.facing');
+
+    // 5. tabletopShot & phoneShot inherit character skin & sleeve via `who`
+    const darkMan = cast({ seed: 'man', kind: 'masc', skin: 'deep', outfit: ['shirt:white', 'blazer:charcoal', 'pants:black'] });
+    assert.equal(darkMan.skin, SKINS.deep);
+
+    const accentsCjs = ts.transpileModule(
+      fs.readFileSync(new URL('../engine-overlay/files/src/engine/accents.tsx', import.meta.url), 'utf8'),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } },
+    ).outputText;
+    const accMod = { exports: {} };
+    const collectFills = (node, out = []) => {
+      if (!node || typeof node !== 'object') return out;
+      if (Array.isArray(node)) {
+        for (const c of node) collectFills(c, out);
+        return out;
+      }
+      if (node.props?.fill) out.push(node.props.fill);
+      if (node.props?.children) collectFills(node.props.children, out);
+      return out;
+    };
+    const el = (type, props) => ({ type, props });
+    new Function('exports', 'require', 'module', accentsCjs)(
+      accMod.exports,
+      (id) => {
+        if (id === 'react') return { createElement: el };
+        if (id === 'react/jsx-runtime') return { jsx: el, jsxs: el };
+        if (id === '../studio.config') return { STUDIO: { width: 1080, height: 1920 } };
+        throw new Error(`unexpected import ${id}`);
+      },
+      accMod,
+    );
+    const ringInsert = accMod.exports.tabletopShot({
+      surface: 'dark-wood',
+      items: [{ kind: 'ring' }],
+      hands: [{ who: darkMan, action: 'reach', at: 2 }],
+    })({ t: 14, len: 60 });
+    const ringFills = collectFills(ringInsert);
+    assert.ok(ringFills.includes(SKINS.deep), 'tabletopShot hand inherits darkMan skin (#5C3A28)');
+    assert.ok(ringFills.includes(COLORS.charcoal), 'tabletopShot sleeve inherits darkMan blazer colour');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

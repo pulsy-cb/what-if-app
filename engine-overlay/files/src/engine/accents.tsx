@@ -510,6 +510,8 @@ export type TabletopHandSpec = {
   /** Index in `items` the hand aims toward (default 0) */
   target?: number;
   at?: number;
+  /** Optional character (`cast(...)` / `makeLook(...)`) whose skin & sleeve colours are inherited automatically */
+  who?: { skin?: string; jacket?: string; cast?: { over?: { color?: string }; top?: { color?: string } } };
   skin?: string;
   sleeve?: string;
 };
@@ -760,8 +762,8 @@ export const tabletopShot = (spec: TabletopSpec): React.FC<{ t: number; len: num
             const reach = easeOut3(Math.min(1, dt / 12));
             const tremble = h.action === 'tremble' ? Math.sin(t * 1.9) * 5 : 0;
             const side = h.side ?? 'bottom';
-            const skin = h.skin ?? '#E9BE9A';
-            const sleeve = h.sleeve ?? '#2F3D5C';
+            const skin = h.skin ?? h.who?.skin ?? '#E9BE9A';
+            const sleeve = h.sleeve ?? h.who?.cast?.over?.color ?? h.who?.cast?.top?.color ?? h.who?.jacket ?? '#2F3D5C';
 
             const startX = side === 'left' ? VB.x - 140 : side === 'right' ? VB.x + VB.w + 140 : tx + 40;
             const startY = side === 'bottom' ? VB.y + VB.h + 150 : ty + 60;

@@ -27,7 +27,16 @@ export const HairLayer: React.FC<{ style: string; view: View; part: Part; color:
 
   switch (style) {
     case 'long':
-      if (view === 'front') return part === 'behind' ? path(`M -74 ${Y + 86} Q -88 ${Y - 74} 0 ${Y - 76} Q 88 ${Y - 74} 74 ${Y + 86} Q 0 ${Y + 96} -74 ${Y + 86} Z`) : cap;
+      if (view === 'front') {
+        if (part === 'behind') {
+          return path(
+            `M -74 ${Y + 86} L -54 ${Y + 92} L -36 ${Y + 78} Q 0 ${Y + 50} 36 ${Y + 78} L 54 ${Y + 92} L 74 ${Y + 86} Q 84 ${Y - 72} 0 ${Y - 74} Q -84 ${Y - 72} -74 ${Y + 86} Z`,
+          );
+        }
+        return path(
+          `M -62 ${Y + 28} Q -68 ${Y - 72} -4 ${Y - 72} L 4 ${Y - 58} L 10 ${Y - 72} Q 68 ${Y - 70} 62 ${Y + 28} Q 54 ${Y - 8} 46 ${Y - 30} Q 24 ${Y - 46} 6 ${Y - 52} Q -18 ${Y - 44} -46 ${Y - 30} Q -54 ${Y - 8} -62 ${Y + 28} Z`,
+        );
+      }
       if (view === 'profile') return part === 'behind' ? path(`M 10 ${Y - 66} Q -84 ${Y - 66} -82 ${Y + 88} Q -56 ${Y + 96} -30 ${Y + 86} Q -30 ${Y + 10} 8 ${Y - 40} Z`) : cap;
       return part === 'over' ? path(`M -76 ${Y + 90} Q -88 ${Y - 74} 0 ${Y - 76} Q 88 ${Y - 74} 76 ${Y + 90} Q 0 ${Y + 102} -76 ${Y + 90} Z`) : null;
     case 'bun': {

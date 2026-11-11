@@ -348,6 +348,7 @@ const Face: React.FC<{
 
 /** The front head: the rig's own drawing, hair and gear included. */
 const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNode }> = ({ pose, L, headGear }) => {
+  const f = forward(pose);
   const noTuft =
     L.extra === 'bunches' ||
     L.extra === 'bob' ||
@@ -361,14 +362,14 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
   const head = (
     <g transform={`rotate(${pose.tilt}) rotate(${pose.headTilt} 0 ${HEAD.y + 40})`}>
       {L.extra === 'ponytail' ? (
-        <g transform={`rotate(${pose.sway * 0.6} ${-pose.facing * 52} ${HEAD.y - 18})`}>
+        <g transform={`rotate(${pose.sway * 0.6} ${-f * 52} ${HEAD.y - 18})`}>
           <path
-            d={`M ${-pose.facing * 48} ${HEAD.y - 24} Q ${-pose.facing * 92} ${HEAD.y - 42} ${-pose.facing * 88} ${HEAD.y + 14} Q ${-pose.facing * 64} ${HEAD.y + 8} ${-pose.facing * 48} ${HEAD.y - 10} Z`}
+            d={`M ${-f * 48} ${HEAD.y - 24} Q ${-f * 92} ${HEAD.y - 42} ${-f * 88} ${HEAD.y + 14} Q ${-f * 64} ${HEAD.y + 8} ${-f * 48} ${HEAD.y - 10} Z`}
             fill={L.hair}
             stroke={L.line}
             strokeWidth={4}
           />
-          <circle cx={-pose.facing * 52} cy={HEAD.y - 18} r={8} fill={L.accent} />
+          <circle cx={-f * 52} cy={HEAD.y - 18} r={8} fill={L.accent} />
         </g>
       ) : null}
       {L.extra === 'afro' ? (
@@ -419,7 +420,7 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
       {L.extra === 'cap' ? (
         <g transform={`translate(${-pose.yaw * 8} 0)`}>
           <path d={`M -62 ${HEAD.y - 22} A 62 56 0 0 1 62 ${HEAD.y - 22} Z`} fill={L.accent} stroke={L.line} strokeWidth={4} />
-          <path d={`M ${pose.facing > 0 ? -10 : -82} ${HEAD.y - 22} L ${pose.facing > 0 ? 82 : 10} ${HEAD.y - 22} Q ${pose.facing * 92} ${HEAD.y - 12} ${pose.facing * 50} ${HEAD.y - 10} L ${pose.facing > 0 ? -10 : -50} ${HEAD.y - 14} Z`} fill={L.jacket} stroke={L.line} strokeWidth={4} />
+          <path d={`M ${f > 0 ? -10 : -82} ${HEAD.y - 22} L ${f > 0 ? 82 : 10} ${HEAD.y - 22} Q ${f * 92} ${HEAD.y - 12} ${f * 50} ${HEAD.y - 10} L ${f > 0 ? -10 : -50} ${HEAD.y - 14} Z`} fill={L.jacket} stroke={L.line} strokeWidth={4} />
         </g>
       ) : null}
       {L.extra === 'beanie' ? (

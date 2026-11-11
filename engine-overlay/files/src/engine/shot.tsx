@@ -330,6 +330,7 @@ export type PhoneSpec = {
   /** battery percent in the status bar; 10 or less shows red */ battery?: number;
   /** clock in the status bar */ time?: string;
   /** the room behind the phone, blurred */ back?: Placed;
+  /** optional character (`cast(...)`) whose hand skin colour is inherited automatically */ who?: { skin?: string };
   /** hand skin colour; null hides the hand */ skin?: string | null;
   /** case colour */ case?: string;
   /** chat accent (my bubbles) */ accent?: string;
@@ -467,7 +468,7 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
     const cy = 540 + Math.cos(t / 29) * 3 + (PORTRAIT ? 30 : 10);
     const tilt = -4 + Math.sin(t / 37) * 0.8;
     const bezel = W * 0.04;
-    const skin = spec.skin === null ? null : spec.skin ?? '#E9BE9A';
+    const skin = spec.skin === null ? null : spec.skin ?? spec.who?.skin ?? '#E9BE9A';
     const typingNow = spec.typing && t >= spec.typing.at && t <= spec.typing.at + (spec.typing.dur ?? 30);
     const tap = typingNow ? Math.abs(Math.sin(t * 0.9)) * 10 : 0;
     return (
