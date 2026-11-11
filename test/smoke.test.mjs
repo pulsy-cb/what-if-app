@@ -2814,3 +2814,119 @@ test('step 2 — shotlist.py: 3-gear cold-open hook + brisk long 16:9 pace, sema
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('step 3 — sfx_run.py: continuous crossfade ambience (>45s without 12.5s drop-off), no default music loop, semantic foley & voice-first mix', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-step3-sfx-'));
+  try {
+    const slug = 'er-ambience';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const pubDir = path.join(dir, 'public', slug);
+    const libDir = path.join(dir, 'library', 'sfx');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+    fs.mkdirSync(libDir, { recursive: true });
+
+    // Synthesize short cached library clips (8s room_tone / roof_wind — shorter than the 45s episode! — plus foley hits)
+    const makeMp3 = (name, freq, secs, amp = 0.25) => {
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${freq}:duration=${secs}:sample_rate=44100`, '-af', `volume=${amp}`, path.join(libDir, `${name}-cached01.mp3`)],
+        { stdio: 'pipe' },
+      );
+    };
+    makeMp3('room_tone', 180, 8.0, 0.22);
+    makeMp3('roof_wind', 240, 7.5, 0.22);
+    makeMp3('class_murmur', 210, 7.0, 0.22);
+    makeMp3('title_boom', 95, 1.2, 0.5);
+    makeMp3('paper_land', 520, 0.7, 0.35);
+    makeMp3('clink', 880, 0.6, 0.35);
+    makeMp3('pop', 660, 0.4, 0.35);
+    makeMp3('gasp', 410, 0.8, 0.4);
+    makeMp3('drone_hit', 110, 1.8, 0.45);
+    makeMp3('switch_off', 330, 0.5, 0.4);
+    makeMp3('clock_back', 480, 1.1, 0.35);
+
+    // 45-second voice.wav + stale music.wav to verify stale music cleanup
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=45:sample_rate=44100', '-af', 'volume=0.45', path.join(pubDir, 'voice.wav')],
+      { stdio: 'pipe' },
+    );
+    fs.writeFileSync(path.join(pubDir, 'music.wav'), 'stale-music');
+
+    const shots = [
+      { id: 'S1', set: 'hospital', size: 'wide', note: 'Urgences la nuit', beat: 'Ouverture aux urgences', accent: 'hook-title' },
+      { id: 'S2', set: 'hospital', size: 'insert', note: 'Dossier médical et lettre sur le bureau', beat: 'Elle ouvre la lettre', accent: 'tag' },
+      { id: 'S3', set: 'hospital', size: 'close', note: 'Choc du médecin', beat: 'Panique devant le moniteur', accent: 'vfx:shock' },
+      { id: 'S4', set: 'street', size: 'wide', note: 'Dehors sur le parking', beat: 'Trois heures plus tard dehors', accent: 'stamp' },
+      { id: 'S5', set: 'street', size: 'insert', note: 'Message sur son téléphone', beat: 'Un SMS arrive sur son écran' },
+      { id: 'S6', set: 'hospital', size: 'close', note: 'Dernier regard dans la chambre', beat: 'Tout bascule en silence' },
+    ];
+    const segLen = 225; // 6 * 225 = 1350 frames = 45.0s @ 30fps
+    const tl = {
+      fps: 30,
+      total: 1350,
+      segments: shots.map((s, i) => ({ shot: s.id, a: i * segLen, b: (i + 1) * segLen })),
+      shots: shots.map((s) => ({ id: s.id, len: segLen, key: 40 })),
+      audio: { music: `${slug}/music.wav`, musicVol: 0.3 },
+    };
+    const ep = {
+      id: 'ErAmb',
+      slug,
+      aspect: '16:9',
+      shots,
+      edit: [{ shot: 'S1' }, { shot: 'S2' }, { shot: 'S3', look: 'tension' }, { shot: 'S4', look: 'memory' }, { shot: 'S5' }, { shot: 'S6' }],
+      fx: [{ at: 'S3', kind: 'flash' }, { at: 'S6', kind: 'shake' }],
+    };
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(ep, null, 2));
+    fs.writeFileSync(path.join(epDir, 'timeline.json'), JSON.stringify(tl, null, 2));
+    fs.writeFileSync(path.join(epDir, 'words.json'), '[]');
+
+    // Set dummy ELEVENLABS_API_KEY to verify cached studio clips never shell out to broken scripts/sfx.py or fail network calls
+    const out = execFileSync('python3', [path.resolve('pipeline/sfx_run.py'), slug], {
+      cwd: dir,
+      env: { ...process.env, ELEVENLABS_API_KEY: 'dummy-key-cached-clips-must-not-hit-network' },
+      encoding: 'utf8',
+    });
+    assert.match(out, /RESULT_JSON:\{"ok":\s*true/);
+
+    const savedEp = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    const savedTl = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+
+    // 1. No looped music bed by default + stale music.wav removed
+    assert.equal(savedEp.sound.music, undefined, 'default sound section omits looped music bed');
+    assert.equal(savedTl.audio.music, undefined, 'timeline.json removes stale audio.music');
+    assert.equal(fs.existsSync(path.join(pubDir, 'music.wav')), false, 'stale music.wav is deleted when music is omitted');
+
+    // 2. Semantic foley & ambience — zero generic copy_click / paste_pop / select_draw UI cycle
+    const usedClips = savedEp.sound.events.map((ev) => ev[1]);
+    assert.ok(!usedClips.includes('copy_click') && !usedClips.includes('paste_pop') && !usedClips.includes('select_draw'), `no generic UI clicks (${usedClips.join(', ')})`);
+    assert.ok(usedClips.includes('room_tone') && usedClips.includes('roof_wind'), 'indoor/outdoor ambience beds placed per location');
+    assert.ok(usedClips.includes('paper_land') && usedClips.includes('pop') && usedClips.includes('gasp'), 'semantic prop/phone/shock foley placed');
+
+    // 3. Voice-dominant mix
+    assert.equal(savedTl.audio.voiceVol, 0.8);
+    assert.ok(savedTl.audio.sfxVol < savedTl.audio.voiceVol, `sfxVol (${savedTl.audio.sfxVol}) stays below voiceVol (${savedTl.audio.voiceVol})`);
+
+    // 4. Continuous ambience across the full 45s (8s room_tone/roof_wind crossfade-tiled without dropping to silence at 15s, 28s, or 41s)
+    const wavBuf = fs.readFileSync(path.join(pubDir, 'sfx.wav'));
+    const pcm = new Int16Array(wavBuf.buffer, wavBuf.byteOffset + 44, (wavBuf.byteLength - 44) >> 1);
+    const rmsAt = (sec) => {
+      const start = Math.floor(sec * 44100);
+      const len = Math.floor(0.5 * 44100);
+      let sum = 0;
+      for (let i = start; i < start + len && i < pcm.length; i++) {
+        const v = pcm[i] / 32768;
+        sum += v * v;
+      }
+      return Math.sqrt(sum / len);
+    };
+    for (const checkSec of [4, 16, 27, 41]) {
+      const rms = rmsAt(checkSec);
+      assert.ok(rms > 0.015, `expected continuous ambient audio at t=${checkSec}s (beyond 8s clip length), got RMS=${rms.toFixed(4)}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

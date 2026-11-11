@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 import wave
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,8 @@ def resolve_cue(cue: Any, words: list[dict], fps: int, segments: list[dict], sho
     if not m:
         return 0
     base, nth, off = m["base"], int(m["nth"] or 1), int(m["off"] or 0)
+    if base.lower() == "end" and segments:
+        return max(0, int(segments[-1].get("b", 0)) + off)
     if base in shot_ids:
         segs = [seg for seg in segments if seg.get("shot") == base]
         if segs:
@@ -122,20 +125,30 @@ def find_library_clip(lib_dir: Path, name: str, prompt: str, secs: float) -> Pat
     lower = f"{name} {prompt}".lower()
     synonyms = {
         "music": ["music", "bed", "loop", "bgm"],
-        "room_tone": ["room", "ambient", "tone", "indoor", "study"],
-        "class_murmur": ["class", "school", "murmur", "whisper"],
-        "roof_wind": ["wind", "roof", "breeze", "city", "outdoor"],
-        "title_boom": ["title", "boom", "impact", "whoosh"],
-        "paper_land": ["paper", "sheet", "page", "card", "cut", "rustle"],
+        "room_tone": ["room", "ambient", "tone", "indoor", "study", "hospital", "corridor"],
+        "class_murmur": ["class", "school", "murmur", "whisper", "crowd"],
+        "roof_wind": ["wind", "roof", "breeze", "city", "outdoor", "street", "park"],
+        "title_boom": ["title", "boom", "impact"],
+        "fall_whoosh": ["whoosh", "swoosh", "fall", "swipe"],
+        "paper_land": ["paper", "sheet", "page", "card", "cut", "rustle", "letter", "dossier", "envelope"],
         "select_draw": ["draw", "write", "pen", "line", "select", "chalk"],
-        "copy_click": ["click", "tap", "button"],
+        "copy_click": ["click", "tap", "button", "keyboard"],
         "paste_pop": ["paste", "appear", "twist", "fold", "glue"],
         "counter_tick": ["tick", "count", "number", "calc"],
-        "power_hum": ["hum", "drone", "loop", "energy"],
-        "drone_hit": ["dark", "turn", "ominous", "sting", "hit"],
-        "switch_off": ["switch", "off", "end", "stop"],
+        "clock_back": ["clock", "flashback", "memory", "time"],
+        "power_hum": ["hum", "drone", "energy", "monitor"],
+        "drone_hit": ["dark", "turn", "ominous", "sting", "hit", "tension"],
+        "switch_off": ["switch", "off", "end", "stop", "door"],
+        "clink": ["clink", "mug", "cup", "glass", "key", "ring", "coin"],
+        "shatter": ["shatter", "smash", "break"],
+        "crack": ["crack", "snap", "slap"],
+        "gasp": ["gasp", "breath", "shock", "startle"],
+        "laugh": ["laugh", "giggle"],
+        "step": ["step", "footstep", "walk", "shoe"],
+        "buzzer": ["buzzer", "wrong", "alarm", "error"],
+        "ding": ["ding", "bell", "correct", "check"],
         "sparkle": ["sparkle", "magic", "chime", "shine"],
-        "pop": ["pop", "bubble"],
+        "pop": ["pop", "bubble", "notify", "message"],
     }
     for lib_name, words_list in synonyms.items():
         if any(w in lower for w in words_list):
@@ -144,6 +157,33 @@ def find_library_clip(lib_dir: Path, name: str, prompt: str, secs: float) -> Pat
                 return cands[0]
     cands = sorted(lib_dir.glob("pop-*.mp3"))
     return cands[0] if cands else None
+
+
+def generate_missing_elevenlabs_clip(lib_dir: Path, name: str, prompt: str, secs: float, api_key: str) -> Path | None:
+    """Generate a genuinely new custom SFX clip via ElevenLabs and cache it in `library/sfx/`."""
+    h = hashlib.sha1(f"{prompt}|{secs}".encode()).hexdigest()[:8]
+    out_path = lib_dir / f"{name}-{h}.mp3"
+    if out_path.is_file():
+        return out_path
+    body = json.dumps(
+        {"text": prompt, "duration_seconds": max(0.5, min(22.0, float(secs))), "prompt_influence": 0.45}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.elevenlabs.io/v1/sound-generation?output_format=mp3_44100_128",
+        data=body,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            audio_bytes = resp.read()
+        if len(audio_bytes) > 256:
+            lib_dir.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(audio_bytes)
+            return out_path
+    except Exception as exc:
+        print(f"[sfx] ElevenLabs generation skipped for '{name}': {exc}", file=sys.stderr)
+    return None
 
 
 def onset(x: np.ndarray, mode: str) -> int:
@@ -155,17 +195,61 @@ def onset(x: np.ndarray, mode: str) -> int:
     return int(np.argmax(sm)) if mode == "peak" else int(np.argmax(sm > 0.2 * sm.max()))
 
 
+def tile_crossfade(x: np.ndarray, target_len: int) -> np.ndarray:
+    """Seamlessly tile an ambient clip across `target_len` samples using a smooth crossfade (no 12.5s drop-off!)."""
+    if target_len <= 0 or len(x) == 0:
+        return np.zeros(max(0, target_len))
+    if len(x) >= target_len:
+        return x[:target_len].copy()
+
+    # Trim tiny edge fades (up to 0.12s) if clip is long enough so loop seams never dip in energy
+    trim = min(int(0.12 * SR), len(x) // 10)
+    core = x[trim : len(x) - trim].copy() if len(x) - 2 * trim >= int(0.8 * SR) else x.copy()
+    xf = min(int(0.35 * SR), len(core) // 4)
+    if xf < 64:
+        reps = (target_len + len(core) - 1) // len(core)
+        return np.tile(core, reps)[:target_len].copy()
+
+    out = np.zeros(target_len)
+    first_n = min(target_len, len(core))
+    out[:first_n] = core[:first_n]
+    pos = first_n
+    theta = np.linspace(0.0, np.pi * 0.5, xf)
+    fade_out = np.cos(theta)
+    fade_in = np.sin(theta)
+    while pos < target_len:
+        ov_start = pos - xf
+        out[ov_start:pos] = out[ov_start:pos] * fade_out + core[:xf] * fade_in
+        rem_core = core[xf:]
+        take = min(target_len - pos, len(rem_core))
+        if take > 0:
+            out[pos : pos + take] = rem_core[:take]
+            pos += take
+        else:
+            break
+    return out
+
+
 def put(buf: np.ndarray, frame: int, x: np.ndarray, gain: float, fps: int, align: str = "onset", cut: int | None = None) -> None:
-    i = int(frame / fps * SR) - onset(x, align)
+    is_ambient = cut is not None and len(x) >= int(1.8 * SR)
+    i = int(frame / fps * SR) - (0 if is_ambient else onset(x, align))
     if i < 0:
         x = x[-i:]
         i = 0
     if cut is not None:
-        n = max(0, int(cut / fps * SR) - i)
-        x = x[:n].copy()
-        f = min(len(x), int(0.08 * SR))
-        if f > 0:
-            x[-f:] *= np.linspace(1, 0, f)
+        n = max(0, min(len(buf) - i, int(cut / fps * SR) - i))
+        if n <= 0:
+            return
+        if len(x) >= int(1.8 * SR) and n > len(x):
+            x = tile_crossfade(x, n)
+        else:
+            x = x[:n].copy()
+        fi = min(len(x) // 4, int(0.06 * SR)) if is_ambient else 0
+        if fi > 0:
+            x[:fi] *= np.linspace(0.0, 1.0, fi)
+        fo = min(len(x), int(0.12 * SR if is_ambient else 0.08 * SR))
+        if fo > 0:
+            x[-fo:] *= np.linspace(1.0, 0.0, fo)
     j = min(len(buf), i + len(x))
     if j > i:
         buf[i:j] += x[: j - i] * gain
@@ -193,9 +277,9 @@ def main(argv: list[str]) -> int:
     shots = ep.get("shots") or tl.get("shots") or []
     title_idx = next(
         (i for i, s in enumerate(shots) if "title" in str(s.get("size", "")).lower() or "title" in str(s.get("note", "")).lower()),
-        min(3, max(0, len(shots) // 2)),
+        -1,
     )
-    default_snd = build_default_sound(shots, title_idx) if shots else {}
+    default_snd = build_default_sound(shots, title_idx, ep.get("edit") or [], ep.get("fx") or []) if shots else {}
     if not ep.get("sound") or not (ep.get("sound") or {}).get("clips"):
         ep["sound"] = default_snd
         save_json(ep_path, ep)
@@ -209,41 +293,37 @@ def main(argv: list[str]) -> int:
             for k in snd.get("clips") or {}:
                 base = str(k).split("+")[0].split("-")[0].split("#")[0]
                 if base in shot_set or str(k).startswith(("f:", "s:")):
-                    evs.append([str(k), str(k), 0.28])
+                    evs.append([str(k), str(k), 0.24])
             snd["events"] = evs if evs else default_snd.get("events", [])
             for k, v in (default_snd.get("clips") or {}).items():
                 snd["clips"].setdefault(k, v)
-        if not snd.get("music") and default_snd.get("music"):
-            snd["clips"].setdefault("music", LIBRARY_CLIPS["music"])
-            snd["music"] = default_snd["music"]
         save_json(ep_path, ep)
 
-    # First try the skill's sfx.py if an ElevenLabs key is configured and valid
-    skill_dir = os.environ.get("WHATIF_SKILL_DIR") or str((studio.parent.parent.parent / "what-if-animation").resolve())
-    skill_sfx = Path(skill_dir) / "scripts" / "sfx.py"
-    if skill_sfx.is_file() and os.environ.get("ELEVENLABS_API_KEY"):
-        proc = subprocess.run([sys.executable, str(skill_sfx), *argv], cwd=str(studio), capture_output=True, text=True)
-        if proc.returncode == 0:
-            if proc.stdout:
-                print(proc.stdout.rstrip())
-            print(f"RESULT_JSON:{json.dumps({'ok': True, 'mode': 'elevenlabs', 'slug': slug})}")
-            return 0
-        print(f"[sfx] ElevenLabs sfx.py exited with {proc.returncode}; falling back to local library/sfx cache")
-
-    # Local fallback mixer using cached library/sfx MP3s
+    # Mix with our seamless crossfade-tiling & voice-first mixer (calling ElevenLabs ONLY for genuinely uncached custom clips)
     S = ep["sound"]
     fps = int(tl.get("fps") or 30)
     segments = tl.get("segments") or []
     shot_ids = [str(s.get("id")) for s in (tl.get("shots") or [])]
     dur = float(tl.get("total") or 480) / fps + 0.4
     cue_fn = lambda c: resolve_cue(c, words, fps, segments, shot_ids)
+    api_key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+    generated_count = 0
 
     clips: dict[str, np.ndarray] = {}
     resolved_files: dict[str, str] = {}
     for name, spec in (S.get("clips") or {}).items():
         prompt = str(spec[0]) if isinstance(spec, list) and spec else str(name)
         secs = float(spec[1]) if isinstance(spec, list) and len(spec) > 1 else 1.0
-        p = find_library_clip(lib_dir, name, prompt, secs)
+        h = hashlib.sha1(f"{prompt}|{secs}".encode()).hexdigest()[:8]
+        exact = lib_dir / f"{name}-{h}.mp3"
+        direct_prefix = sorted(lib_dir.glob(f"{name}-*.mp3"))
+        p: Path | None = exact if exact.is_file() else (direct_prefix[0] if direct_prefix else None)
+        if p is None and api_key and not dry:
+            p = generate_missing_elevenlabs_clip(lib_dir, name, prompt, secs, api_key)
+            if p is not None:
+                generated_count += 1
+        if p is None:
+            p = find_library_clip(lib_dir, name, prompt, secs)
         if p is None:
             continue
         x = decode(p)
@@ -251,7 +331,7 @@ def main(argv: list[str]) -> int:
         clips[name] = x / max(1e-9, m)
         resolved_files[name] = p.name
 
-    print(f"[sfx] resolved {len(clips)}/{len(S.get('clips') or {})} clips from library/sfx: {', '.join(sorted(clips))}")
+    print(f"[sfx] resolved {len(clips)}/{len(S.get('clips') or {})} clips ({generated_count} new via ElevenLabs): {', '.join(sorted(clips))}")
     if dry:
         print(f"RESULT_JSON:{json.dumps({'ok': True, 'dry': True, 'clips': resolved_files})}")
         return 0
@@ -284,10 +364,10 @@ def main(argv: list[str]) -> int:
     music = np.zeros(int(dur * SR))
     M = S.get("music")
     has_music = False
-    if isinstance(M, dict):
-        m_clip_name = str(M.get("clip") or "music")
-        if m_clip_name not in clips:
-            p = find_library_clip(lib_dir, "music", LIBRARY_CLIPS["music"][0], LIBRARY_CLIPS["music"][1])
+    if isinstance(M, dict) and M.get("clip"):
+        m_clip_name = str(M.get("clip"))
+        if m_clip_name not in clips and "music" in LIBRARY_CLIPS:
+            p = find_library_clip(lib_dir, m_clip_name, LIBRARY_CLIPS["music"][0], LIBRARY_CLIPS["music"][1])
             if p is not None:
                 x = decode(p)
                 clips[m_clip_name] = x / max(1e-9, float(np.abs(x).max()))
@@ -295,42 +375,41 @@ def main(argv: list[str]) -> int:
             has_music = True
             m = clips[m_clip_name]
             m0 = int(cue_fn(M["from"]) / fps * SR) if M.get("from") else 0
-            # Tile smoothly if the episode is longer than the cached 17s music loop
-            pos = m0
-            while pos < len(music) and len(m) > 0:
-                take = min(len(music) - pos, len(m))
-                music[pos : pos + take] = m[:take]
-                pos += take
-            if M.get("until"):
-                end = min(len(music), int(cue_fn(M["until"]) / fps * SR))
-                if end > m0:
-                    f = min(end, int(0.06 * SR))
-                    if f > 0:
-                        music[end - f : end] *= np.linspace(1, 0, f)
-                    music[end:] = 0
+            end = min(len(music), int(cue_fn(M["until"]) / fps * SR)) if M.get("until") else len(music)
+            if end > m0:
+                span = tile_crossfade(m, end - m0)
+                fo = min(len(span), int(0.08 * SR))
+                if fo > 0:
+                    span[-fo:] *= np.linspace(1.0, 0.0, fo)
+                music[m0:end] = span
 
     pub = studio / "public" / slug
     pub.mkdir(parents=True, exist_ok=True)
     write_wav(pub / "sfx.wav", sfx, 0.98)
+    music_wav_path = pub / "music.wav"
     if has_music:
-        write_wav(pub / "music.wav", music, 0.98)
+        write_wav(music_wav_path, music, 0.98)
+    elif music_wav_path.is_file():
+        music_wav_path.unlink()
 
     voice_file = next((pub / f"voice.{ext}" for ext in ("wav", "mp3") if (pub / f"voice.{ext}").is_file()), None)
-    L = {"sfx_lu": -1.5, "music_lu": -9.5}
+    L = {"sfx_lu": -4.5, "music_lu": -11.0}
     L.update(S.get("levels") or {})
     v_lufs, _ = loudness(voice_file) if voice_file else (-16.0, -1.0)
     if not np.isfinite(v_lufs):
         v_lufs = -16.0
     s_lufs, _ = loudness(pub / "sfx.wav")
     if not np.isfinite(s_lufs):
-        s_lufs = -24.0
-    m_lufs, _ = loudness(pub / "music.wav") if has_music else (float("-inf"), 0.0)
+        s_lufs = -28.0
+    m_lufs, _ = loudness(music_wav_path) if has_music else (float("-inf"), 0.0)
     if has_music and not np.isfinite(m_lufs):
-        m_lufs = -20.0
+        m_lufs = -22.0
 
-    gain_db: dict[str, float] = {"voice": 0.0, "sfx": v_lufs + float(L["sfx_lu"]) - s_lufs}
+    # Keep the voice track dominant (>= sfx & music) even when SFX hits are sparse across a long narrative
+    sfx_gain_db = min(-1.5, v_lufs + float(L["sfx_lu"]) - s_lufs)
+    gain_db: dict[str, float] = {"voice": 0.0, "sfx": sfx_gain_db}
     if has_music:
-        gain_db["music"] = v_lufs + float(L["music_lu"]) - m_lufs
+        gain_db["music"] = min(-6.0, v_lufs + float(L["music_lu"]) - m_lufs)
     top = max(gain_db.values())
     vols = {k: round(min(1.0, 0.8 * 10 ** ((g - top) / 20.0)), 4) for k, g in gain_db.items()}
 
@@ -343,6 +422,9 @@ def main(argv: list[str]) -> int:
     if has_music:
         audio["music"] = f"{slug}/music.wav"
         audio["musicVol"] = vols["music"]
+    else:
+        audio.pop("music", None)
+        audio.pop("musicVol", None)
     tl["audio"] = audio
     save_json(tl_path, tl)
 
@@ -352,7 +434,7 @@ def main(argv: list[str]) -> int:
         + json.dumps(
             {
                 "ok": True,
-                "mode": "library_cache",
+                "mode": "elevenlabs_plus_cache" if generated_count > 0 else "library_cache",
                 "slug": slug,
                 "sfxWav": f"public/{slug}/sfx.wav",
                 "musicWav": f"public/{slug}/music.wav" if has_music else None,

@@ -171,8 +171,20 @@ LIBRARY_CLIPS: dict[str, list] = {
     "switch_off": ["a heavy electrical breaker switching off with a dull clunk", 0.5],
     "bulb_pop": ["a small light bulb popping out, a tiny glass tink and fizz", 0.5],
     "step": ["a single sneaker footstep on a wooden stair, close", 0.5],
+    "big_step": ["a cartoon exaggerated careful tiptoe step, light airy whoosh", 0.7],
     "ding": ["a correct answer ding, bright bell chime", 0.8],
+    "buzzer": ["a game show wrong answer buzzer, short", 0.8],
     "shades": ["cool sunglasses sliding on with a swoosh and a bright metallic glint", 0.9],
+    "clink": ["a ceramic coffee mug knocked by a hand on a wooden desk, short clink and scrape", 0.7],
+    "shatter": ["a ceramic coffee mug smashing on a wooden floor, shards scattering and liquid splash", 1.3],
+    "crack": ["glass cracking sharply, the crack spreading across a pane", 1.1],
+    "fall_whoosh": ["a small object falling fast through the air, short soft whoosh", 0.6],
+    "clock_back": ["a clock ticking very fast then spinning backwards, mechanical ratchet whirr", 1.6],
+    "gasp": ["a short surprised intake of breath gasp", 0.6],
+    "laugh": ["a small classroom of kids bursting out laughing", 1.6],
+    "dizzy": ["cartoon dizzy birds tweeting in a circle after a bonk", 1.4],
+    "catch": ["a hand catching a ceramic mug mid-air, soft slap and thud", 0.5],
+    "land": ["a heavy body landing flat on a wooden floor, cartoon thud", 0.6],
 }
 
 
@@ -519,51 +531,106 @@ def infer_clause_accent(
     return accent, look, drama_score
 
 
-def build_default_sound(shots: list[dict], title_idx: int) -> dict:
-    """Build a complete sound design using pre-cached library/sfx clips."""
-    used_clips = {"music", "room_tone", "pop", "sparkle", "title_boom", "drone_hit", "switch_off"}
+def _ambience_clip_for_set(set_name: str) -> str:
+    s = str(set_name or "").lower()
+    if s in {"outdoor", "rooftop", "street", "park", "garden", "schoolyard"}:
+        return "roof_wind"
+    return "room_tone"
+
+
+def build_default_sound(
+    shots: list[dict],
+    title_idx: int,
+    edit: list[dict] | None = None,
+    fx_list: list[dict] | None = None,
+) -> dict:
+    """Build a natural, non-repetitive sound design (continuous location ambiences + semantic foley, NO looped music bed)."""
+    used_clips = {"room_tone", "title_boom", "drone_hit", "switch_off"}
     events: list[list] = []
-    first_id = shots[0]["id"]
     last_id = shots[-1]["id"]
-    title_id = shots[title_idx]["id"] if 0 <= title_idx < len(shots) else shots[min(3, len(shots) - 1)]["id"]
 
-    # Ambience bed
-    has_class = any(s["set"] == "classroom" for s in shots)
-    has_roof = any(s["set"] == "rooftop" for s in shots)
-    events.append([first_id, "room_tone", 0.12, "onset", last_id])
-    if has_class:
-        c_shot = next(s["id"] for s in shots if s["set"] == "classroom")
-        used_clips.add("class_murmur")
-        events.append([c_shot, "class_murmur", 0.16, "onset", title_id])
-    if has_roof:
-        r_shot = next(s["id"] for s in shots if s["set"] == "rooftop")
-        used_clips.add("roof_wind")
-        events.append([r_shot, "roof_wind", 0.16, "onset", last_id])
+    # 1. Continuous location-matched ambience beds (crossfade-tiled by sfx_run.py until each `until` cue)
+    i = 0
+    while i < len(shots):
+        amb = _ambience_clip_for_set(shots[i].get("set", ""))
+        j = i + 1
+        while j < len(shots) and _ambience_clip_for_set(shots[j].get("set", "")) == amb:
+            j += 1
+        start_cue = shots[i]["id"]
+        end_cue = shots[j]["id"] if j < len(shots) else "end"
+        used_clips.add(amb)
+        events.append([start_cue, amb, 0.13, "onset", end_cue])
+        if any(str(shots[m].get("set", "")) == "classroom" for m in range(i, j)):
+            c_start = next(shots[m]["id"] for m in range(i, j) if str(shots[m].get("set", "")) == "classroom")
+            used_clips.add("class_murmur")
+            events.append([c_start, "class_murmur", 0.11, "onset", end_cue])
+        i = j
 
-    # Per-shot action hits
-    cycle = ["select_draw", "paper_land", "pop", "copy_click", "paste_pop", "sparkle", "ding"]
+    look_by_shot = {str(e.get("shot")): str(e.get("look") or "") for e in (edit or []) if isinstance(e, dict)}
+    fx_shots = {str(f.get("at")) for f in (fx_list or []) if isinstance(f, dict) and f.get("at")}
+
+    # 2. Semantic foley & dramatic accents (no mechanical copy_click/paste_pop loop on ordinary dialogue shots)
+    prev_look = ""
     for idx, s in enumerate(shots):
         sid = s["id"]
-        if idx == title_idx:
-            events.append([sid, "title_boom", 0.65, "peak"])
+        size = str(s.get("size") or "").lower()
+        accent = str(s.get("accent") or "").lower()
+        note_tokens = {bare_ascii(w) for w in re.findall(r"[\w'-]+", str(s.get("note") or ""))}
+        cur_look = look_by_shot.get(sid, "")
+
+        if idx == title_idx or accent == "hook-title":
+            events.append([sid, "title_boom", 0.52, "peak"])
         elif idx == len(shots) - 1:
-            events.append([sid, "drone_hit", 0.35])
-            events.append([f"{sid}+18", "switch_off", 0.28])
-        elif s["set"] == DIAGRAM:
+            events.append([sid, "drone_hit", 0.34])
+            events.append([f"{sid}+18", "switch_off", 0.25])
+        elif cur_look == "memory" and prev_look != "memory":
+            used_clips.add("clock_back")
+            events.append([sid, "clock_back", 0.22])
+        elif sid in fx_shots:
+            used_clips.update(["drone_hit", "gasp"])
+            events.append([sid, "drone_hit", 0.28])
+            if "vfx:shock" in accent:
+                events.append([f"{sid}+4", "gasp", 0.22])
+        elif s.get("set") == DIAGRAM:
             used_clips.update(["counter_tick", "power_hum"])
             events.append([f"{sid}+2", "counter_tick", 0.18])
-            events.append([f"{sid}+6", "power_hum", 0.14, "onset", shots[min(idx + 1, len(shots) - 1)]["id"]])
-        else:
-            clip = cycle[idx % len(cycle)]
-            used_clips.add(clip)
-            events.append([f"{sid}+3", clip, 0.24])
+            events.append([f"{sid}+6", "power_hum", 0.12, "onset", shots[min(idx + 1, len(shots) - 1)]["id"]])
+        elif "insert" in size:
+            if note_tokens & {"telephone", "portable", "message", "texto", "sms", "notification", "ecran"}:
+                used_clips.add("pop")
+                events.append([f"{sid}+4", "pop", 0.22])
+            elif note_tokens & {"facture", "dossier", "lettre", "enveloppe", "billet", "carte", "feuille", "contrat", "ordonnance"}:
+                used_clips.add("paper_land")
+                events.append([f"{sid}+3", "paper_land", 0.24])
+            elif note_tokens & {"verre", "tasse", "cafe", "bouteille", "cle", "cles", "bague", "alliance", "pilule"}:
+                used_clips.add("clink")
+                events.append([f"{sid}+4", "clink", 0.24])
+            else:
+                used_clips.add("paper_land")
+                events.append([f"{sid}+3", "paper_land", 0.18])
+        elif accent == "tag":
+            used_clips.add("counter_tick")
+            events.append([f"{sid}+4", "counter_tick", 0.18])
+        elif accent == "stamp":
+            used_clips.add("pop")
+            events.append([f"{sid}+2", "pop", 0.16])
+        elif accent == "vfx:shock":
+            used_clips.add("gasp")
+            events.append([f"{sid}+4", "gasp", 0.22])
+        elif accent == "vfx:focus":
+            used_clips.add("sparkle")
+            events.append([f"{sid}+5", "sparkle", 0.18])
+        elif note_tokens & {"marche", "entre", "sorti", "escalier", "couloir", "approche", "couru"}:
+            used_clips.add("step")
+            events.append([f"{sid}+4", "step", 0.2])
+
+        prev_look = cur_look
 
     return {
         "clips": {k: LIBRARY_CLIPS[k] for k in sorted(used_clips) if k in LIBRARY_CLIPS},
         "events": events,
         "repeats": [],
-        "music": {"clip": "music", "until": last_id},
-        "levels": {"sfx_lu": -1.5, "music_lu": -9.5},
+        "levels": {"sfx_lu": -4.5, "music_lu": -11.0},
     }
 
 
@@ -771,7 +838,7 @@ def main() -> int:
         ]
     )
     ep["fx"] = fx_list
-    ep["sound"] = build_default_sound(shots, title_idx)
+    ep["sound"] = build_default_sound(shots, title_idx, edit, fx_list)
 
     ep_path.write_text(json.dumps(ep, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
