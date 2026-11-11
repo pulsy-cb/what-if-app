@@ -2731,3 +2731,86 @@ test('step 1 — accents, head VFX, tabletopShot & EPISODE_LOOKS overlay + 16:9 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('step 2 — shotlist.py: 3-gear cold-open hook + brisk long 16:9 pace, semantic inserts, looks & mid-episode fx', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-step2-shotlist-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'er-long');
+    fs.mkdirSync(epDir, { recursive: true });
+
+    // Build a ~240s (4-minute) realistic French narrative with speech verbs, props, amounts, flashbacks, and ER crisis twists
+    const clauses = [];
+    for (let i = 0; i < 64; i++) {
+      if (i === 4) {
+        clauses.push("Trois ans plus tôt je me souviens encore de cette vieille maison calme où mon père souriait.");
+      } else if (i === 18) {
+        clauses.push("Aux urgences à 3h14 du matin le médecin regarde la facture de 15000 euros posée sur la table.");
+      } else if (i === 32) {
+        clauses.push("Soudain c'est la panique totale dans le couloir et l'alarme hurle devant nous !");
+      } else if (i === 48) {
+        clauses.push("Elle ouvre l'enveloppe avec ses mains qui tremblent et lit le message sur son téléphone.");
+      } else if (i % 5 === 2) {
+        clauses.push(`Ensuite Clara pose la clé et le dossier médical numéro ${i} sur le bureau avant de répondre doucement.`);
+      } else {
+        clauses.push(`Marc s'approche doucement dans le salon numéro ${i} et demande pourquoi tout le monde garde le silence.`);
+      }
+    }
+
+    const words = [];
+    let t = 0.2;
+    for (const c of clauses) {
+      const toks = c.split(/\s+/);
+      for (let wi = 0; wi < toks.length; wi++) {
+        const raw = toks[wi];
+        const m = /^(.+?)([.,!?]+)?$/.exec(raw);
+        const w = m ? m[1] : raw;
+        const p = m && m[2] ? m[2] : wi === toks.length - 1 ? '.' : '';
+        words.push({ w, p, s: Number(t.toFixed(3)), e: Number((t + 0.23).toFixed(3)) });
+        t += 0.26;
+      }
+      t += 0.32;
+    }
+
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify(words));
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'ErLong',
+        slug: 'er-long',
+        aspect: '16:9',
+        title: ['LA NUIT OÙ', 'TOUT A BASCULÉ'],
+        source: { provider: 'nouveau', videoId: 'vid-er-1' },
+        defaultSet: 'hospital',
+        script: clauses.map((text, idx) => ({ beat: `b${idx + 1}`, text })),
+        shots: [],
+      }),
+    );
+
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'er-long', '--project', dir], { stdio: 'pipe' });
+    const ep = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+
+    const totalSec = words[words.length - 1].e;
+    const cutsPerMin = ((ep.shots.length - 1) / totalSec) * 60;
+    assert.ok(cutsPerMin >= 17.5, `long 16:9 episode cuts briskly (>= 17.5 cuts/min vs old 13.1), got ${cutsPerMin.toFixed(1)}`);
+
+    const inserts = ep.shots.filter((s) => s.size === 'insert');
+    assert.ok(inserts.length >= 8, `speech verbs no longer block semantic inserts (expected >= 8 inserts, got ${inserts.length})`);
+
+    const looks = ep.edit.map((e) => e.look).filter(Boolean);
+    assert.ok(looks.includes('memory'), `flashback clause tagged with look="memory" (got ${JSON.stringify(looks)})`);
+    assert.ok(looks.includes('tension'), `crisis clause tagged with look="tension" (got ${JSON.stringify(looks)})`);
+
+    const fxShots = new Set(ep.fx.map((f) => f.at));
+    assert.ok(fxShots.size >= 2, `mid-episode dramatic twists also receive fx, not only the last shot (${[...fxShots].join(', ')})`);
+
+    const accents = ep.shots.map((s) => s.accent).filter(Boolean);
+    assert.equal(ep.shots[0].accent, 'hook-title', 'S1 receives hook-title accent on narrative :8005 episode');
+    assert.ok(accents.includes('stamp'), 'time/place jump receives stamp accent');
+    assert.ok(accents.includes('tag'), 'numeric amount receives tag accent');
+    assert.ok(accents.some((a) => a.startsWith('vfx:')), 'dramatic beat receives character vfx accent');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

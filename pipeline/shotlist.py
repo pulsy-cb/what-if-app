@@ -114,6 +114,11 @@ OBJECT_PROP_WORDS = {
     "plat", "assiette", "bol", "verre", "tasse", "sac", "boite", "tupperware", "bague", "alliance",
     "montre", "bouton", "fil", "cable", "couteau", "ciseaux", "stylo", "feuille", "photo", "etiquette",
     "ceinture", "doritos", "chips", "portefeuille", "monnaie", "enveloppe", "pilule", "comprime",
+    "dossier", "ordonnance", "bracelet", "seringue", "moniteur", "scanner", "radio", "medicament",
+    "virement", "compte", "euro", "euros", "dollar", "dollars", "reveil", "horloge", "poignee",
+    "verrou", "tiroir", "valise", "cadeau", "carnet", "journal", "contrat", "signature", "sms",
+    "notification", "clavier", "souris", "manette", "casque", "micro", "cafe", "sang", "cicatrice",
+    "mains", "doigts", "poche",
 }
 
 WIDE_ACTION_WORDS = {
@@ -125,7 +130,20 @@ WIDE_ACTION_WORDS = {
 DRAMATIC_LOW_HIGH_WORDS = {
     "hurlait", "geant", "monstre", "coince", "coincee", "piege", "impossible", "terreur", "panique",
     "etire", "dechire", "comprimait", "ecrase", "soudain", "explose", "effondre", "domine",
+    "choc", "fige", "figee", "glace", "glacee", "tremble", "tremblait", "mensonge", "trahi",
+    "urgence", "urgences", "critique", "danger", "alarme", "arrestation", " hurle", "crie",
 }
+
+MEMORY_LOOK_WORDS = {
+    "souviens", "souvenir", "souvenirs", "epoque", "enfance", "autrefois", "jadis", "rappelle",
+    "rappelais", "annees", "auparavant",
+}
+
+TIME_PLACE_STAMP_PHRASES = (
+    "plus tard", "plus tot", "lendemain", "la veille", "heures du matin", "heures du soir",
+    "ans plus", "mois plus", "semaines plus", "jours plus", "salle d", "aux urgences",
+    "a l hopital", "au commissariat", "au tribunal",
+)
 
 # Pre-cached clips in studio/library/sfx/ (exact prompt + duration so wi.py clip_path resolves offline)
 LIBRARY_CLIPS: dict[str, list] = {
@@ -317,17 +335,25 @@ def boundary_score(words: list[dict], idx: int, beat_map: dict[int, str]) -> flo
 
 
 def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int]:
-    """Global dynamic programming to partition `words` into `k` shots aligned on clause boundaries."""
+    """Global dynamic programming to partition `words` into `k` shots aligned on clause boundaries,
+    with a faster cold-open hook in the opening 25% (up to 35 s) and tighter cuts on dramatic beats."""
     n = len(words)
     if k <= 1 or n < 4:
         return [0]
     k = min(k, n // 2)
-    total_s = max(1.0, float(words[-1].get("e", 0)) - float(words[0].get("s", 0)))
+    t_origin = float(words[0].get("s", 0))
+    total_s = max(1.0, float(words[-1].get("e", 0)) - t_origin)
     ideal_dur = total_s / k
-    min_dur = 1.8 if total_s > 32.0 else 1.15
-    max_dur = max(2.8, ideal_dur * 1.55)
+    hook_end = t_origin + (min(35.0, total_s * 0.25) if total_s >= 40.0 else 0.0)
+    min_dur = 1.65 if total_s > 32.0 else 1.15
+    max_dur = max(2.8, ideal_dur * 1.6)
 
     b_scores = [boundary_score(words, i, beat_map) for i in range(n)]
+    dramatic_prefix = [0] * (n + 1)
+    for idx_w, w in enumerate(words):
+        dramatic_prefix[idx_w + 1] = dramatic_prefix[idx_w] + (
+            1 if bare_ascii(str(w.get("w") or "")) in DRAMATIC_LOW_HIGH_WORDS else 0
+        )
 
     def seg_score(i: int, j: int) -> float:
         if j - i < 2:
@@ -335,11 +361,16 @@ def choose_cuts(words: list[dict], k: int, beat_map: dict[int, str]) -> list[int
         t0 = float(words[i].get("s", 0))
         t1 = float(words[j - 1].get("e", 0))
         dur = max(0.1, t1 - t0)
-        pen = abs(dur - ideal_dur) * 14.0
-        if dur < min_dur:
-            pen += (min_dur - dur) * 95.0
-        elif dur > max_dur:
-            pen += (dur - max_dur) * 55.0
+        in_hook = hook_end > t_origin and t0 < hook_end
+        has_drama = (dramatic_prefix[j] - dramatic_prefix[i]) > 0
+        local_ideal = ideal_dur * (0.74 if in_hook else (0.86 if has_drama else 1.06 if hook_end > t_origin else 1.0))
+        local_min = 1.3 if in_hook else min_dur
+        local_max = max(2.6, local_ideal * 1.55)
+        pen = abs(dur - local_ideal) * 14.0
+        if dur < local_min:
+            pen += (local_min - dur) * 95.0
+        elif dur > local_max:
+            pen += (dur - local_max) * 55.0
         return (b_scores[i] if i > 0 else 0.0) - pen
 
     # dp[s][j]: best score for partitioning words[0:j] into `s` segments
@@ -387,6 +418,7 @@ def infer_shot_size(
     room: str,
     prev_size: str,
     insert_count: int,
+    since_insert: int = 99,
 ) -> str:
     """Choose camera framing from the narrative semantics of the clause (never blind % len cycling)."""
     if is_title:
@@ -397,19 +429,29 @@ def infer_shot_size(
         return "wide"
 
     tokens = {bare_ascii(str(w.get("w") or "")) for w in chunk if bare_ascii(str(w.get("w") or ""))}
+    raw_join = " ".join(str(w.get("w") or "") for w in chunk)
     puncts = "".join(str(w.get("p") or str(w.get("w") or "")) for w in chunk)
     has_question_or_exclaim = "?" in puncts or "!" in puncts
     speech_hits = len(tokens & SPEECH_REACTION_WORDS) + (2 if has_question_or_exclaim else 0)
     prop_hits = len(tokens & OBJECT_PROP_WORDS)
+    has_concrete_number = bool(re.search(r"\b\d+(?:[.,]\d+)?\b|[€$%]", raw_join))
     wide_hits = len(tokens & WIDE_ACTION_WORDS)
     dramatic_hits = len(tokens & DRAMATIC_LOW_HIGH_WORDS)
 
-    max_inserts = max(2, total_shots // 5)
-    # 1. Insert: ONLY when a physical object/prop is explicitly named, without full-body movement or direct dialogue, and never back-to-back
-    if prop_hits > 0 and speech_hits == 0 and wide_hits == 0 and prev_size != "insert" and insert_count < max_inserts:
+    max_inserts = max(2, round(total_shots * 0.2))
+    min_insert_gap = 3 if total_shots <= 20 else 4
+    # 1. Insert: whenever a physical prop/phone/document or concrete number/time is mentioned (even if narrated with speech verbs),
+    # spaced naturally so ~15-20% of shots break out into macro object/phone/tabletop inserts!
+    if (
+        (prop_hits > 0 or (has_concrete_number and prop_hits + speech_hits <= 2))
+        and dramatic_hits < 2
+        and prev_size != "insert"
+        and since_insert >= min_insert_gap
+        and insert_count < max_inserts
+    ):
         return "insert"
 
-    # 2. Dramatic angle: only when strong physical/emotional tension words appear, and never back-to-back
+    # 2. Dramatic angle: when strong physical/emotional tension words appear, and never back-to-back
     if dramatic_hits > 0 and "angle" not in prev_size:
         return "medium, low angle" if (idx % 2 == 0) else "medium, high angle"
 
@@ -427,6 +469,54 @@ def infer_shot_size(
     if cand == prev_size:
         cand = "medium" if prev_size != "medium" else ("close" if speech_hits >= wide_hits else "wide")
     return cand
+
+
+def infer_clause_accent(
+    chunk: list[dict],
+    idx: int,
+    total_shots: int,
+    is_title: bool,
+    size: str,
+    has_non_todo_title: bool,
+) -> tuple[str, str, int]:
+    """Return (accent_hint, look_name, drama_score) for a shot's clause."""
+    tokens = {bare_ascii(str(w.get("w") or "")) for w in chunk if bare_ascii(str(w.get("w") or ""))}
+    clause_ascii = " ".join(bare_ascii(str(w.get("w") or "")) for w in chunk)
+    raw_join = " ".join(str(w.get("w") or "") for w in chunk)
+    puncts = "".join(str(w.get("p") or str(w.get("w") or "")) for w in chunk)
+
+    dramatic_hits = len(tokens & DRAMATIC_LOW_HIGH_WORDS)
+    exclaim = 1 if "!" in puncts else 0
+    question = 1 if "?" in puncts else 0
+    drama_score = dramatic_hits * 3 + exclaim * 2 + question
+
+    is_time_place = any(p in clause_ascii for p in TIME_PLACE_STAMP_PHRASES) or bool(
+        re.search(r"\b\d{1,2}\s*h(?:\s*\d{2})?\b", raw_join.lower())
+    )
+    is_memory = bool(tokens & MEMORY_LOOK_WORDS) or "plus tot" in clause_ascii or "quand j etais" in clause_ascii
+    has_amount = bool(re.search(r"\b\d{2,}\b|[€$%]", raw_join))
+
+    look = ""
+    if is_memory and 0 < idx < total_shots - 1:
+        look = "memory"
+    elif dramatic_hits >= 2 or (dramatic_hits >= 1 and exclaim):
+        look = "tension"
+
+    accent = ""
+    if is_title:
+        accent = "title-card"
+    elif idx == 0 and has_non_todo_title:
+        accent = "hook-title"
+    elif is_time_place:
+        accent = "stamp"
+    elif has_amount:
+        accent = "tag"
+    elif dramatic_hits >= 1 and size != "insert":
+        accent = "vfx:shock" if exclaim or "choc" in tokens or "soudain" in tokens else "vfx:sweat"
+    elif question and "close" in size:
+        accent = "vfx:focus"
+
+    return accent, look, drama_score
 
 
 def build_default_sound(shots: list[dict], title_idx: int) -> dict:
@@ -502,18 +592,16 @@ def main() -> int:
     total_frames = round(float(words[-1].get("e", 0)) * FPS) or (len(words) * 12)
     seconds = total_frames / FPS
 
-    # Genre pace (Pulsy, 2026-11-10): 15-28 s clips ~1.6 s a shot; shorts up to 2.5 min ~2.4 s; long videos ~4.5 s
-    # (3 to 6 s), with no cap on the number of shots. A shot keeps at least a few words so a cut lands on a clause.
-    # A vertical video (9:16) keeps the short pace whatever its length (Pulsy, 2026-11-10).
+    # Dynamic 3-gear pace: fast cold-open hook (~1.8-2.2 s/shot) + brisk narrative rhythm (~2.2 s for shorts/9:16, ~3.1 s for long 16:9 instead of 4.5 s).
     vertical = str(ep.get("aspect", "")).strip() == "9:16"
     if args.shots:
         k = args.shots
-    elif seconds <= 28:
-        k = max(9, min(14, round(seconds / 1.6), len(words) // 3))
+    elif seconds <= 36:
+        k = max(9, min(20, round(seconds / 1.8), len(words) // 3))
     elif seconds <= 150 or vertical:
-        k = max(12, min(round(seconds / 2.4), len(words) // 3))
+        k = max(12, min(round(seconds / 2.2), len(words) // 3))
     else:
-        k = max(36, min(round(seconds / 4.5), len(words) // 5))
+        k = max(48, min(round(seconds / 3.1), len(words) // 4))
 
     keys = title_words(ep)
     beat_map, beat_sets = beat_starts_in_words(ep, words)
@@ -557,9 +645,18 @@ def main() -> int:
     elif not has_source_video and title_idx < 0 and len(bounds) >= 4:
         title_idx = min(3, len(bounds) - 2)
 
+    raw_title = ep.get("title") or []
+    title_str = " ".join(raw_title) if isinstance(raw_title, list) else str(raw_title)
+    has_non_todo_title = bool(title_str.strip()) and "todo" not in title_str.lower() and "… ?" not in title_str
+
     wi_prev = 0
     prev_size = ""
     insert_count = 0
+    since_insert = 99
+    look_counts: dict[str, int] = {"memory": 0, "tension": 0}
+    max_look_each = max(2, len(bounds) // 10)
+    drama_candidates: list[tuple[int, int]] = []  # (drama_score, shot_idx)
+
     for i in range(len(bounds)):
         start = bounds[i]
         end = bounds[i + 1] if i + 1 < len(bounds) else len(words)
@@ -600,25 +697,35 @@ def main() -> int:
         run = run + 1 if room == previous_set else 1
         previous_set = room
 
-        size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count)
+        size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count, since_insert)
         prev_size = size
         if size == "insert":
             insert_count += 1
+            since_insert = 0
+        else:
+            since_insert += 1
         if is_title and not label.lower().startswith("title"):
             label = f"title card: {label}"
 
-        shots.append(
-            {
-                "id": f"S{i + 1}",
-                "size": size,
-                "set": room,
-                "key": max(10, min(max(10, span - 4), round(span * 0.55))),
-                "note": label,
-            }
+        accent_hint, look_name, drama_score = infer_clause_accent(
+            chunk, i, len(bounds), is_title, size, has_non_todo_title and title_idx < 0
         )
+        if drama_score >= 3 and 1 <= i < len(bounds) - 1:
+            drama_candidates.append((drama_score, i))
+
+        shot_entry: dict = {
+            "id": f"S{i + 1}",
+            "size": size,
+            "set": room,
+            "key": max(10, min(max(10, span - 4), round(span * 0.55))),
+            "note": label,
+        }
+        if accent_hint:
+            shot_entry["accent"] = accent_hint
+        shots.append(shot_entry)
 
         if i == 0:
-            edit.append({"shot": shots[-1]["id"], "at": "f:0"})
+            edit_entry: dict = {"shot": shots[-1]["id"], "at": "f:0"}
             wi_prev = 1
         else:
             # Resolve the exact occurrence index (`word` or `word#nth`) starting from wi_prev, matching plan.py
@@ -628,15 +735,35 @@ def main() -> int:
                 if norm(str(words[idx]["w"])) == target_word:
                     occ += 1
             cue = target_word if occ <= 1 else f"{target_word}#{occ}"
-            edit.append({"shot": shots[-1]["id"], "at": cue})
+            edit_entry = {"shot": shots[-1]["id"], "at": cue}
             wi_prev = start + 1
+
+        if look_name and look_counts.get(look_name, 0) < max_look_each:
+            edit_entry["look"] = look_name
+            look_counts[look_name] = look_counts.get(look_name, 0) + 1
+        edit.append(edit_entry)
 
     ep["shots"] = shots
     ep["edit"] = edit
     last_id = shots[-1]["id"]
-    fx_list = []
+    fx_list: list[dict] = []
     if 0 <= title_idx < len(shots):
         fx_list.append({"at": shots[title_idx]["id"], "kind": "flash", "color": "#FFF3DC", "o": 0.45})
+
+    # Place mid-episode dramatic fx (flash + shake) on up to 3 strongest twists, spaced across the story
+    min_fx_gap = max(3, len(shots) // 5)
+    picked_fx_indices: list[int] = []
+    for _score, s_idx in sorted(drama_candidates, key=lambda kv: (-kv[0], kv[1])):
+        if len(picked_fx_indices) >= 3:
+            break
+        if s_idx == title_idx or any(abs(s_idx - p) < min_fx_gap for p in picked_fx_indices):
+            continue
+        picked_fx_indices.append(s_idx)
+    for s_idx in sorted(picked_fx_indices):
+        sid = shots[s_idx]["id"]
+        fx_list.append({"at": sid, "kind": "flash", "color": "#FFF3DC", "o": 0.32})
+        fx_list.append({"at": sid, "kind": "shake", "len": 6, "amp": 7})
+
     fx_list.extend(
         [
             {"at": last_id, "kind": "flash", "color": "#FF3344", "o": 0.4},
