@@ -10,6 +10,8 @@ import { bodyOf } from './person';
 import type { ActName, Stance } from './actions';
 import { faceAt } from './rig';
 import type { Expr } from './rig';
+import { HeadVfx, HookTitle, ShockBurst, StampCard, ValueTag } from './accents';
+import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
 
 // A shot described instead of drawn. `shot({ ... })` gives the component a timeline expects: the place, who is there,
 // what they do, how it is framed. The camera follows from the person it is on, in 16:9 and in 9:16. Every field has a
@@ -47,6 +49,8 @@ export type PersonSpec = {
   face?: FaceSpecT;
   /** any pose field; a function of (t, len) for keyframes. Overrides `act` */ pose?: Timed<Record<string, unknown>>;
   rimId?: string;
+  /** head-attached 2D reaction micro-VFX (focus rings, shock rays, sweat drop, dizzy stars, sparkle, thought icon) */
+  vfx?: PersonVfxSpec[];
   headGear?: React.ReactNode;
   torsoGear?: React.ReactNode;
   handLProp?: React.ReactNode;
@@ -70,6 +74,16 @@ export type ShotSpec = {
   people?: PersonSpec[];
   duo?: DuoSpec;
   /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
+  /** screen-space diegetic time/place/chapter stamp (16:9 & 9:16 safe, never zoomed by the camera) */
+  stamp?: StampSpec;
+  /** screen-space animated number/price/verdict pill (16:9 & 9:16 safe) */
+  tag?: ValueTagSpec;
+  /** screen-space radial impact lines on a twist or reveal */
+  burst?: BurstSpec;
+  /** opening hook / premise title card in screen space */
+  title?: HookTitleSpec;
+  /** custom screen-space SVG overlay rendered above the camera (16:9 & 9:16 viewBox coordinates) */
+  overlay?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
 };
 
 const PORTRAIT = STUDIO.height > STUDIO.width;
@@ -257,7 +271,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
           })}
           {people.map((p, i) => {
-            const { who, on, act, from, dur, stance, rimId, headGear, torsoGear, handLProp, handRProp } = p;
+            const { who, on, act, from, dur, stance, rimId, vfx, headGear, torsoGear, handLProp, handRProp } = p;
             const beats = sortBeats(p.beats);
             // faces given in beats join the face keyframes
             const baseFace: [number, FaceExpr][] = p.face === undefined ? [] : typeof p.face === 'string' ? [[0, p.face]] : p.face;
@@ -268,16 +282,29 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               return { at: b.at, act: b.act, yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
             });
             const reach = targetOf(p.reach);
+            const combinedHead = vfx?.length ? (
+              <g>
+                {headGear}
+                <HeadVfx items={vfx} t={t} />
+              </g>
+            ) : (
+              headGear
+            );
             return (
               <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
                 pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
-                rimId={rimId} headGear={headGear} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
+                rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
             );
           })}
           {spec.duo ? <Duo a={{ at: flipAt(spec.duo.a.at) as { u: number; w: number }, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: flipAt(spec.duo.b.at) as { u: number; w: number }, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
           {spec.extra ? <g>{typeof spec.extra === 'function' ? spec.extra(t, len) : spec.extra}</g> : null}
         </Stage>
       </g>
+      {spec.burst ? <ShockBurst {...spec.burst} t={t} /> : null}
+      {spec.stamp ? <StampCard {...spec.stamp} t={t} /> : null}
+      {spec.tag ? <ValueTag {...spec.tag} t={t} /> : null}
+      {spec.title ? <HookTitle {...spec.title} t={t} /> : null}
+      {spec.overlay ? <g>{typeof spec.overlay === 'function' ? spec.overlay(t, len) : spec.overlay}</g> : null}
       </g>
     );
   };

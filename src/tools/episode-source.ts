@@ -23,11 +23,31 @@ const BUILTIN_ENGINE_EXPORTS = new Set([
   'shot',
   'Shot',
   'phoneShot',
+  'tabletopShot',
   'place',
   'cast',
+  'definePiece',
   'ShotProps',
   'Timeline',
   'defineEpisode',
+  'EPISODE_LOOKS',
+  'StampCard',
+  'ValueTag',
+  'ShockBurst',
+  'HookTitle',
+  'HeadVfx',
+  'Sparkle',
+  'Tag',
+  'HudChip',
+  'Dial',
+  'Gauge',
+  'FloatLabel',
+  'FocusRings',
+  'DizzyStars',
+  'Marquee',
+  'PasteIn',
+  'Toast',
+  'TapeLines',
   'Stage',
   'Staged',
   'Person',
@@ -175,7 +195,7 @@ export function sliceMonolithicShots(shotsSource: string): SlicedMonolithic {
 
   const isComponentOrShotInit = (name: string, init: ts.Expression): boolean => {
     const u = unwrapExpr(init);
-    if (ts.isCallExpression(u) && ts.isIdentifier(u.expression) && /^(?:shot|phoneShot)$/.test(u.expression.text)) return true;
+    if (ts.isCallExpression(u) && ts.isIdentifier(u.expression) && /^(?:shot|phoneShot|tabletopShot)$/.test(u.expression.text)) return true;
     if ((ts.isArrowFunction(u) || ts.isFunctionExpression(u)) && /^[A-Z]/.test(name)) return true;
     if (ts.isIdentifier(u) && helpersMap.has(u.text)) return true;
     return false;

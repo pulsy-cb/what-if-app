@@ -528,8 +528,10 @@ test('engine overlay: adds the template classroom and the character views, patch
     fs.writeFileSync(
       path.join(dir, 'src', 'engine', 'episode.tsx'),
       "import { AbsoluteFill } from 'remotion';\n" +
+        "import { SetDefs } from './light';\n" +
         '<svg width={1920} height={1080} viewBox="0 0 1920 1080" a /><svg width={1920} height={1080} viewBox="0 0 1920 1080" b /><svg width={1920} height={1080} viewBox="0 0 1920 1080" c />\n' +
-        '<rect width="1920" height="1080" fill="url(#epVig)" /><rect width="1920" height="1080" filter="url(#epGrain)" />\n',
+        '<rect width="1920" height="1080" fill="url(#epVig)" /><rect width="1920" height="1080" filter="url(#epGrain)" />\n' +
+        'const def = run ? looks[run.look] : undefined;\n',
     );
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './rig';\nexport * from './furnish';\nexport * from './ui';\n");
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'sets', 'classroom.tsx'), 'export const Classroom = () => null; // the old one\n');
@@ -554,7 +556,7 @@ test('engine overlay: adds the template classroom and the character views, patch
     assert.match(framed, /^import \{ AbsoluteFill \} from 'remotion';\nimport \{ STUDIO \} from '\.\.\/studio\.config';\n/);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/shot';\nexport \* from '\.\/rooms';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/accents';\nexport \* from '\.\/shot';\nexport \* from '\.\/rooms';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
     assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
     assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
     assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
@@ -2607,6 +2609,125 @@ test('reliability & speed fixes: image deduplication, targeted layoutReport, lay
     assert.equal(fs.readFileSync(cleanupMarker, 'utf8'), 'cleaned', 'child received SIGTERM and ran cleanup handler');
   } finally {
     if (sseSrv) await new Promise((r) => sseSrv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('step 1 — accents, head VFX, tabletopShot & EPISODE_LOOKS overlay + 16:9 & 9:16 audit', async () => {
+  const { applyEngineOverlay } = await import('../dist/tools/engine-overlay.js');
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const ts = await import('typescript');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-accents-'));
+  try {
+    // 1. Apply overlay onto a fresh copy of the studio engine (or synthetic episode.tsx + index.ts)
+    const skillStudio = path.resolve('..', 'what-if-animation', 'studio');
+    if (fs.existsSync(path.join(skillStudio, 'src', 'engine'))) {
+      fs.cpSync(path.join(skillStudio, 'src'), path.join(dir, 'src'), { recursive: true });
+    } else {
+      fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'src', 'studio.config.ts'), "export const STUDIO = { width: 1920, height: 1080, aspect: '16:9' as const };\n");
+      fs.writeFileSync(
+        path.join(dir, 'src', 'engine', 'episode.tsx'),
+        "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\nimport { SetDefs } from './light';\nconst IS_PORTRAIT = false;\nexport const Episode = ({ looks = {} }: any) => { const run = { look: 'memory' }; const def = run ? looks[run.look] : undefined; return def; };\n",
+      );
+      fs.writeFileSync(path.join(dir, 'src', 'engine', 'furnish.tsx'), "export const RoomShell = () => (\n<g>\n      <polygon points={Q([[0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]])} fill={`url(#${id}F)`} />\n</g>);\n");
+      fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './rig';\nexport * from './furnish';\n");
+    }
+
+    const rep = applyEngineOverlay(dir);
+    assert.ok(rep.added.includes('src/engine/accents.tsx') || rep.identical.includes('src/engine/accents.tsx'), 'accents.tsx installed');
+    const epTsx = fs.readFileSync(path.join(dir, 'src', 'engine', 'episode.tsx'), 'utf8');
+    assert.match(epTsx, /EPISODE_LOOKS\[run\.look\]/, 'episode.tsx automatically falls back to EPISODE_LOOKS');
+    const idxTs = fs.readFileSync(path.join(dir, 'src', 'engine', 'index.ts'), 'utf8');
+    assert.match(idxTs, /export \* from '\.\/accents';/, 'index.ts exports accents');
+
+    // 2. Transpile & execute accents.tsx in both 16:9 and 9:16 with a lightweight React mock (verifies zero @remotion/fonts dependency & valid SVG elements)
+    const accentsSrc = fs.readFileSync(path.join(dir, 'src', 'engine', 'accents.tsx'), 'utf8');
+    const transpiled = ts.default.transpileModule(accentsSrc, {
+      compilerOptions: { module: ts.default.ModuleKind.CommonJS, jsx: ts.default.JsxEmit.ReactJSX, esModuleInterop: true },
+    }).outputText;
+
+    for (const portrait of [false, true]) {
+      const mod = { exports: {} };
+      const el = (type, props) => ({ type, props });
+      new Function('exports', 'require', 'module', transpiled)(
+        mod.exports,
+        (id) => {
+          if (id === 'react') return { createElement: el };
+          if (id === 'react/jsx-runtime') return { jsx: el, jsxs: el };
+          if (id === '../studio.config') return { STUDIO: portrait ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 } };
+          throw new Error(`unexpected import ${id}`);
+        },
+        mod,
+      );
+      const { StampCard, ValueTag, ShockBurst, HookTitle, HeadVfx, tabletopShot, EPISODE_LOOKS } = mod.exports;
+      assert.ok(StampCard({ text: 'URGENCES · 03H14', sub: 'CHU NORD', t: 10 }), 'StampCard renders');
+      assert.equal(StampCard({ text: 'LATE', at: 20, t: 5 }), null, 'StampCard waits until at');
+      assert.ok(ValueTag({ count: { from: 0, to: 15000, suffix: ' €' }, mark: 'check', t: 18 }), 'ValueTag counter renders');
+      assert.ok(ShockBurst({ at: 4, t: 8 }), 'ShockBurst renders during burst window');
+      assert.ok(HookTitle({ lines: ['LA NUIT OÙ', 'TOUT A BASCULÉ'], accent: 'TOUT', t: 12 }), 'HookTitle renders');
+      const vfxTree = HeadVfx({
+        items: [
+          { at: 2, kind: 'focus' },
+          { at: 2, kind: 'shock' },
+          { at: 2, kind: 'sweat' },
+          { at: 2, kind: 'dizzy' },
+          { at: 2, kind: 'sparkle' },
+          { at: 2, kind: 'thought', label: '15 000 €' },
+        ],
+        t: 8,
+      });
+      assert.equal(vfxTree.props.children.filter(Boolean).length, 6, 'all 6 HeadVfx kinds render');
+      const TableComp = tabletopShot({
+        surface: 'hospital',
+        items: [
+          { kind: 'bill', label: 'URGENCES', sub: '15 000 €' },
+          { kind: 'pills', dx: 180, at: 4 },
+        ],
+        hands: [{ side: 'bottom', action: 'tremble', at: 6 }],
+        stamp: { text: '03H14' },
+        tag: { text: '15 000 €', mark: 'x' },
+      });
+      assert.ok(TableComp({ t: 16, len: 60 }), `tabletopShot renders cleanly (portrait=${portrait})`);
+      for (const lookName of ['memory', 'tension', 'revelation', 'nightmare', 'rewind']) {
+        assert.ok(EPISODE_LOOKS[lookName]?.grade?.(1), `EPISODE_LOOKS.${lookName} defines CSS grade`);
+      }
+    }
+
+    // 3. Verify shotsAudit accepts tabletopShot as a 9:16/16:9-safe insert helper alongside shot({ vfx, stamp, tag, burst })
+    const epDir = path.join(dir, 'src', 'episodes', 'er916');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'studio.config.ts'), "export const STUDIO = { width: 1080, height: 1920, aspect: '9:16' as const };\n");
+    const ids = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const er916 = defineEpisode('Er916', { timeline, shots: { ${ids.join(', ')} } });\n`);
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      [
+        `export const S1 = shot({ place: HOSP, cam: 'wide', stamp: { text: 'URGENCES · 03H14' }, title: { lines: ['LA NUIT OÙ', 'TOUT A BASCULÉ'] }, people: [{ who: DOC, at: { u: 0.4, w: 0.45 }, yaw: 0.4, act: 'talk', beats: [{ at: 12, face: 'shock' }], vfx: [{ at: 12, kind: 'shock' }] }] });`,
+        `export const S2 = tabletopShot({ surface: 'hospital', items: [{ kind: 'bill', sub: '15 000 €' }], hands: [{ side: 'bottom', action: 'point', at: 8 }] });`,
+        `export const S3 = shot({ place: HOSP, cam: 'medium', burst: { at: 14 }, tag: { text: '15 000 €', mark: 'x', at: 14 }, people: [{ who: HER, at: { u: 0.5, w: 0.5 }, yaw: -0.45, act: 'explain', vfx: [{ at: 14, kind: 'sweat' }] }] });`,
+        `export const S4 = tabletopShot({ surface: 'metal', items: [{ kind: 'pills', label: 'DOSE' }, { kind: 'clock', dx: -160 }] });`,
+        `export const S5 = shot({ place: HOSP, cam: 'close', beats: [{ at: 20, shake: 8 }], people: [{ who: DOC, at: { u: 0.45, w: 0.45 }, yaw: 0.4, act: 'talk', vfx: [{ at: 20, kind: 'focus' }] }] });`,
+        `export const S6 = phoneShot({ name: 'Urgences', back: HOSP, notify: { at: 8, text: 'Résultats disponibles' } });`,
+      ].join('\n'),
+    );
+    const ep = {
+      aspect: '9:16',
+      shots: [
+        { id: 'S1', set: 'hospital', size: 'wide title' },
+        { id: 'S2', set: 'hospital', size: 'insert' },
+        { id: 'S3', set: 'hospital', size: 'medium' },
+        { id: 'S4', set: 'hospital', size: 'insert' },
+        { id: 'S5', set: 'hospital', size: 'close' },
+        { id: 'S6', set: 'hospital', size: 'insert' },
+      ],
+    };
+    const tl = { shots: ids.map((id) => ({ id, len: 60, key: 20 })) };
+    // Stub node_modules out inside temp dir so shotsAudit runs static AST/framing/hand-written checks deterministically
+    assert.equal(shotsAudit(dir, 'er916', ep, tl), null, 'shotsAudit accepts tabletopShot + vfx + stamp + tag + burst in 9:16');
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

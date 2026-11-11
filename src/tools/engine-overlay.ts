@@ -120,6 +120,25 @@ const PATCHES: PatchGroup[] = [
     ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './shot';\n" }],
   },
   {
+    // built-in narrative episode looks (memory, tension, revelation, nightmare, rewind) work out of the box when timeline segments set `look`
+    file: 'src/engine/episode.tsx',
+    marker: 'EPISODE_LOOKS',
+    ops: [
+      { kind: 'after', anchor: "import { SetDefs } from './light';\n", insert: "import { EPISODE_LOOKS } from './accents';\n" },
+      {
+        kind: 'replace',
+        find: 'const def = run ? looks[run.look] : undefined;',
+        replace: 'const def = run ? (looks[run.look] ?? EPISODE_LOOKS[run.look]) : undefined;',
+        count: 1,
+      },
+    ],
+  },
+  {
+    file: 'src/engine/index.ts',
+    marker: "export * from './accents';",
+    ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './accents';\n" }],
+  },
+  {
     file: 'src/engine/index.ts',
     marker: "export * from './views';",
     ops: [{ kind: 'after', anchor: "export * from './rig';\n", insert: "export * from './views';\n" }],
