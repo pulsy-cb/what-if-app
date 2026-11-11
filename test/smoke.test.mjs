@@ -3130,3 +3130,183 @@ test('step 5 — post-render speed: master_run.py (-vn + -14 LUFS + mtime cache)
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('narrator voice detection (Léa vs Hugo, 1st & 3rd person) and :8005 wrong-gender TTS cache guard', async () => {
+  const { execFile, execFileSync } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const http = await import('node:http');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-narrator-voice-'));
+  let srv = null;
+  try {
+    // 1. Verify detect_narrator_voice on tricky real-world French stories
+    const pyCheck = execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+import json, sys
+sys.path.insert(0, 'pipeline')
+from nouveau_client import detect_narrator_voice
+
+cases = {
+  # 1st-person girl with colloquial negation + state/reflexive participles ("the-er")
+  "the_er": "[nervous] Je suis assise là aux urgences. Je me suis allongée sur le lit, j'étais pas assez inquiète au début.",
+  # 1st-person girl with -ée reflexives + COI invariable ("demandé", "rendu compte") + direct vocative ("not-father" / "clee")
+  "not_father": "Je me suis demandé quoi faire et je me suis rendu compte du danger. Je me suis jetée au sol et je me suis accroupie. Il m'a murmuré : « Bonne fille. »",
+  # 3rd-person female protagonist ("accenseur")
+  "accenseur": "Elle marche seule dans la nuit pour rentrer chez elle. Soudain, elle remarque un homme. Terrifiée, elle accélère mais il la suit. Elle court vers l'ascenseur, elle appuie sur le bouton et elle retient son souffle.",
+  # 3rd-person female protagonist ("cancer")
+  "cancer": "Tout le monde pensait que sa sœur avait un cancer. Elle rasait ses cheveux en cachette. Quand elle entrait au salon, elle jouait la comédie, mais elle cachait la vérité alors qu'elle allait très bien.",
+  # 1st-person male essay talking extensively about women ("ce-que-veulent-les-femmes")
+  "male_essay": "Les femmes veulent qu'on leur dise qu'elle est belle. J'ai une amie qui m'a dit ça, tu sais ce qu'elle veut ? Si j'ai raté quelque chose, c'est parce que je ne suis pas une femme, je suis fatigué de deviner.",
+  # 3rd-person male story ("prince")
+  "male_third": "[urgent] Ce prince croyait toute sa ville muette. Il traversait le palais chaque matin sans entendre un mot.",
+}
+out = {k: detect_narrator_voice(v) for k, v in cases.items()}
+print(json.dumps(out))
+`,
+      ],
+      { encoding: 'utf8' },
+    );
+    const det = JSON.parse(pyCheck);
+    assert.equal(det.the_er.voiceName, 'Léa');
+    assert.equal(det.the_er.pov, 'first');
+    assert.equal(det.not_father.voiceName, 'Léa', 'COI invariable demandé/rendu compte must not cancel female -ée reflexives');
+    assert.equal(det.accenseur.voiceName, 'Léa');
+    assert.equal(det.accenseur.pov, 'third');
+    assert.equal(det.cancer.voiceName, 'Léa');
+    assert.equal(det.cancer.pov, 'third');
+    assert.equal(det.male_essay.voiceName, 'Hugo');
+    assert.equal(det.male_third.voiceName, 'Hugo');
+    assert.equal(det.male_third.pov, 'third');
+
+    // 2. Verify voice_fish.py & source_import.py never let an old Hugo MP3 on :8005 overwrite Léa,
+    //    while still reusing user-uploaded ("upload") audio when appropriate.
+    const fakeMp3 = path.join(dir, 'sample.mp3');
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=1.2', '-ar', '44100', '-ac', '1', fakeMp3],
+      { stdio: 'pipe' },
+    );
+    const mp3Bytes = fs.readFileSync(fakeMp3);
+
+    let checkVoiceTag = 'elevenlabs:3Tp5mYhT9wrfnry9pzvV'; // Stale Hugo on :8005
+    const generatedCalls = [];
+
+    srv = http.createServer((req, res) => {
+      const u = req.url || '';
+      if (req.method === 'GET' && u.startsWith('/api/videos/vid-fem')) {
+        if (u.includes('/transcript/check')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ exists: true, file_exists: true }));
+          return;
+        }
+        if (u.includes('/transcript')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ transcript: [{ start: 0, end: 2.0, text: 'I lay down on the stretcher.' }] }));
+          return;
+        }
+        if (u.endsWith('/tts/check')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ exists: true, file_exists: true, id: 11, path: '/downloads/tts/old.mp3', voice: checkVoiceTag, duration_seconds: 1.2 }));
+          return;
+        }
+        if (u.endsWith('/translations')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              proposals: [
+                {
+                  id: 7,
+                  is_selected: true,
+                  prompt_type: 'narration',
+                  model_name: 'test',
+                  title: 'Urgences',
+                  translation: "Je me suis allongée sur le brancard et j'étais pas assez inquiète.",
+                },
+              ],
+            }),
+          );
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: 'vid-fem', title: 'Urgences', duration_seconds: 30 }));
+        return;
+      }
+      if (req.method === 'POST' && u.includes('/translations/7/select')) {
+        req.resume();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (req.method === 'POST' && u.endsWith('/tts/elevenlabs')) {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const parsed = JSON.parse(body);
+          generatedCalls.push(parsed);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: 99, audioPath: '/downloads/tts/lea_fresh.mp3' }));
+        });
+        return;
+      }
+      if (req.method === 'POST' && u.includes('/tts/transcribe')) {
+        req.resume();
+        req.on('end', () => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ transcript: [{ start: 0.05, end: 1.1, text: 'Je me suis allongée' }] }));
+        });
+        return;
+      }
+      if (req.method === 'GET' && u.startsWith('/downloads/tts/')) {
+        res.writeHead(200, { 'content-type': 'audio/mpeg' });
+        res.end(mp3Bytes);
+        return;
+      }
+      req.resume();
+      res.writeHead(404);
+      res.end('not found');
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const env = { ...process.env, WHATIF_NOUVEAU_URL: `http://127.0.0.1:${port}` };
+
+    const slug = 'fem-ep';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({ id: 'FemEp', slug, aspect: '9:16', source: { provider: 'nouveau', videoId: 'vid-fem' }, script: [], shots: [] }),
+    );
+
+    // 2a. source_import.py keeps Léa even though :8005 has an old Hugo TTS
+    await execFileAsync('python3', [path.resolve('pipeline/source_import.py'), slug, '--video', 'vid-fem', '--apply-script'], { cwd: dir, env });
+    const epAfterImport = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    assert.equal(epAfterImport.voice.voiceName, 'Léa');
+    assert.equal(epAfterImport.voice.voiceId, 'KSyQzmsYhFbuOhqj1Xxv');
+    assert.equal(epAfterImport.voice.narratorGender, 'female');
+
+    // 2b. voice_fish.py ignores the stale Hugo MP3 and generates fresh ElevenLabs TTS with Léa
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: dir, env });
+    assert.equal(generatedCalls.length, 1, 'must regenerate TTS when :8005 cached voice is Hugo instead of Léa');
+    assert.equal(generatedCalls[0].voiceId, 'KSyQzmsYhFbuOhqj1Xxv');
+    const meta1 = JSON.parse(fs.readFileSync(path.join(dir, 'out', slug, 'voice_meta.json'), 'utf8'));
+    assert.equal(meta1.voiceId, 'KSyQzmsYhFbuOhqj1Xxv');
+    assert.equal(meta1.audioPath, '/downloads/tts/lea_fresh.mp3');
+
+    // 2c. When :8005 has a user-uploaded audio ("upload"), voice_fish.py reuses it without calling ElevenLabs
+    checkVoiceTag = 'upload';
+    fs.rmSync(path.join(dir, 'public', slug, 'voice_raw.mp3'), { force: true });
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: dir, env });
+    assert.equal(generatedCalls.length, 1, 'uploaded user audio on :8005 is reused without calling ElevenLabs');
+    const meta2 = JSON.parse(fs.readFileSync(path.join(dir, 'out', slug, 'voice_meta.json'), 'utf8'));
+    assert.equal(meta2.audioPath, '/downloads/tts/old.mp3');
+  } finally {
+    if (srv) {
+      srv.closeAllConnections?.();
+      await new Promise((r) => srv.close(r));
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

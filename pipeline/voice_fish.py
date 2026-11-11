@@ -295,7 +295,8 @@ def main(argv: List[str]) -> int:
     # Auto-detect narrator gender & voice from script phrasing (and source.fr.md fallback)
     # unless --voice was passed explicitly or episode.json voice.locked is true.
     voice_det: Optional[Dict[str, Any]] = None
-    if provider == "elevenlabs" and not proj.arg(argv, "--voice") and not ep_voice.get("locked"):
+    explicit_voice = bool(proj.arg(argv, "--voice"))
+    if provider == "elevenlabs" and not explicit_voice and not ep_voice.get("locked"):
         title_str = " ".join(ep.get("title") or []) if isinstance(ep.get("title"), list) else str(ep.get("topic") or "")
         voice_det = detect_narrator_voice(text, title_str)
         if voice_det["femaleScore"] == 0 and voice_det["maleScore"] == 0:
@@ -304,14 +305,20 @@ def main(argv: List[str]) -> int:
                 voice_det = detect_narrator_voice(src_md.read_text(encoding="utf-8", errors="ignore"), title_str)
         if voice_det["femaleScore"] > 0 or voice_det["maleScore"] > 0 or not ep_voice.get("narratorGender"):
             V["voiceId"] = voice_det["voiceId"]
-            if ep_voice.get("voiceId") != voice_det["voiceId"] or ep_voice.get("narratorGender") != voice_det["gender"]:
+            detected_pov = voice_det.get("pov", "first")
+            if (
+                ep_voice.get("voiceId") != voice_det["voiceId"]
+                or ep_voice.get("narratorGender") != voice_det["gender"]
+                or ep_voice.get("narratorPov") != detected_pov
+            ):
                 ep_voice["voiceId"] = voice_det["voiceId"]
                 ep_voice["voiceName"] = voice_det["voiceName"]
                 ep_voice["narratorGender"] = voice_det["gender"]
+                ep_voice["narratorPov"] = detected_pov
                 ep["voice"] = ep_voice
                 proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
                 print(
-                    f"[voice] auto-selected {voice_det['voiceName']} ({voice_det['gender']}, {voice_det['voiceId']}) "
+                    f"[voice] auto-selected {voice_det['voiceName']} ({voice_det['gender']}/{detected_pov}, {voice_det['voiceId']}) "
                     f"[F={voice_det['femaleScore']} M={voice_det['maleScore']}]",
                     flush=True,
                 )
@@ -338,26 +345,39 @@ def main(argv: List[str]) -> int:
             except NouveauError:
                 chk = {}
             if chk.get("exists") and chk.get("file_exists") and chk.get("path"):
-                audio_path = str(chk["path"])
-                res = {"id": chk.get("id"), "audioPath": audio_path, "reused": True}
-                raw_voice_tag = str(chk.get("voice") or "")
-                if ":" in raw_voice_tag:
-                    srv_prov, srv_vid = raw_voice_tag.split(":", 1)
+                raw_voice_tag = str(chk.get("voice") or "").strip()
+                srv_prov, srv_vid = raw_voice_tag.split(":", 1) if ":" in raw_voice_tag else (raw_voice_tag, "")
+                can_reuse = False
+                if raw_voice_tag == "upload" and not explicit_voice:
+                    can_reuse = True
+                elif srv_vid and srv_vid == str(V.get("voiceId") or ""):
+                    can_reuse = True
+                elif not srv_vid and raw_voice_tag == "" and not explicit_voice and not voice_det:
+                    can_reuse = True
+
+                if can_reuse:
+                    audio_path = str(chk["path"])
+                    res = {"id": chk.get("id"), "audioPath": audio_path, "reused": True}
                     if srv_prov in ("elevenlabs", "fish"):
                         provider = srv_prov
                         V["provider"] = srv_prov
                     if srv_vid:
                         V["voiceId"] = srv_vid
-                raw_model_tag = str(chk.get("model") or "")
-                if ":" in raw_model_tag:
-                    _, srv_mid = raw_model_tag.split(":", 1)
-                    if srv_mid:
-                        V["modelId"] = srv_mid
-                reused_from_server = True
-                print(
-                    f"[voice] reusing existing TTS audio from :8005 ({audio_path}, id={chk.get('id')}, voice={V['voiceId']})",
-                    flush=True,
-                )
+                    raw_model_tag = str(chk.get("model") or "")
+                    if ":" in raw_model_tag:
+                        _, srv_mid = raw_model_tag.split(":", 1)
+                        if srv_mid:
+                            V["modelId"] = srv_mid
+                    reused_from_server = True
+                    print(
+                        f"[voice] reusing existing TTS audio from :8005 ({audio_path}, id={chk.get('id')}, voice={raw_voice_tag or V['voiceId']})",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[voice] ignoring existing :8005 TTS ({raw_voice_tag}) because target narrator voice is {V['voiceId']} — regenerating",
+                        flush=True,
+                    )
 
         if not reused_from_server:
             label = "ElevenLabs" if provider == "elevenlabs" else "Fish Audio"

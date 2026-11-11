@@ -251,23 +251,31 @@ def main(argv: List[str]) -> int:
             tts_chk = nv.tts_check(str(video_id))
             if tts_chk.get("exists") and tts_chk.get("file_exists") and tts_chk.get("path"):
                 existing_tts = tts_chk
-                raw_v = str(tts_chk.get("voice") or "")
-                if ":" in raw_v:
-                    _, srv_vid = raw_v.split(":", 1)
-                    if srv_vid == "KSyQzmsYhFbuOhqj1Xxv":
-                        voice_det = {**voice_det, "gender": "female", "voiceId": srv_vid, "voiceName": "Léa"}
-                    elif srv_vid == "3Tp5mYhT9wrfnry9pzvV":
-                        voice_det = {**voice_det, "gender": "male", "voiceId": srv_vid, "voiceName": "Hugo"}
-                print(
-                    f"[source] existing TTS audio found on :8005 ({tts_chk.get('path')}, voice={tts_chk.get('voice')}, "
-                    f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it automatically",
-                    flush=True,
-                )
+                raw_v = str(tts_chk.get("voice") or "").strip()
+                srv_vid = raw_v.split(":", 1)[1] if ":" in raw_v else ""
+                if raw_v == "upload":
+                    print(
+                        f"[source] existing uploaded audio found on :8005 ({tts_chk.get('path')}, "
+                        f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it automatically",
+                        flush=True,
+                    )
+                elif srv_vid and srv_vid != voice_det["voiceId"]:
+                    print(
+                        f"[source] existing TTS on :8005 uses {raw_v}, which mismatches detected narrator "
+                        f"{voice_det['voiceName']} ({voice_det['voiceId']}) — voice step will regenerate with {voice_det['voiceName']}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[source] existing TTS audio found on :8005 ({tts_chk.get('path')}, voice={tts_chk.get('voice')}, "
+                        f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it automatically",
+                        flush=True,
+                    )
         except NouveauError:
             pass
         print(
-            f"[source] narrator gender analysis -> {voice_det['gender']} ({voice_det['voiceName']} {voice_det['voiceId']}, "
-            f"F={voice_det['femaleScore']} M={voice_det['maleScore']})",
+            f"[source] narrator gender analysis -> {voice_det['gender']} / pov={voice_det.get('pov', 'first')} "
+            f"({voice_det['voiceName']} {voice_det['voiceId']}, F={voice_det['femaleScore']} M={voice_det['maleScore']})",
             flush=True,
         )
         source.update(
@@ -283,6 +291,7 @@ def main(argv: List[str]) -> int:
                 "chars": len(text),
                 "words": len(text.split()),
                 "narratorGender": voice_det["gender"],
+                "narratorPov": voice_det.get("pov", "first"),
                 "recommendedVoiceId": voice_det["voiceId"],
                 "recommendedVoiceName": voice_det["voiceName"],
                 "existingTts": existing_tts or None,
@@ -298,6 +307,7 @@ def main(argv: List[str]) -> int:
                 "voiceId": voice_det["voiceId"],
                 "voiceName": voice_det["voiceName"],
                 "narratorGender": voice_det["gender"],
+                "narratorPov": voice_det.get("pov", "first"),
                 "modelId": voice_cfg.get("modelId") or ELEVENLABS_MODEL,
                 "speakingRate": voice_cfg.get("speakingRate") or ELEVENLABS_SPEED,
             }
@@ -307,6 +317,7 @@ def main(argv: List[str]) -> int:
                 "voiceId": voice_det["voiceId"],
                 "voiceName": voice_det["voiceName"],
                 "narratorGender": voice_det["gender"],
+                "narratorPov": voice_det.get("pov", "first"),
                 "modelId": ELEVENLABS_MODEL,
                 "speakingRate": ELEVENLABS_SPEED,
             }
