@@ -54,11 +54,13 @@ Vérifie particulièrement ces 9 points critiques :
    - Si le récit dit qu'un personnage bondit d'un canapé ou pose un objet sur une table, ces éléments existent-ils vraiment dans la scène ?
 2. **Costume / Objet-clé & chronologie** :
    - Si l'histoire tourne autour d'un objet ou vêtement spécifique (ex. un nouveau haut acheté, une fiole, un téléphone, un plat), est-il visuellement distinct de la tenue de base des personnages et n'est-il porté/tenu qu'au moment où le récit l'indique ?
-3. **Inserts & panneaux de texte (<SchLabel> / <Schematic>)** :
-   - Aucun plan de dialogue ou de réaction émotionnelle ne doit être remplacé par un panneau de texte abstrait sans personnage.
+3. **Inserts & panneaux de texte (<SchLabel> / <Schematic> vs inserts concrets)** :
+   - Aucun plan de dialogue ou de réaction émotionnelle ne doit être remplacé par un panneau de texte abstrait (<Schematic>) sans personnage.
+   - En revanche, les inserts macro concrets (\`phoneShot\`, \`tabletopShot\` sur dossier/facture/clés/bague/tasse/mains) sont des plans \`insert\` légitimes et encouragés sans \`<Person>\`.
    - Aucun libellé <SchLabel> inventé ou hors sujet.
-4. **Cartes-titres (<TitleCard>) & langue française** :
-   - Pas de <TitleCard> en plein milieu de l'histoire qui casse la tension dramatique.
+4. **Cartes-titres (<TitleCard>), accents graphiques & langue française** :
+   - Pas de <TitleCard> plein écran en plein milieu de l'histoire qui coupe l'image, ni de sous-titres recopiant la voix.
+   - En revanche, les accents graphiques/diégétiques courts en français intégrés au moteur — \`title\` d'accroche sur \`S1\`, \`stamp\` lieu/heure (\`StampCard\`), \`tag\` chiffre/montant (\`ValueTag\`), rayons \`burst\` (\`ShockBurst\`), et micro-effets \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`, etc.) — sont **encouragés** et ne constituent JAMAIS un défaut !
    - Aucun texte en anglais ("YOU PUT ITCHING...", "WHAT IF...") laissé dans un épisode en français.
 5. **Cadrage & placement (16:9 ou 9:16)** :
    - Les personnages et objets tenus (handRProp / grabAt / handWorld) sont-ils bien cadrés, sans objet flottant loin des mains ni moitié d'écran vide ?
@@ -73,9 +75,9 @@ Vérifie particulièrement ces 9 points critiques :
 8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ?
 9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
 
-Avant d'affirmer qu'un personnage manque dans un plan, lis la ligne « personnages cités » de ce plan dans le résumé du code : s'il y est, il est dessiné (vérifie plutôt son cadrage sur la planche). Un insert (téléphone \`phoneShot\`, objet) qui illustre ce que dit le narrateur n'est pas un défaut.
+Avant d'affirmer qu'un personnage manque dans un plan, lis la ligne « personnages cités » de ce plan dans le résumé du code : s'il y est, il est dessiné (vérifie plutôt son cadrage sur la planche). Un insert (\`phoneShot\`, \`tabletopShot\`, objet en gros plan) qui illustre ce que dit le narrateur n'est pas un défaut.
 
-Le code peut décrire les plans avec \`shot({ place, cam, people, duo })\` ou \`phoneShot(...)\` : \`place(...)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression, \`beats\` = changements minutés), \`duo\` une interaction à deux. Tes correctifs doivent employer ces mêmes champs via \`edit_shot\`.
+Le code peut décrire les plans avec \`shot({ place, cam, people, duo, stamp, tag, burst, title, overlay })\`, \`phoneShot(...)\` ou \`tabletopShot(...)\` : \`place(...)\` est le décor, \`cam\` la taille du plan, \`people\` les personnages (\`who\` = \`cast(…)\`, \`at\` = position au sol, \`on\` = assis à un meuble, \`yaw\` = orientation, \`act\` = action, \`face\` = expression, \`vfx\` = micro-effet émotionnel, \`beats\` = changements minutés), \`duo\` une interaction à deux. Tes correctifs doivent employer ces mêmes champs via \`edit_shot\`.
 
 Réponds UNIQUEMENT avec un objet JSON valide (sans texte autour, ou dans un bloc \`\`\`json) respectant exactement ce schéma :
 {
@@ -105,7 +107,7 @@ Tu reçois :
 
 Règles STRICTES de contre-visite (anti-boucle infinie) :
 1. **Périmètre verrouillé** : vérifie UNIQUEMENT (a) si les problèmes bloquants signalés au tour précédent sur ces plans ciblés ont été résolus de façon cohérente, et (b) qu'aucune casse visuelle franche (cadre vide, personnage disparu, texte anglais, objet flottant aberrant) n'a été introduite sur ces plans modifiés.
-2. **Interdiction de déplacer les poteaux de but** : N'INVENTE PAS de nouvelles exigences sur d'autres plans non signalés, et ne demande pas un réalisme anatomique impossible pour un rig vectoriel 2D (\`shot()\`, \`<Person>\`, \`phoneShot()\`).
+2. **Interdiction de déplacer les poteaux de but** : N'INVENTE PAS de nouvelles exigences sur d'autres plans non signalés, et ne demande pas un réalisme anatomique impossible pour un rig vectoriel 2D (\`shot()\`, \`<Person>\`, \`phoneShot()\`, \`tabletopShot()\`). Les accents graphiques français (\`stamp\`, \`tag\`, \`vfx\`, \`burst\`, \`title\` sur S1) sont intentionnels.
 3. **Attention au keyframe fixe** : l'image jointe \`S<N>.png\` montre l'instant unique \`t = key\` (indiqué pour chaque plan). Si une action en plusieurs temps (\`beats\`, \`t < ...\`, \`poseAt\`, \`grabAt\`) est correctement codée aux frames correspondantes dans le code complet du plan, elle fonctionne en vidéo !
 4. **Validation immédiate** : dès que les défauts bloquants précédents sont corrigés de manière satisfaisante, renvoie \`"pass": true\` et \`"issues": []\`.
 
@@ -228,6 +230,29 @@ export function summarizeShotsCode(
     `${comps ? `### Composants du fichier (début de chaque définition)\n${comps}\n\n` : ''}` +
     `### Résumé du code par plan (${rangeLabel})\n${perShot.join('\n')}`
   );
+}
+
+/** Counts of deliberate inserts and graphic/micro-VFX accents so the Reviewer recognizes them immediately. */
+export function accentMetrics(shotsInput: string | EpisodeShotsBundle): string {
+  const bodies: string[] =
+    typeof shotsInput === 'string'
+      ? (() => {
+          const sliced = sliceMonolithicShots(shotsInput);
+          return sliced.exportedShotIds.map((id) => sliced.shotBodies[id] ?? '');
+        })()
+      : shotsInput.exportedShotIds.map((id) => shotsInput.shotBodies[id] ?? '');
+  if (!bodies.length) return '';
+  let macroInserts = 0;
+  let stampsTags = 0;
+  let headVfx = 0;
+  let camBeats = 0;
+  for (const body of bodies) {
+    if (/\b(phoneShot|tabletopShot)\s*\(/.test(body)) macroInserts++;
+    if (/\b(stamp|tag|title|burst)\s*:|<(StampCard|ValueTag|HookTitle|ShockBurst)\b/.test(body)) stampsTags++;
+    if (/\bvfx\s*:\s*\[|<(HeadVfx|FocusRings|Sparkle)\b/.test(body)) headVfx++;
+    if (/\bbeats\s*:\s*\[[^\]]*\b(cam|shake|angle)\s*:/.test(body)) camBeats++;
+  }
+  return `dynamisme & accents : ${macroInserts} insert(s) macro (phoneShot/tabletopShot) · ${stampsTags} accent(s) écran (stamp/tag/title/burst) · ${headVfx} plan(s) avec micro-VFX personnage · ${camBeats} plan(s) avec changement de cadrage interne (camBeat)`;
 }
 
 /** Counts read straight from episode shot bodies, handed to the Reviewer so it does not have to guess from thumbnails. */
@@ -537,8 +562,9 @@ export async function reviewEpisodeBoard(
   const sizeDrift = directorSizeMismatches(directorRaw, ep);
   const autoMetrics = [
     staticMetrics(epSrc),
+    accentMetrics(epSrc),
     timingMetrics(timeline),
-    sizeDrift.length ? `écarts de taille DIRECTOR.md ↔ episode.json (${sizeDrift.length}) : ${sizeDrift.join(', ')}` : '',
+    sizeDrift.length ? `écarts de taille DIRECTOR.md ↔ episode\.json (${sizeDrift.length}) : ${sizeDrift.join(', ')}` : '',
   ]
     .filter(Boolean)
     .join('\n');

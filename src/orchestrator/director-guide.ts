@@ -6,43 +6,53 @@
  */
 /** The default way to write a shot. Sent only when the project's engine has src/engine/shot.tsx (the overlay). */
 export const SHOT_GUIDE = `## shot(): describe a shot, the engine draws it (the default in this project)
-import { shot, phoneShot, place, cast, definePiece } from '../../engine';
+import { shot, phoneShot, tabletopShot, place, cast, definePiece } from '../../engine';
 
 const ROOM = place('classroom', { mood: 'day', slots: { board: <text y={20} textAnchor="middle" fontSize={64} fill="#EDE8DE">x = 2y + 3</text> } });
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'] });
 const PROF = cast({ seed: 'prof', kind: 'masc', hair: 'buzz', outfit: ['shirt:cream', 'pants:navy', 'tie:red'], acc: ['glasses:square'] });
 
-export const S1 = shot({ place: ROOM, cam: 'establishing' });
-export const S2 = shot({ place: ROOM, cam: 'wide', people: [
+export const S1 = shot({ place: ROOM, cam: 'establishing', title: { lines: ['LA QUESTION', 'INTERDITE'], accent: 'INTERDITE' } });
+export const S2 = shot({ place: ROOM, cam: 'wide', stamp: { text: 'LYCÉE NORD · 08H12', at: 2, tone: 'amber' }, people: [
   { who: PROF, at: { u: 0.22, w: 0.3 }, yaw: 0.45, act: 'explain', face: 'happy' },
   { who: LOU, on: 'd4', yaw: -2 },
 ] });
 // the line: "Lou leva les yeux (f 4) et vit (f 16) le prof qui la fixait (f 30)": each moment lands on its word
-export const S3 = shot({ place: ROOM, cam: 'medium', on: 0, beats: [{ at: 30, cam: 'close', on: 1 }], people: [
-  { who: LOU, on: 'd4', yaw: -2, act: 'type', face: 'neutral', beats: [{ at: 4, look: 1, act: 'idle' }, { at: 16, face: 'shock' }] },
+export const S3 = shot({ place: ROOM, cam: 'medium', on: 0, beats: [{ at: 30, cam: 'close', on: 1, shake: 5 }], burst: { at: 30 }, people: [
+  { who: LOU, on: 'd4', yaw: -2, act: 'type', face: 'neutral', beats: [{ at: 4, look: 1, act: 'idle' }, { at: 16, face: 'shock' }], vfx: [{ at: 16, kind: 'shock' }] },
   { who: PROF, at: { u: 0.25, w: 0.3 }, look: 0, act: 'cross-arms', face: 'neutral', beats: [{ at: 30, face: 'smug', reach: { to: 'd4' } }] },
 ] });
 export const S4 = shot({ place: ROOM, cam: 'wide', duo: { a: { who: LOU, at: { u: 0.36, w: 0.55 } }, b: { who: PROF, at: { u: 0.62, w: 0.55 } }, action: 'handshake', from: 10 } });
 export const S5 = phoneShot({ name: 'Camille', back: ROOM, messages: [{ at: 14, text: 'Tu me manques' }, { at: 38, text: 'Ce soir ?', from: 'me' }], typing: { at: 52, text: 'Oui', dur: 18 } });
+export const S6 = tabletopShot({ surface: 'desk', items: [{ kind: 'dossier', label: 'COPIE', sub: '0 / 20', at: { x: 0.46, y: 0.5 } }, { kind: 'keys', at: { x: 0.66, y: 0.58 } }], hands: [{ from: 'bottom', to: { x: 0.5, y: 0.54 }, at: 10, action: 'point' }], tag: { text: '0 / 20', mark: 'x', at: 16 } });
 
 Every shot of a place reuses the same \`place(...)\` constant, so layout and props stay identical from shot to shot. Register S1, S2... in index.tsx as usual.
 **shot({...})**
-- \`place\`: the result of place(). \`cam\`: establishing | wide | medium | close, computed for 16:9 and 9:16 from the person it is on; or a literal { x, y, zoom }. Make it match the shot's "size" in episode.json: insert or macro = a literal camera on the object (zoom 2.4-4), with no people if the line is about the object; a high or low angle = a literal camera, or a hand-written shot.
+- \`place\`: the result of place(). \`cam\`: establishing | wide | medium | close, computed for 16:9 and 9:16 from the person it is on; or a literal { x, y, zoom }. Make it match the shot's "size" in episode.json: for \`"size": "insert"\`, prefer \`phoneShot({...})\` (phones/messages/notifications) or \`tabletopShot({...})\` (documents, bills, keys, rings, mugs, pills, photos, hands on a table), or a literal macro camera (zoom 2.4-4).
 - \`on\`: index in \`people\` the camera follows (default 0). \`move\`: 'push' (default slow push-in) | 'pull' | 'still'. \`focus\`: depth kept sharp, the rest softens; use it in about one shot in three (or a foreground amorce: \`extra: () => <Foreground blur={16}>…</Foreground>\`).
-- \`people\`: [{ who, at or on, seat, yaw, act, from, dur, stance, face, pose, rimId, headGear, torsoGear, handLProp, handRProp }]. at = { u, w } on the floor, or (t, len) => ({ u, w }) to walk across with act: 'walk'. on = a piece's id (or name): sits there, \`seat\` picks which place.
+- \`people\`: [{ who, at or on, seat, yaw, act, from, dur, stance, face, pose, vfx, rimId, headGear, torsoGear, handLProp, handRProp }]. at = { u, w } on the floor, or (t, len) => ({ u, w }) to walk across with act: 'walk'. on = a piece's id (or name): sits there, \`seat\` picks which place.
 - \`face\`: one expression, or [frame, expression] pairs. \`pose\`: any pose field, or (t, len) => ({...}) for keyframes; it overrides \`act\`.
 - \`look\`: index of the person to turn toward. \`reach\`: { to } a hand goes to a person (index, part: 'head' | 'chest' | 'hand'), a piece id, or { u, w, v }.
-**Rhythm: every shot with people plays at least one moment on a word of its line** (the audit refuses a board where more than 1 shot in 5 changes nothing).
-The frame of each word is given per shot in "When each word is said" (word@frame). Put the moment on the word it illustrates:
-- person \`beats: [{ at, act, face, yaw, look, reach }]\`: from that frame the person does that (a clip like startle starts there; reach: null lets go).
-- shot \`beats: [{ at, cam, on, shake }]\`: a punch-in on the key word (cam: 'close'), a cut to the person who reacts (on: 1), a shake on an impact.
-- Act what the narrator says: someone touches, takes, looks, turns, reacts. \`idle\` alone and \`talk\` on a person who is not speaking are not acting.
-**Reverse angle and angles**
+**Rhythm, camera beats & visual accents (what makes an episode feel alive, never monotonous)**
+- Every shot with people plays at least one moment on a word of its line ("When each word is said" gives \`word@frame\`):
+  - person \`beats: [{ at, act, face, yaw, look, reach }]\`: from that frame the person does that (a clip like startle starts there; reach: null lets go).
+  - shot \`beats: [{ at, cam, on, angle, shake }]\`: **mandatory on any character shot longer than 90 frames (3 s)** — punch in on the key word (\`cam: 'close'\`), cut to the reactor (\`on: 1\`), tilt to \`angle: 'low'\` on a threat, or \`shake: 6\` on an impact so longer clauses never feel static.
+  - Act what the narrator says: someone touches, takes, looks, turns, reacts. \`idle\` alone and \`talk\` on a person who is not speaking are not acting.
+- **Micro-VFX & graphic accents (~1 shot in 4, guided by \`accent\` hints in the shot pin)**:
+  - \`vfx\` on a person: \`vfx: [{ at: 14, kind: 'shock' | 'sweat' | 'focus' | 'dizzy' | 'sparkle' | 'anger' | 'question' | 'thought', dur?: 28, label?: '...' }]\` — 2D comic/editorial head accents on emotional peaks.
+  - \`title\` on S1 cold-open (\`accent="hook-title"\`): \`title: { lines: ['...', '...'], accent?: '...', sub?: '...' }\` (never mid-episode).
+  - \`stamp\` on time/location jumps (\`accent="stamp"\`): \`stamp: { text: 'URGENCES · 03H14', sub?: 'CHU NORD', at?: 2, tone?: 'amber' | 'red' | 'teal' | 'ink' }\`.
+  - \`tag\` on numbers/amounts/key facts (\`accent="tag"\`): \`tag: { text: '15 000 €', sub?: 'FACTURE', mark?: 'x' | 'check', at?: 12 }\` or animated counter \`tag: { count: { from: 0, to: 15000, suffix: ' €', dur: 24 }, at: 8 }\`.
+  - \`burst\` on sudden twists: \`burst: { at: 16, dur?: 16 }\` (radial frame-edge impact lines).
+  - \`overlay: (t, len) => <g>…</g>\`: screen-space overlays (\`Toast\`, \`HudChip\`, \`Gauge\`, \`Dial\` from \`../../engine\`).
+  - Episode colour-grade \`look\` in \`episode.json.edit\`: \`"look": "memory" | "tension" | "revelation" | "nightmare" | "rewind"\` shifts the grade on flashbacks, panic beats, or twists.
+**Reverse angle, angles & inserts**
 - \`view: 'reverse'\`: the camera at the other end of the room, looking at the opposite wall. People keep their \`at\`; the engine mirrors them and turns them (a face becomes a back). In a dialogue alternate view 'front' on one person and 'reverse' on the other: shot / reverse shot. A recipe's opposite wall is its \`front\` list (change it with place(name, { front: [...] })).
 - \`angle: 'low'\` (looking up: the person looms, for power or threat) or \`'high'\` (looking down: small, alone, crushed); also as a camera beat. Use one whenever the shot list says "low angle" or "high angle".
 - To fix one shot later, send it whole with edit_shot { episode, id: 'S7', code: 'export const S7 = shot({...});' }: no need to read shots.tsx first.
 - \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
-- \`phoneShot({ name, screen, messages, notify, typing, battery, time, back, case, skin })\`: full-frame phone insert (16:9 & 9:16), \`screen: 'chat' | 'lock'\`, bubbles arriving on \`at\` (word frame), \`notify: { at, text }\` banner, \`typing: { at, text, dur }\`, \`skin: null\` to hide the hand. Set \`"size": "insert"\` in episode.json for every \`phoneShot\`.
+- \`phoneShot({ name, screen, messages, notify, typing, battery, time, back, case, skin })\`: full-frame phone insert (16:9 & 9:16), \`screen: 'chat' | 'lock'\`, bubbles arriving on \`at\` (word frame), \`notify: { at, text }\` banner, \`typing: { at, text, dur }\`, \`skin: null\` to hide the hand. Set \`"size": "insert"\` in episode.json.
+- \`tabletopShot({ surface, items, hands, stamp, tag, zoom })\`: top-down macro tabletop insert (16:9 & 9:16 safe). \`surface\`: \`'wood' | 'dark-wood' | 'marble' | 'metal' | 'hospital' | 'cloth' | 'desk'\`. \`items\`: \`[{ kind: 'letter' | 'envelope' | 'dossier' | 'bill' | 'card' | 'cash' | 'keys' | 'ring' | 'mug' | 'glass' | 'pills' | 'folder' | 'photo' | 'watch' | 'custom', at?: { x, y }, rot?: deg, scale?: n, label?: '...', sub?: '...', enterAt?: frame }]\`. \`hands\`: \`[{ from: 'bottom' | 'left' | 'right' | 'top', to?: { x, y }, at?: frame, action?: 'reach' | 'point' | 'grab' | 'tremble' }]\`. Set \`"size": "insert"\` in episode.json.
 **place(name, { mood, palette, add, remove, pieces, slots, lights })**
 - Indoors: classroom bedroom kitchen living office restaurant corridor hallway hospital clinic police-office cell shop diner salon nails reception auditorium cafeteria blank.
   Outdoors (sky and ground, no walls): street garden park schoolyard rooftop. Moods: day dusk night. Pick the mood from the story, and change the palette so two episodes never look the same: palette: { wall: '#9ED8C6', floor: '#6B5A4A', wood: '#8C6239', fabric: '#B0463A' }.
@@ -55,7 +65,7 @@ The frame of each word is given per shot in "When each word is said" (word@frame
 **Not in the catalogue? Nothing blocks you, in this order:**
 1. place('blank', { pieces: [...] }) for a room, or a close outdoor recipe with pieces: [...] for an open-air place (a beach: park with a palette and your pieces), from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
 2. definePiece('arcade', { kind: 'floor', len: 0.12, deep: 0.08, draw }) at the top of shots.tsx when several shots use it.
-3. Write a shot by hand ONLY for what \`shot()\` and \`phoneShot()\` cannot draw (a vehicle interior, a custom diagram), one shot at a time. Never rewrite a whole episode by hand: the audit refuses a board when more than half the character shots bypass \`shot()\`, or when a 9:16 hand-written shot uses a 1920x1080 backdrop / y=1080 reflection. Keep DIRECTOR.md shot sizes in sync when you change a shot to \`insert\`.
+3. Write a shot by hand ONLY for what \`shot()\`, \`phoneShot()\` and \`tabletopShot()\` cannot draw (a vehicle interior, a custom diagram), one shot at a time. Never rewrite a whole episode by hand: the audit refuses a board when more than half the character shots bypass \`shot()\`, or when a 9:16 hand-written shot uses a 1920x1080 backdrop / y=1080 reflection. Keep DIRECTOR.md shot sizes in sync when you change a shot to \`insert\`.
 Something the list above does not have is never a reason to give up on the place the story needs.`;
 
 /** How to place people in depth. Sent only when the project's engine has src/engine/stage.tsx (the overlay). */
@@ -185,8 +195,8 @@ export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.ts
   Give each shot's set a unique id (id="s7") and a different one again if the same set renders twice in one frame.
 
 ### On-screen text
-Almost none: the title card and diegetic UI (a phone screen, a message, a timer chip). No captions of the voice, no "HA HA".
-All labels in the episode's language. Every number is real and sourced.
+No subtitles/captions of the narrator's voice, no comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard, and never English text in a French episode.
+DO use concise French diegetic & graphic accents (~1 shot in 4) so episodes feel punchy and visually distinct: cold-open \`title\` on S1, time/location \`stamp\` ("URGENCES · 03H14", "3 ANS PLUS TÔT"), numeric/fact \`tag\` ("15 000 €", "3 APPELS MANQUÉS"), \`phoneShot\` screens, \`tabletopShot\` documents/bills, and character \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`). Every number is real and sourced from the script.
 
 ### Board self-check (run it shot by shot on the full-size stills, not only on the contact sheet)
 1 one read in a second at phone size · 2 sizes change · 3 light from a visible source · 4 the character pops (face brightest, rim light)

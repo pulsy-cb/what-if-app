@@ -2930,3 +2930,105 @@ test('step 3 — sfx_run.py: continuous crossfade ambience (>45s without 12.5s d
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('step 4 — director guide, continuity pin & reviewer: surfaces accents, tabletopShot, CamBeats, looks & no-music-loop policy', async () => {
+  const { SHOT_GUIDE, modernDirectorGuide } = await import('../dist/orchestrator/director-guide.js');
+  const { episodePin, modernSystemPrompt } = await import('../dist/orchestrator/context.js');
+  const { accentMetrics, reviewEpisodeBoard } = await import('../dist/orchestrator/reviewer.js');
+
+  assert.match(SHOT_GUIDE, /tabletopShot/);
+  assert.match(SHOT_GUIDE, /vfx:\s*\[\{\s*at:/);
+  assert.match(SHOT_GUIDE, /stamp:/);
+  assert.match(SHOT_GUIDE, /tag:/);
+  assert.match(SHOT_GUIDE, /mandatory on any character shot longer than 90 frames/);
+  assert.match(modernDirectorGuide(), /No subtitles\/captions of the narrator's voice/);
+  assert.match(modernDirectorGuide(), /tabletopShot/);
+
+  const modPrompt = modernSystemPrompt();
+  assert.match(modPrompt, /n'ajoute PAS de boucle musicale de fond/);
+  assert.match(modPrompt, /no looped background music/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-step4-pin-'));
+  try {
+    const slug = 'er-pin';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const outDir = path.join(dir, 'out', slug);
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'ErPin',
+        slug,
+        aspect: '16:9',
+        script: [{ beat: 'b1', text: 'Aux urgences à 3h14 la facture tombe.' }],
+        shots: [
+          { id: 'S1', size: 'wide', set: 'hospital', note: 'Ouverture', accent: 'hook-title' },
+          { id: 'S2', size: 'insert', set: 'hospital', note: 'La facture de 15000 euros', accent: 'tag' },
+          { id: 'S3', size: 'medium', set: 'hospital', note: 'Trois ans plus tôt dans le couloir', accent: 'stamp' },
+        ],
+        edit: [{ shot: 'S1' }, { shot: 'S2', look: 'tension' }, { shot: 'S3', look: 'memory' }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({
+        fps: 30,
+        total: 240,
+        shots: [
+          { id: 'S1', len: 60, key: 18 },
+          { id: 'S2', len: 60, key: 18 },
+          { id: 'S3', len: 120, key: 30 },
+        ],
+        segments: [
+          { shot: 'S1', a: 0, b: 60 },
+          { shot: 'S2', a: 60, b: 120 },
+          { shot: 'S3', a: 120, b: 240 },
+        ],
+      }),
+    );
+    fs.writeFileSync(path.join(epDir, 'shared.tsx'), `import { place, cast } from '../../engine';\nexport const HOSP = place('hospital');\nexport const DOC = cast({ as: 'doctor', seed: 'doc' });\n`);
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S1.tsx'),
+      `export const S1 = shot({ place: HOSP, cam: 'wide', title: { lines: ['LA NUIT', 'AUX URGENCES'] }, beats: [{ at: 28, cam: 'medium' }], people: [{ who: DOC, at: { u: 0.5, w: 0.4 }, act: 'explain', vfx: [{ at: 18, kind: 'shock' }] }] });\n`,
+    );
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `export { S1 } from './shots/S1';\n`);
+
+    const pin = episodePin(dir);
+    assert.match(pin, /S1 60f wide \[hook-title\]/);
+    assert.match(pin, /S2 60f insert \[tag\]\{tension\}/);
+    assert.match(pin, /S3: len=120f \(4\.0s\), size="medium", set="hospital", accent="stamp", look="memory", camBeatRequired\(>90f\)/);
+
+    // Add S2 (tabletopShot) and S3 (stamp + camBeat) and check accentMetrics + reviewer prompt
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S2.tsx'),
+      `export const S2 = tabletopShot({ surface: 'hospital', items: [{ kind: 'bill', label: '15 000 €' }], tag: { text: '15 000 €', mark: 'x', at: 10 } });\n`,
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S3.tsx'),
+      `export const S3 = shot({ place: HOSP, cam: 'medium', stamp: { text: '3 ANS PLUS TÔT', at: 4 }, beats: [{ at: 45, cam: 'close', shake: 4 }], people: [{ who: DOC, at: { u: 0.5, w: 0.45 }, act: 'think' }] });\n`,
+    );
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `export { S1 } from './shots/S1';\nexport { S2 } from './shots/S2';\nexport { S3 } from './shots/S3';\n`);
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'fake');
+
+    let capturedSys = '';
+    let capturedUser = '';
+    const fakeReviewer = {
+      model: 'fake-rev',
+      label: 'fake',
+      chat: async ({ messages }) => {
+        capturedSys = messages.find((m) => m.role === 'system')?.content ?? '';
+        capturedUser = messages.find((m) => m.role === 'user')?.content ?? '';
+        return { text: JSON.stringify({ pass: true, summary: 'Dynamique et lisible.', issues: [] }) };
+      },
+    };
+    await reviewEpisodeBoard(fakeReviewer, dir, slug);
+    assert.match(capturedSys, /tabletopShot/);
+    assert.match(capturedSys, /StampCard/);
+    assert.match(capturedUser, /1 insert\(s\) macro \(phoneShot\/tabletopShot\) · 3 accent\(s\) écran \(stamp\/tag\/title\/burst\) · 1 plan\(s\) avec micro-VFX personnage · 2 plan\(s\) avec changement de cadrage interne \(camBeat\)/);
+    assert.ok(accentMetrics(`export const S1 = tabletopShot({ surface: 'wood' });\n`).includes('1 insert(s) macro'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

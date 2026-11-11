@@ -44,9 +44,9 @@ commands for a human to paste: you call the tools.
 2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
    video id (Fish Audio remains available with \`provider: "fish"\`). **Automatic reuse of existing \`:8005\` audio**: \`whatif_run { step: "voice" }\` first checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\`; if the video already has a generated TTS audio file on \`:8005\`, \`voice\` **automatically downloads and reuses that existing audio** instead of regenerating a new TTS (saving credits and keeping the exact voice already validated on \`:8005\`). Therefore, just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\` and without \`--voice\` when \`source\` reports \`existingTts.exists: true\`! Only when no audio exists yet on \`:8005\` do \`source\` and \`voice\` **automatically analyze the French phrasing and grammatical agreements** of the script (e.g. 1st-person feminine vs masculine agreements like *"je me suis remise / assise / figée"* vs *"je me suis assis / confus"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). To force a specific voice manually when no audio exists yet, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
    words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
-3. whatif_run shotlist — cuts the measured words into clause-aligned shots (9–14 shots for 20s shorts, scaling up to 15–36 shots for multi-minute stories),
-   keeps coherent story locations while varying camera framing (\`wide\`, \`medium\`, \`close\`, \`insert\`, \`low angle\`),
-   and seeds \`fx\` and \`sound\` (from the studio's 40 cached \`library/sfx/\` clips).
+3. whatif_run shotlist — cuts the measured words into brisk clause-aligned shots (3-gear pace: fast cold-open hook in the first 25%, ~19–27 cuts/min even on multi-minute stories),
+   distributes semantic \`insert\` shots alongside \`wide\`/\`medium\`/\`close\`/\`low angle\`, tags narrative accents (\`hook-title\`, \`stamp\`, \`tag\`, \`vfx:*\`),
+   and seeds colour-grade \`look\` (\`memory\`, \`tension\`), mid-episode \`fx\` (\`flash\`, \`shake\`), and location-matched ambient + foley \`sound\` (no looped background music).
 4. whatif_run plan — turns episode.json.edit into timeline.json (schema 2: total, segments{a,b,t0,t1,shot,look},
    shots, fx, audio). Each edit entry is {"shot": "S2", "at": "<cue>"} and a cue is one of:
      f:120          an absolute frame            s:4.2      seconds
@@ -64,9 +64,13 @@ commands for a human to paste: you call the tools.
    - **2. Casting, silhouettes distinctes & objet-clé (\`makeLook\`)**: définir les personnages récurrents avec des silhouettes (\`extra\`), accessoires (\`accessory\`) et palettes de couleurs distincts, aligner le genre du personnage narrateur principal sur \`episode.json.voice.narratorGender\` (ex: coiffure \`'ponytail' | 'bun' | 'long' | 'bob'\` si \`narratorGender === "female"\` avec la voix de Léa), et vérifier le contraste avec les murs (jamais de veste/membres sombres sans contour ou rim light sur un mur sombre). **Règle d'objet/vêtement-clé** : si l'histoire porte sur un vêtement ou objet spécifique (un nouveau haut, un sac, un plat, une fiole, une bague), donne-lui une couleur et une forme **distinctes** de la veste habituelle des personnages, et respecte la chronologie du récit (un personnage ne porte ou ne tient l'objet qu'à partir du plan où le texte le dit !).
    - **3. Découpage, continuité décor↔code et chorégraphie physique des actions plan par plan**:
      - **Continuité stricte \`DIRECTOR.md\` ↔ \`shots.tsx\`**: le décor, les couleurs de murs et TOUS les meubles/accessoires décrits dans \`DIRECTOR.md\` ou cités dans le texte (ex. canapé, table basse, bol, fenêtre) DOIVENT réellement être codés dans le composant de décor partagé en haut de \`shots.tsx\`. Ne décris jamais un décor dans \`DIRECTOR.md\` pour en coder un autre dans \`shots.tsx\` !
-     - **Règles narratives sur les inserts et cartes-titres**:
-       - Un plan \`insert\` zoome (\`camT(..., 2.0..2.4)\`) sur l'**objet concret** ou les mains dans le décor de la scène. **INTERDICTION** de remplacer un plan de dialogue, de sourire ou de réaction par un panneau \`<Schematic>\` ou un texte inventé hors sujet (tout libellé \`<SchLabel>\` doit reprendre les mots exacts de la narration en français).
-       - \`<TitleCard>\` est réservé au titre d'ouverture/prémisse (début d'épisode) : **JAMAIS** de \`<TitleCard>\` au milieu d'une scène dramatique, et **JAMAIS** de texte en anglais dans un épisode français.
+     - **Règles narratives sur les inserts, accents graphiques et cartes-titres**:
+       - Un plan \`insert\` montre de près l'**objet concret** cité dans la phrase (\`phoneShot\` pour téléphone/messages, \`tabletopShot\` pour documents/factures/clés/bague/tasse/mains sur une table, ou caméra macro \`2.4..4.0\`). **INTERDICTION** de remplacer un plan de dialogue ou de réaction par un panneau \`<Schematic>\` abstrait ou un texte inventé hors sujet.
+       - Le titre d'ouverture (\`title\` sur \`shot()\` ou \`<TitleCard>\`) est encouragé sur \`S1\` / la prémisse (\`accent="hook-title"\`), mais **JAMAIS** de \`<TitleCard>\` plein écran au milieu d'une scène dramatique, **JAMAIS** de sous-titres de la voix, et **JAMAIS** de texte en anglais dans un épisode français. En revanche, utilise activement les accents diégétiques/graphiques français (\`stamp\` lieu/heure, \`tag\` montant/chiffre, \`vfx\` émotionnels, \`burst\`) environ 1 plan sur 4 pour donner une signature visuelle vivante à l'épisode !
+     - **4. Signature visuelle unique, Dynamisme caméra & Ambiance sonore**:
+       - Donne à chaque épisode une palette de couleurs (\`palette\`), une ambiance lumineuse (\`mood\`) et des étalonnages (\`look: "memory" | "tension" | "revelation" | "nightmare"\` dans \`episode.json.edit\`) propres à son histoire pour que deux épisodes ne se ressemblent jamais.
+       - Sur tout plan avec personnages qui dépasse \`90\` frames (3 s), ajoute au moins un changement de cadrage interne (\`beats: [{ at, cam: 'close', on, angle, shake }]\`) calé sur un mot-clé.
+       - Le son (\`episode.json.sound\`) pose des ambiances continues fondues par lieu (\`room_tone\`, \`roof_wind\`, \`class_murmur\`) et des bruitages concrets : **n'ajoute PAS de boucle musicale de fond (\`"music"\`)** sauf demande explicite de l'utilisateur.
      - Quand deux personnages interagissent, utiliser des **plans à deux (two-shots)** en plan large/moyen et alterner avec des cadrages rapprochés cohérents (ne jamais faire disparaître le mobilier ou l'interlocuteur sans raison !).
      - **Prise et tenue d'objets (INTERDICTION des objets flottants)**: un objet tenu ou saisi ne doit **JAMAIS** être dessiné à des centaines de pixels de la main !
        - Pour un objet tenu en continu dans la main : passe-le à \`<Hero handRProp={<g>...</g>} />\` ou positionne-le à \`const H = handWorld(pose, 'R')\` (\`<g transform={\`translate(\${H.x} \${H.y})\`}>...\`).
@@ -87,8 +91,8 @@ commands for a human to paste: you call the tools.
    - **Targeted re-renders**: if only specific shots fail the layout check (e.g. \`S3\`, \`S7\`), fix them in \`shots.tsx\` and run \`whatif_run { episode, step: "stills", args: ["S3", "S7"] }\` followed by \`board\` instead of re-rendering every still!
    - Inspect \`out/<slug>/storyboard.jpg\` with \`view_image\`: if any shot is blank, lopsided or off-model,
      fix \`shots.tsx\` and re-run \`stills\` (for the changed shot IDs) and \`board\`.
-7. whatif_run sfx — generates/mixes \`public/<slug>/sfx.wav\` and \`public/<slug>/music.wav\` and sets stem
-   volumes in \`timeline.json\`.
+7. whatif_run sfx — mixes continuous crossfade-tiled location ambiences + semantic foley in \`public/<slug>/sfx.wav\` and sets voice-first stem
+   volumes in \`timeline.json\` (no looped background music unless explicitly requested).
 8. whatif_run render — renders the video on **Modal**. Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
    \`out/<slug>/report.json\`.
 
@@ -514,11 +518,23 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
   for (const s of Array.isArray(epJson?.shots) ? epJson.shots : []) {
     if (s?.id) epShotsMap.set(String(s.id), s);
   }
+  const editLookMap = new Map<string, string>();
+  for (const e of Array.isArray(epJson?.edit) ? epJson.edit : []) {
+    if (e?.shot && e?.look) editLookMap.set(String(e.shot), String(e.look));
+  }
 
   if (tlShots.length > 1) {
-    // every shot's length and size, so the timeline never has to be read again
+    // every shot's length, size, accent and look, so the timeline never has to be read again
     parts.push(
-      `### All shots (id len size)\n${tlShots.map((s) => `${s.id} ${s.len}f ${String(epShotsMap.get(String(s.id))?.size ?? s.size ?? '')}`.trim()).join(' · ')}`,
+      `### All shots (id len size [accent/look])\n${tlShots
+        .map((s) => {
+          const id = String(s.id);
+          const epS = epShotsMap.get(id);
+          const acc = epS?.accent ? `[${epS.accent}]` : '';
+          const lk = editLookMap.get(id) ? `{${editLookMap.get(id)}}` : '';
+          return `${id} ${s.len}f ${String(epS?.size ?? s.size ?? '')} ${acc}${lk}`.replace(/\s+/g, ' ').trim();
+        })
+        .join(' · ')}`,
     );
     const missing = tlShots.filter((s) => !exportedSet.has(String(s.id)));
     parts.push(
@@ -533,9 +549,17 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
         const size = epS.size ?? s.size ?? 'medium';
         const set = epS.set ?? 'custom';
         const note = epS.note ?? '';
-        return `  - ${id}: len=${s.len}f (${(Number(s.len || 60) / 30).toFixed(1)}s), size="${size}", set="${set}", words="${note}"`;
+        const lenNum = Number(s.len || 60);
+        const extras: string[] = [];
+        if (epS.accent) extras.push(`accent="${epS.accent}"`);
+        if (editLookMap.get(id)) extras.push(`look="${editLookMap.get(id)}"`);
+        if (lenNum > 90 && !String(size).includes('insert')) extras.push(`camBeatRequired(>90f)`);
+        const extraStr = extras.length ? `, ${extras.join(', ')}` : '';
+        return `  - ${id}: len=${s.len}f (${(lenNum / 30).toFixed(1)}s), size="${size}", set="${set}"${extraStr}, words="${note}"`;
       });
-      parts.push(`### Next shots to write via edit_shot (use these exact IDs, lengths and sizes):\n${nextBatch.join('\n')}`);
+      parts.push(
+        `### Next shots to write via edit_shot (use these exact IDs, lengths, sizes & accents — insert=>phoneShot/tabletopShot, hook-title=>title, stamp=>stamp, tag=>tag, vfx:*=>person.vfx):\n${nextBatch.join('\n')}`,
+      );
       const timing = shotWordFrames(projectRoot, slug, missing.slice(0, 12).map((s) => String(s.id)));
       if (timing.length) parts.push(`### When each word is said in these shots (word@frame, the shot's own clock): put the beats on these frames\n${timing.join('\n')}`);
     }
