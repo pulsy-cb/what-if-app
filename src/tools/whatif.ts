@@ -644,10 +644,26 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     /* ignore */
   }
 
-  // Two characters built from the same seed and nothing else are the same person on screen
+  // Two characters built from the same seed and nothing else (or two distinct cast() constants with identical specs) are clones on screen
   const seeds = [...shotsSource.matchAll(/\bcast\(\{\s*seed:\s*['"]([^'"]+)['"]\s*\}\)/g)].map((m) => m[1]!);
   const twice = seeds.filter((s, i) => seeds.indexOf(s) !== i);
   if (twice.length) errors.push(`cast({ seed: '${twice[0]}' }) is used for two characters: give each one its own seed`);
+
+  const castDecls: { name: string; norm: string }[] = [];
+  for (const cm of shotsSource.matchAll(/(?:export\s+)?const\s+([A-Za-z0-9_$]+)\s*=\s*cast\s*\(\s*\{([\s\S]*?)\}\s*\)/g)) {
+    const name = cm[1]!;
+    const norm = cm[2]!.replace(/\s+/g, ' ').trim();
+    if (norm) castDecls.push({ name, norm });
+  }
+  for (let i = 0; i < castDecls.length; i++) {
+    for (let j = i + 1; j < castDecls.length; j++) {
+      if (castDecls[i]!.norm === castDecls[j]!.norm) {
+        errors.push(
+          `Characters "${castDecls[i]!.name}" and "${castDecls[j]!.name}" use identical cast({ ${castDecls[i]!.norm.slice(0, 80)} }) specs and look like clones: give each character its own seed, hair, and outfit.`,
+        );
+      }
+    }
+  }
 
   // Check custom character looks defined via makeLook({ ... }): distinct silhouettes/jackets and dark-on-dark contrast
   const lookDefs: { name: string; jacket?: string; extra?: string; skin?: string }[] = [];
@@ -1254,6 +1270,13 @@ const runStep: Tool = {
     const extra = input.args ?? [];
     const slug = input.episode;
     syncStudioAspect(ctx.projectRoot, slug);
+    if (
+      (input.step === 'stills' || input.step === 'render') &&
+      fs.existsSync(path.join(ctx.projectRoot, 'src', 'engine', 'shot.tsx')) &&
+      fs.existsSync(path.join(ctx.projectRoot, 'src', 'engine', 'rig.tsx'))
+    ) {
+      applyEngineOverlay(ctx.projectRoot);
+    }
     // the audit's crash test needs react-dom in the project: the first episode of a machine has no node_modules yet
     if (input.step === 'stills' && !fs.existsSync(path.join(ctx.projectRoot, 'node_modules', 'react-dom'))) {
       ctx.log('node_modules missing: running npm install once');

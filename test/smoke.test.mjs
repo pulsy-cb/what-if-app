@@ -3406,3 +3406,91 @@ test('character casting & rendering fixes: rich palette + strict colour validati
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('casting prompts, narrator POV pin, clone cast() audit & reviewer chronological/family checks', async () => {
+  const { SHOT_GUIDE, STAGE_GUIDE } = await import('../dist/orchestrator/director-guide.js');
+  const { episodePin, modernSystemPrompt } = await import('../dist/orchestrator/context.js');
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const { reviewEpisodeBoard } = await import('../dist/orchestrator/reviewer.js');
+
+  assert.doesNotMatch(STAGE_GUIDE, /The narrator of most stories is the heroine/, 'default heroine mascot bias removed from STAGE_GUIDE');
+  assert.match(STAGE_GUIDE, /narratorPov === "third"/);
+  assert.match(STAGE_GUIDE, /who: CHAR/);
+  assert.match(SHOT_GUIDE, /who: CHAR/);
+  assert.match(modernSystemPrompt(), /n'utilise PAS `as: 'heroine'` par défaut/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-casting-pin-'));
+  try {
+    const slug = 'acc-pin';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const outDir = path.join(dir, 'out', slug);
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'studio.config.ts'), "export const STUDIO = { width: 1080, height: 1920, aspect: '9:16' as const };\n");
+
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'AccPin',
+        slug,
+        aspect: '9:16',
+        voice: { voiceName: 'Léa', voiceId: 'KSyQzmsYhFbuOhqj1Xxv', narratorGender: 'female', narratorPov: 'third' },
+        script: [{ beat: 'b1', text: "Elle marche seule vers l'ascenseur." }],
+        shots: [{ id: 'S1', size: 'medium', set: 'hallway', note: 'Elle marche' }],
+        edit: [{ shot: 'S1' }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({
+        fps: 30,
+        total: 60,
+        shots: [{ id: 'S1', len: 60, key: 18 }],
+        segments: [{ shot: 'S1', a: 0, b: 60 }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'shared.tsx'),
+      [
+        `import { place, cast } from '../../engine';`,
+        `export const HALL = place('hallway');`,
+        `export const CLONE_A = cast({ seed: 'same', body: 'adult', hair: 'short', outfit: ['hoodie:charcoal', 'jeans'] });`,
+        `export const CLONE_B = cast({ seed: 'same', body: 'adult', hair: 'short', outfit: ['hoodie:charcoal', 'jeans'] });`,
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S1.tsx'),
+      `export const S1 = shot({ place: HALL, cam: 'medium', people: [{ who: CLONE_A, at: { u: 0.45, w: 0.5 }, yaw: 0.4, act: 'walk', beats: [{ at: 20, face: 'worried' }] }] });\n`,
+    );
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `export { S1 } from './shots/S1';\n`);
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const accPin = defineEpisode('AccPin', { timeline, shots: { S1 } });\n`);
+
+    const pin = episodePin(dir);
+    assert.match(pin, /Voice: Léa \(female, pov=third\)/);
+    assert.match(pin, /3rd-person narration \(pov="third"\)/);
+
+    const ep = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    const tl = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+    const cloneErr = shotsAudit(dir, slug, ep, tl);
+    assert.ok(cloneErr && /CLONE_A.*CLONE_B.*identical cast/.test(cloneErr), `expected clone cast error, got: ${cloneErr}`);
+
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'fake');
+    let revSys = '';
+    await reviewEpisodeBoard(
+      {
+        model: 'fake',
+        label: 'fake',
+        chat: async ({ messages }) => {
+          revSys = messages.find((m) => m.role === 'system')?.content ?? '';
+          return { text: JSON.stringify({ pass: true, summary: 'OK', issues: [] }) };
+        },
+      },
+      dir,
+      slug,
+    );
+    assert.match(revSys, /Présence chronologique/);
+    assert.match(revSys, /famille biologique/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

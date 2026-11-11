@@ -52,8 +52,11 @@ Vérifie particulièrement ces 9 points critiques :
 1. **Fidélité décor & accessoires (DIRECTOR.md ↔ code / storyboard)** :
    - Le décor codé et visible correspond-il au lieu de l'histoire et à DIRECTOR.md (murs, ambiance jour/nuit, mobilier comme canapé, table, bol, miroir, fenêtre) ?
    - Si le récit dit qu'un personnage bondit d'un canapé ou pose un objet sur une table, ces éléments existent-ils vraiment dans la scène ?
-2. **Costume / Objet-clé & chronologie** :
-   - Si l'histoire tourne autour d'un objet ou vêtement spécifique (ex. un nouveau haut acheté, une fiole, un téléphone, un plat), est-il visuellement distinct de la tenue de base des personnages et n'est-il porté/tenu qu'au moment où le récit l'indique ?
+2. **Casting des personnages, cohérence physique/familiale, costume & chronologie** :
+   - Le genre, l'âge apparent (\`body: 'adult'\` pour adultes/parents/mariés/métiers vs \`'teen'\` réservé aux enfants/ados/élèves) et la tenue correspondent-ils au récit et à \`voice.narratorGender\` (sans inventer de personnage narrateur supplémentaire dans un récit à la 3e personne, ni coller la mascotte \`as: 'heroine'\` au t-shirt anglais \`"her"\` hors propos) ?
+   - Les carnations (\`skin\`) sont-elles cohérentes au sein d'une même famille biologique (parents, frère/sœur, jumeaux) ainsi qu'entre un personnage et ses mains en insert (\`phoneShot\` / \`tabletopShot\`) ?
+   - **Présence chronologique** : un personnage décédé ou absent au moment de la scène ne doit jamais apparaître debout vivant dans la pièce présente (uniquement sur une photo/écran ou dans un plan flashback \`look: "memory"\`).
+   - Si l'histoire tourne autour d'un objet ou vêtement spécifique (ex. un nouveau haut acheté, une fiole, un téléphone, une bague), est-il visuellement distinct et n'est-il porté/tenu qu'au moment où le récit l'indique ?
 3. **Inserts & panneaux de texte (<SchLabel> / <Schematic> vs inserts concrets)** :
    - Aucun plan de dialogue ou de réaction émotionnelle ne doit être remplacé par un panneau de texte abstrait (<Schematic>) sans personnage.
    - En revanche, les inserts macro concrets (\`phoneShot\`, \`tabletopShot\` sur dossier/facture/clés/bague/tasse/mains) sont des plans \`insert\` légitimes et encouragés sans \`<Person>\`.

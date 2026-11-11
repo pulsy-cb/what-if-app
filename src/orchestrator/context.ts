@@ -42,7 +42,7 @@ commands for a human to paste: you call the tools.
    **Location rule (\`set\`)**: every episode has its own world — describe the actual place on \`"defaultSet"\` and/or each beat's \`"set"\`
    (e.g. a bespoke bistro, a subway car, a lab, a rooftop, a courtroom, a bedroom, or any custom location). Never use \`<Classroom>\` unless the story is about school!
 2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
-   video id (Fish Audio remains available with \`provider: "fish"\`). **Automatic reuse of existing \`:8005\` audio**: \`whatif_run { step: "voice" }\` first checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\`; if the video already has a generated TTS audio file on \`:8005\`, \`voice\` **automatically downloads and reuses that existing audio** instead of regenerating a new TTS (saving credits and keeping the exact voice already validated on \`:8005\`). Therefore, just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\` and without \`--voice\` when \`source\` reports \`existingTts.exists: true\`! Only when no audio exists yet on \`:8005\` do \`source\` and \`voice\` **automatically analyze the French phrasing and grammatical agreements** of the script (e.g. 1st-person feminine vs masculine agreements like *"je me suis remise / assise / figée"* vs *"je me suis assis / confus"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). To force a specific voice manually when no audio exists yet, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
+   video id (Fish Audio remains available with \`provider: "fish"\`). \`source\` and \`voice\` **automatically analyze the French phrasing, POV (\`first\` vs \`third\`), and grammatical agreements** of the script (1st-person feminine vs masculine agreements like *"je me suis allongée / j'étais pas assez inquiète"*, plus 3rd-person female-protagonist stories centered on *"elle"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). **Gender-verified reuse of \`:8005\` audio**: \`whatif_run { step: "voice" }\` checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\` and reuses an existing file ONLY when it is a user upload (\`"upload"\`) or already matches the detected target voice (\`Léa\` vs \`Hugo\`); if \`:8005\` had an old TTS with the wrong gender, \`voice\` automatically regenerates with the right narrator! Just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\`; to override manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
    words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
 3. whatif_run shotlist — cuts the measured words into brisk clause-aligned shots (3-gear pace: fast cold-open hook in the first 25%, ~19–27 cuts/min even on multi-minute stories),
    distributes semantic \`insert\` shots alongside \`wide\`/\`medium\`/\`close\`/\`low angle\`, tags narrative accents (\`hook-title\`, \`stamp\`, \`tag\`, \`vfx:*\`),
@@ -143,7 +143,7 @@ function swapBlock(text: string, from: string, to: string, replacement: string):
 export function modernSystemPrompt(): string {
   let p = SYSTEM_PROMPT;
   p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Le lieu**: une recette \`place()\` (catalogue, ambiance et palette propres à cette histoire) ou des pièces à toi, en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
-   - **2. Casting, silhouettes distinctes & objet-clé (\`cast()\`)**: une ligne par personnage, chacun sa silhouette (\`hair\`, \`body\`, \`outfit\`), genre du narrateur aligné sur \`episode.json.voice.narratorGender\`. **Règle d'objet/vêtement-clé** : si l'histoire porte sur un objet ou un vêtement, donne-lui une couleur et une forme **distinctes**, et respecte la chronologie du récit (porté ou tenu seulement à partir du plan où le texte le dit).
+   - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (t-shirt anglais \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
 `);
   p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus**: passe l'objet à \`handRProp\` / \`handLProp\` ; il suit la main. Un objet posé va dans un slot ou dans \`extra\`. Jamais d'objet flottant loin des mains.
 `);
@@ -505,6 +505,21 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
     tlJson = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
   } catch {
     /* ignore */
+  }
+
+  if (epJson?.voice?.narratorGender || epJson?.voice?.voiceName) {
+    const vName = String(epJson.voice.voiceName ?? (epJson.voice.narratorGender === 'female' ? 'Léa' : 'Hugo'));
+    const vGen = String(epJson.voice.narratorGender ?? 'male');
+    const vPov = String(epJson.voice.narratorPov ?? epJson?.source?.narratorPov ?? 'first');
+    const povHint =
+      vPov === 'third'
+        ? `3rd-person narration (pov="third"): stage ONLY the story's characters — do NOT add an extra narrator person.`
+        : `1st-person narration (pov="${vPov}"): the "je" protagonist on screen MUST match narratorGender="${vGen}" (kind: '${vGen === 'female' ? 'fem' : 'masc'}').`;
+    parts.push(
+      `### Narrator & casting lock\n` +
+        `- Voice: ${vName} (${vGen}, pov=${vPov}). ${povHint}\n` +
+        `- Build custom characters per story (explicit skin, age-appropriate body 'adult' vs 'teen', hair, outfit — avoid default as: 'heroine'); pass who: CHAR on phoneShot/tabletopShot hands; keep deceased/absent people in photos or look="memory" flashbacks.`,
+    );
   }
 
   const epSrc = readEpisodeShots(epDir);
