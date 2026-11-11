@@ -66,25 +66,37 @@ export function exec(
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({ code, stdout: out, stderr: err, timedOut, argv });
     };
+    const isPosix = process.platform !== 'win32';
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd: opts.cwd,
       env: opts.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: isPosix,
     });
-    const terminateGracefully = () => {
+    const signalTree = (sig: NodeJS.Signals) => {
+      if (isPosix && child.pid) {
+        try {
+          process.kill(-child.pid, sig);
+        } catch {
+          /* ignore ESRCH */
+        }
+      }
       try {
-        child.kill('SIGTERM');
+        child.kill(sig);
       } catch {
         /* ignore */
       }
+    };
+    const terminateGracefully = () => {
+      signalTree('SIGTERM');
       if (!killEscalation) {
         killEscalation = setTimeout(() => {
           if (!settled) {
-            try {
-              child.kill('SIGKILL');
-            } catch {
-              /* ignore */
-            }
+            signalTree('SIGKILL');
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            const forceFinish = setTimeout(() => finish(timedOut ? 124 : 137), 200);
+            forceFinish.unref?.();
           }
         }, 4_000);
         killEscalation.unref?.();

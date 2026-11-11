@@ -1085,8 +1085,8 @@ const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeout
   board: { py: 'board.py', desc: 'build the storyboard sheet' },
   sfx: { py: 'sfx_run.py', own: true, timeoutMs: 900_000, desc: 'continuous location ambiences + semantic foley (no looped music by default)' },
   mixcheck: { py: 'mixcheck.py', desc: 'check the voice stays clear' },
-  motiongrid: { py: 'motiongrid.py', desc: 'frame grids per shot' },
-  master: { py: 'master.py', timeoutMs: 1_800_000, desc: 'master to -14 LUFS (renders locally only if no Modal render exists)' },
+  motiongrid: { py: 'motiongrid_run.py', own: true, timeoutMs: 180_000, desc: 'fast-seek frame grids per shot' },
+  master: { py: 'master_run.py', own: true, timeoutMs: 900_000, desc: 'fast -vn master to -14 LUFS (renders locally only if no Modal render exists)' },
 };
 
 const newProject: Tool = {
@@ -1355,9 +1355,9 @@ const runStep: Tool = {
       renderMode !== 'local' &&
       fs.existsSync(safeJoin(ctx.projectRoot, rawMp4))
     ) {
-      // the video came from Modal: master it instead of rendering it again locally
-      argv = [PY, path.join(scripts, 'master.py'), slug, '--skip-render', ...extra.filter((a) => a !== '--skip-render')];
-      timeoutMs = 3_600_000;
+      // the video came from Modal: master it via audio-only (-vn) EBU R128 without decoding 1080p video frames
+      argv = [PY, path.join(PIPELINE, 'master_run.py'), slug, '--skip-render', ...extra.filter((a) => a !== '--skip-render')];
+      timeoutMs = 900_000;
     } else {
       const step = STEPS[input.step]!;
       const dir = step.own ? PIPELINE : scripts;
@@ -1394,6 +1394,28 @@ const runStep: Tool = {
           ? payload.character_count
           : undefined;
     let failed = payload ? payload.ok === false : res.code !== 0;
+
+    // Auto-master right after Modal writes `<slug>-raw.mp4` so `<slug>-final.mp4` + `report.json` are ready immediately
+    // without an extra LLM round-trip (and if the agent still calls `master` afterward, `master_run.py` returns the cached report in <0.1s).
+    if (
+      input.step === 'render' &&
+      !failed &&
+      !extra.includes('--no-master') &&
+      fs.existsSync(safeJoin(ctx.projectRoot, rawMp4))
+    ) {
+      const autoMaster = await exec([PY, path.join(PIPELINE, 'master_run.py'), slug, '--skip-render'], {
+        cwd: ctx.projectRoot,
+        timeoutMs: 900_000,
+        signal: ctx.signal,
+        onLine: forwardLine,
+      }).catch(() => null);
+      if (autoMaster && autoMaster.code === 0) {
+        const mVisible = autoMaster.stdout
+          .split('\n')
+          .filter((l) => l && !l.startsWith('RESULT_JSON:') && !l.startsWith('PROGRESS_JSON:'));
+        extraNotes.push(`auto-mastered out/${slug}/${slug}-final.mp4 (-14 LUFS) & out/${slug}/report.json:\n${mVisible.slice(-14).join('\n')}`);
+      }
+    }
 
     // The skill's storyboard.jpg is one tall strip (a 36-shot 9:16 episode is ~2280x10410): cut readable sheets of 8-9 shots
     // so the agent and the Reviewer can actually see each shot.
@@ -1527,9 +1549,8 @@ const status: Tool = {
       final: has(path.join(out, `${input.episode}-final.mp4`)),
       report: report ? { seconds: report.seconds ?? report.duration, lufs: report.lufs, credits: report.credits } : null,
     };
+    // Do NOT attach old storyboard/still images on read-only status checks (prevents re-injecting 7 images into the prompt at close-out)
     const artifacts: Artifact[] = [];
-    if (has(path.join(out, 'storyboard.jpg'))) artifacts.push({ kind: 'image', path: `out/${input.episode}/storyboard.jpg`, mime: 'image/jpeg' });
-    for (const s of stills.slice(0, 6)) artifacts.push({ kind: 'image', path: `out/${input.episode}/board/${s}`, mime: 'image/png' });
     return {
       ok: true,
       summary: `${input.episode}: ${JSON.stringify(steps, null, 1)}`,

@@ -2597,15 +2597,23 @@ test('reliability & speed fixes: image deduplication, targeted layoutReport, lay
     // 5. exec sends SIGTERM before SIGKILL so child processes can tear down external resources (e.g. Modal app)
     const cleanupMarker = path.join(dir, 'sigterm_cleaned.txt');
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 120);
+    const safety = setTimeout(() => ac.abort(), 3_000);
     await exec(
       [
         process.execPath,
         '-e',
-        `const fs = require('node:fs'); process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(cleanupMarker)}, 'cleaned'); process.exit(143); }); setInterval(() => {}, 1000);`,
+        `const fs = require('node:fs'); process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(cleanupMarker)}, 'cleaned'); process.exit(143); }); console.log('READY'); setInterval(() => {}, 1000);`,
       ],
-      { cwd: dir, timeoutMs: 5_000, signal: ac.signal },
+      {
+        cwd: dir,
+        timeoutMs: 5_000,
+        signal: ac.signal,
+        onLine: (line) => {
+          if (line.trim() === 'READY') ac.abort();
+        },
+      },
     );
+    clearTimeout(safety);
     assert.equal(fs.readFileSync(cleanupMarker, 'utf8'), 'cleaned', 'child received SIGTERM and ran cleanup handler');
   } finally {
     if (sseSrv) await new Promise((r) => sseSrv.close(r));
@@ -3028,6 +3036,96 @@ test('step 4 — director guide, continuity pin & reviewer: surfaces accents, ta
     assert.match(capturedSys, /StampCard/);
     assert.match(capturedUser, /1 insert\(s\) macro \(phoneShot\/tabletopShot\) · 3 accent\(s\) écran \(stamp\/tag\/title\/burst\) · 1 plan\(s\) avec micro-VFX personnage · 2 plan\(s\) avec changement de cadrage interne \(camBeat\)/);
     assert.ok(accentMetrics(`export const S1 = tabletopShot({ surface: 'wood' });\n`).includes('1 insert(s) macro'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('step 5 — post-render speed: master_run.py (-vn + -14 LUFS + mtime cache), motiongrid_run.py fast-seek & non-polluting whatif_status', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { defaultRegistry } = await import('../dist/tools/index.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-step5-postrender-'));
+  try {
+    const slug = 'fast-post';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const outDir = path.join(dir, 'out', slug);
+    const pubDir = path.join(dir, 'public', slug);
+    fs.mkdirSync(path.join(outDir, 'board'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ id: 'FastPost', slug, aspect: '16:9', script: [{ beat: 'b1', text: 'Test.' }], shots: [{ id: 'S1' }, { id: 'S2' }] }));
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({
+        fps: 30,
+        total: 120,
+        shots: [{ id: 'S1', len: 60, key: 15 }, { id: 'S2', len: 60, key: 15 }],
+        segments: [{ shot: 'S1', a: 0, b: 60 }, { shot: 'S2', a: 60, b: 120 }],
+      }),
+    );
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'jpg');
+    fs.writeFileSync(path.join(outDir, 'board', 'S1.png'), 'png');
+
+    // Synthesize a 4s 1080p MP4 with quiet voice (-19 LUFS) + transient spike so old linear=true clamped at -14.8 LUFS
+    const rawMp4 = path.join(outDir, `${slug}-raw.mp4`);
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y', '-v', 'error',
+        '-f', 'lavfi', '-i', 'color=c=navy:s=1920x1080:r=30:d=4',
+        '-f', 'lavfi', '-i', "aevalsrc='0.14*sin(2*PI*220*t)+if(between(t,1.0,1.04),0.68*sin(2*PI*880*t),0)':s=48000:d=4",
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', rawMp4,
+      ],
+      { stdio: 'pipe' },
+    );
+
+    // 1. master_run.py --skip-render hits -14 LUFS cleanly using -vn, then hits instant mtime cache on 2nd call
+    const out1 = execFileSync('python3', [path.resolve('pipeline/master_run.py'), slug, '--skip-render'], { cwd: dir, encoding: 'utf8' });
+    assert.match(out1, /loudness OK/);
+    assert.doesNotMatch(out1, /! loudness off target/);
+    const rep = JSON.parse(fs.readFileSync(path.join(outDir, 'report.json'), 'utf8'));
+    assert.ok(Math.abs(rep.lufs + 14.0) <= 0.8, `expected lufs near -14.0, got ${rep.lufs}`);
+    assert.ok(fs.existsSync(path.join(outDir, `${slug}-final.mp4`)));
+
+    const tCache0 = Date.now();
+    const out2 = execFileSync('python3', [path.resolve('pipeline/master_run.py'), slug, '--skip-render'], { cwd: dir, encoding: 'utf8' });
+    assert.match(out2, /loudness OK \(cached\)/);
+    assert.match(out2, /"cached":\s*true/);
+    assert.ok(Date.now() - tCache0 < 3000, 'second master call returns cached report without re-encoding');
+
+    // 2. motiongrid_run.py extracts shot grids quickly in one pass per shot without leaving _f.png behind
+    const mgOut = execFileSync('python3', [path.resolve('pipeline/motiongrid_run.py'), slug, 'S1', 'S2'], { cwd: dir, encoding: 'utf8' });
+    assert.match(mgOut, /RESULT_JSON:\{"ok":\s*true/);
+    assert.equal(fs.existsSync(path.join(outDir, 'motion', 'S1.jpg')), true);
+    assert.equal(fs.existsSync(path.join(outDir, 'motion', 'S2.jpg')), true);
+    assert.equal(fs.existsSync(path.join(outDir, 'motion', '_f.png')), false);
+
+    // 3. whatif_status returns status JSON without re-attaching storyboard/board images
+    const statusRes = await defaultRegistry().run('whatif_status', { episode: slug }, { projectId: 'p', projectRoot: dir, dataRoot: dir, skillDir: dir, log: () => {} });
+    assert.equal(statusRes.ok, true);
+    assert.deepEqual(statusRes.artifacts, [], 'whatif_status must not re-inject old storyboard/still images');
+    assert.equal(statusRes.data.final, true);
+
+    // 4. shell-policy blocks accidental local CPU video renders and legacy O(N^2) skill scripts
+    const { checkCommand } = await import('../dist/tools/shell-policy.js');
+    assert.equal(checkCommand('npx remotion render src/index.ts Ep out.mp4').ok, false);
+    assert.equal(checkCommand('python3 /skill/scripts/master.py ep --target -14.3').ok, false);
+    assert.equal(checkCommand('python3 /skill/scripts/motiongrid.py ep').ok, false);
+
+    // 5. exec() kills the whole process group on timeout so grandchild processes holding stdio never hang forever
+    const { exec } = await import('../dist/tools/exec.js');
+    const tTree0 = Date.now();
+    const treeRes = await exec(
+      [
+        process.execPath,
+        '-e',
+        `const { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); setInterval(() => {}, 1000);`,
+      ],
+      { cwd: dir, timeoutMs: 150 },
+    );
+    assert.equal(treeRes.timedOut, true);
+    assert.ok(Date.now() - tTree0 < 5_000, 'exec resolved promptly despite grandchild inheriting stdio pipes');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

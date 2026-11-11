@@ -33,6 +33,14 @@ export function checkCommand(line: string): CommandCheck {
   }
   const cmd = argv[0] ?? '';
 
+  // Prevent accidental 2-hour local CPU video renders or legacy O(N^2) skill scripts via shell
+  if (/^npx\s+remotion\s+render\b/.test(trimmed)) {
+    return { ok: false, reason: 'local CPU "npx remotion render" is refused in shell — use whatif_run { step: "render" } (Modal GPU + auto-master)' };
+  }
+  if (/^python3?\s+\S*scripts\/(master|motiongrid|sfx)\.py\b/.test(trimmed)) {
+    return { ok: false, reason: 'legacy skill script is refused in shell — use whatif_run { step: "master" | "sfx" | "motiongrid" } instead' };
+  }
+
   // Block dangerous flags on find and path escapes on file-reading/writing commands
   if (cmd === 'find' && argv.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint|fls)$/.test(a))) {
     return { ok: false, reason: 'find with -delete or -exec is refused' };

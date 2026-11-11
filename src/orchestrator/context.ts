@@ -93,8 +93,7 @@ commands for a human to paste: you call the tools.
      fix \`shots.tsx\` and re-run \`stills\` (for the changed shot IDs) and \`board\`.
 7. whatif_run sfx — mixes continuous crossfade-tiled location ambiences + semantic foley in \`public/<slug>/sfx.wav\` and sets voice-first stem
    volumes in \`timeline.json\` (no looped background music unless explicitly requested).
-8. whatif_run render — renders the video on **Modal**. Then \`whatif_run master\` normalises to -14 LUFS (peaks < -1 dBTP) and writes
-   \`out/<slug>/report.json\`.
+8. whatif_run render — renders the video on **Modal** and automatically masters \`out/<slug>/<slug>-final.mp4\` (-14 LUFS, peaks <= -1 dBTP) + \`out/<slug>/report.json\` (calling \`whatif_run master\` afterward is instant if already mastered). Once \`<slug>-final.mp4\` is written, update \`PROJECT.md\` in ONE call and deliver the final summary immediately (do not call \`whatif_status\`, \`view_image\`, or extra \`git\` checkpoints after \`final.mp4\` is ready).
 
 ## How you work
 - **Run the pipeline end to end in one turn, unattended.** Nobody is watching for a question: go
