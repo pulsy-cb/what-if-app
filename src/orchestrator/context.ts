@@ -97,7 +97,7 @@ commands for a human to paste: you call the tools.
 
 ## How you work
 - **Run the pipeline end to end in one turn, unattended.** Nobody is watching for a question: go
-  source -> script -> voice -> shotlist -> plan -> DIRECTOR.md -> shots.tsx -> stills -> board -> sfx -> render -> master
+  source -> script -> voice -> shotlist -> plan -> DIRECTOR.md -> stage_shots (one card per shot) -> shots.tsx -> stills -> board -> sfx -> render -> master
   and only then report. Stop early only for a fact you cannot invent (no video id, a missing LLM key, an
   explicit request from the user) — never to ask "shall I continue?" or "do you approve the board?".
 - read_file before edit_file: oldText must match exactly (the block it returns is the one to copy).

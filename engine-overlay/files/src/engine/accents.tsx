@@ -249,13 +249,34 @@ export const HookTitle: React.FC<HookTitleSpec & { t: number }> = ({ lines, acce
   const fade = hold !== undefined && t > hold ? 1 - clamp01((t - hold) / 10) : 1;
   const pop = (d: number) => backOut3((t - d) / 9);
   const pulse = t >= accentT && t < accentT + 14 ? 1 + 0.14 * Math.sin(((t - accentT) / 14) * Math.PI) : 1;
-  const maxW = PORTRAIT ? 800 : 1680;
+  // Capitals with accents and a thick stroke are wide (about 0.7 em a letter, more when the accent word pulses): size by
+  // the real width, and break the big line in two when one line would get too small (prof, 2026-11-11: title cut in 9:16).
+  const maxW = PORTRAIT ? 780 : 1680;
+  const em = 0.72;
   const baseSize = PORTRAIT ? 98 : 118;
-  const effSize = Math.max(44, Math.min(baseSize, Math.floor(maxW / (Math.max(9, lines[1].length) * 0.58))));
-  const topY = VB.y + (PORTRAIT ? 210 : 175);
   const cleanWord = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
   const target = accent ? cleanWord(accent) : '';
-  const words = lines[1].split(/\s+/).filter(Boolean);
+  const allWords = lines[1].split(/\s+/).filter(Boolean);
+  const fitSize = (chars: number) => Math.floor(maxW / (Math.max(6, chars) * em * 1.08));
+  let rows: string[][] = [allWords];
+  if (PORTRAIT && fitSize(lines[1].length) < 70 && allWords.length > 1) {
+    // balanced two-row split on the space nearest the middle
+    let best = 1;
+    let gap = Infinity;
+    for (let i = 1; i < allWords.length; i++) {
+      const left = allWords.slice(0, i).join(' ').length;
+      const g = Math.abs(left - (lines[1].length - left));
+      if (g < gap) {
+        gap = g;
+        best = i;
+      }
+    }
+    rows = [allWords.slice(0, best), allWords.slice(best)];
+  }
+  const widest = Math.max(...rows.map((r) => r.join(' ').length));
+  const effSize = Math.max(40, Math.min(baseSize, fitSize(widest)));
+  const topSize = Math.max(26, Math.min(Math.round(effSize * 0.5), Math.floor(maxW / (Math.max(6, lines[0].length) * 0.66 * 1.08))));
+  const topY = VB.y + (PORTRAIT ? 210 : 175);
 
   return (
     <g opacity={fade}>
@@ -264,7 +285,7 @@ export const HookTitle: React.FC<HookTitleSpec & { t: number }> = ({ lines, acce
           textAnchor="middle"
           fontFamily={DISPLAY_FONT}
           fontWeight={700}
-          fontSize={Math.round(effSize * 0.5)}
+          fontSize={topSize}
           letterSpacing={3}
           fill={CREAM}
           stroke={INK}
@@ -274,27 +295,29 @@ export const HookTitle: React.FC<HookTitleSpec & { t: number }> = ({ lines, acce
           {lines[0]}
         </text>
       </g>
-      <g transform={`translate(960 ${topY + effSize * 0.98}) scale(${pop(5)})`}>
-        <text
-          textAnchor="middle"
-          fontFamily={DISPLAY_FONT}
-          fontWeight={800}
-          fontSize={effSize}
-          fill={LIVE}
-          stroke={INK}
-          strokeWidth={11}
-          paintOrder="stroke"
-        >
-          {words.map((w, i) => {
-            const hit = Boolean(target && cleanWord(w) === target);
-            return (
-              <tspan key={i} fontSize={hit ? Math.round(effSize * pulse) : undefined} fill={hit ? GOLD : undefined}>
-                {(i ? ' ' : '') + w}
-              </tspan>
-            );
-          })}
-        </text>
-      </g>
+      {rows.map((row, r) => (
+        <g key={r} transform={`translate(960 ${topY + effSize * (0.98 + r * 1.02)}) scale(${pop(5 + r * 2)})`}>
+          <text
+            textAnchor="middle"
+            fontFamily={DISPLAY_FONT}
+            fontWeight={800}
+            fontSize={effSize}
+            fill={LIVE}
+            stroke={INK}
+            strokeWidth={11}
+            paintOrder="stroke"
+          >
+            {row.map((w, i) => {
+              const hit = Boolean(target && cleanWord(w) === target);
+              return (
+                <tspan key={i} fontSize={hit ? Math.round(effSize * pulse) : undefined} fill={hit ? GOLD : undefined}>
+                  {(i ? ' ' : '') + w}
+                </tspan>
+              );
+            })}
+          </text>
+        </g>
+      ))}
     </g>
   );
 };

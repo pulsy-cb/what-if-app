@@ -11,6 +11,7 @@ import {
 } from '../tools/episode-source.js';
 import { directorSizeMismatches, timedChanges } from '../tools/whatif.js';
 import { shotWordFrames } from './context.js';
+import { formatStageCards } from '../tools/staging.js';
 
 export { extractShotIds as extractReviewShotIds };
 
@@ -38,6 +39,8 @@ export type ReviewReport = {
   sawImages?: boolean;
   /** true while the board is refused and another review round is still allowed: render waits for it */
   blocking?: boolean;
+  /** last round, still refused: the video ships and the unresolved defects are listed in this file */
+  defectsFile?: string;
 };
 
 const MAX_REVIEW_IMAGES = 6;
@@ -49,6 +52,7 @@ IMPORTANT — Vignette fixe vs animation réelle du plan :
 Chaque vignette sur une planche de contact est capturée à UN SEUL instant \`t = key\` (indiqué pour chaque plan, souvent \`t = 18f\`, soit 0,6 s après la coupe). Un plan de 2 à 4 s comporte souvent plusieurs phases ou beats (\`beats: [{ at: ... }]\`, \`t < ...\`, \`poseAt\`, \`faceAt\`, \`grabAt\`). Avant d'affirmer qu'un geste de milieu ou de fin de phrase manque sur la vignette, VÉRIFIE LE CODE DU PLAN : si l'action est programmée aux frames suivantes sur l'horloge \`0..len\`, elle se joue bien en vidéo et CE N'EST PAS UN DÉFAUT !
 
 Vérifie particulièrement ces 9 points critiques :
+0. **Fiche de mise en scène ↔ image** : quand une fiche existe pour un plan, l'image doit montrer ce que dit sa fiche (qui est là, l'action précise, l'objet tenu ou posé, l'angle). Un objet cité par la fiche et absent de l'image, ou une action remplacée par un personnage immobile bras tendu, est un défaut bloquant.
 1. **Fidélité décor & accessoires (DIRECTOR.md ↔ code / storyboard)** :
    - Le décor codé et visible correspond-il au lieu de l'histoire et à DIRECTOR.md (murs, ambiance jour/nuit, mobilier comme canapé, table, bol, miroir, fenêtre) ?
    - Si le récit dit qu'un personnage bondit d'un canapé ou pose un objet sur une table, ces éléments existent-ils vraiment dans la scène ?
@@ -280,17 +284,22 @@ export function staticMetrics(shotsInput: string | EpisodeShotsBundle): string {
   let group3 = 0;
   let still = 0;
   let idleOnly = 0;
+  const actShots = new Map<string, number>();
   for (const body of bodies) {
     if (timedChanges(body) === 0 && /\bpeople\s*[=:]|<(Hero|Staged|Person)\b|\bwho\s*[=:]/.test(body)) still++;
     const acts = [...body.matchAll(/\bact\s*[:=]\s*['"]([a-z-]+)/g)].map((m) => m[1]);
     if (acts.length && acts.every((a) => a === 'idle')) idleOnly++;
+    for (const a of new Set(acts)) if (a && a !== 'idle') actShots.set(a, (actShots.get(a) ?? 0) + 1);
     const yaws = [...body.matchAll(/\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
     if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{/.test(body)) oriented++;
     if (/<Foreground\b|\bforeground\s*:/.test(body)) blur++;
     else if (/\bfocus\s*[=:]|blur16/.test(body)) focus++;
     if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*[:=]/g) ?? []).length >= 3) group3++;
   }
-  return `${oriented}/${bodies.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${bodies.length} plans avec amorce floue au premier plan (Foreground) · ${focus} autres avec seulement un flou de profondeur (pas une amorce) · ${group3} plans à 3 personnages ou plus · ${still} plans avec personnages où rien ne change pendant le plan · ${idleOnly} plans où l'unique action est idle`;
+  const base = `${oriented}/${bodies.length} plans avec un personnage orienté (yaw >= 0,3, tableSit ou walkPose) · ${blur}/${bodies.length} plans avec amorce floue au premier plan (Foreground) · ${focus} autres avec seulement un flou de profondeur (pas une amorce) · ${group3} plans à 3 personnages ou plus · ${still} plans avec personnages où rien ne change pendant le plan · ${idleOnly} plans où l'unique action est idle`;
+  const top = [...actShots.entries()].sort((x, y) => y[1] - x[1])[0];
+  const repeat = top && bodies.length >= 6 && top[1] > bodies.length / 3 ? ` · geste répété : « ${top[0]} » dans ${top[1]}/${bodies.length} plans (varie les gestes : un tiers au plus)` : '';
+  return base + repeat;
 }
 
 /** Shot lengths from timeline.json: a long held shot is the first thing that kills the pace. */
@@ -471,6 +480,16 @@ export async function reviewEpisodeBoard(
   const epRaw = readText(epDir, 'episode.json', 3_000_000) ?? '{}';
   const directorRaw = readText(epDir, 'DIRECTOR.md', 200_000) ?? '(aucun DIRECTOR.md)';
   const bibleRaw = readText(epDir, 'bible.json', 8_000) ?? '';
+  let stagedShots: any[] = [];
+  try {
+    stagedShots = (JSON.parse(epRaw).shots ?? []).filter((s: any) => s?.stage);
+  } catch {
+    /* episode.json unreadable: no cards */
+  }
+  const cardsBlock = (ids?: string[]): string => {
+    const text = formatStageCards(stagedShots, ids);
+    return text ? `\n\n## Fiches de mise en scène (ce que CHAQUE plan doit montrer — juge l'image contre sa fiche)\n${text.slice(0, 16_000)}` : '';
+  };
   const epSrc = readEpisodeShots(epDir);
   const aspect = episodeAspect(projectRoot, epRaw);
 
@@ -619,7 +638,7 @@ export async function reviewEpisodeBoard(
         `## 3. Découpage des plans ciblés (episode.json.shots)\n${formatShotBreakdown(chunkSet) || '(aucune entrée)'}`,
         wordMarks.length ? `## 4. Repères mot@frame sur l'horloge propre de chaque plan ciblé\n${wordMarks.join('\n')}` : '',
         bibleRaw ? `## 5. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 3_000)}` : '',
-        `## 6. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 14_000)}`,
+        `## 6. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 14_000)}${cardsBlock(chunkIds)}`,
         `## 7. Code COMPLET non tronqué des plans ciblés\n${summarizeShotsCode(epSrc, { onlyShots: chunkIds, shotTimings, perShotChars: 8_000 })}`,
         images.length
           ? `\n${images.length} image(s) pleine résolution jointe(s) (${chunkIds.join(', ')}). Vérifie uniquement si les problèmes ci-dessus sont résolus sur ces plans et renvoie ton verdict JSON.`
@@ -682,7 +701,7 @@ export async function reviewEpisodeBoard(
         `## 1. Script complet (narration FR)\n${scriptLines.slice(0, 25_000)}`,
         `## 2. Découpage des plans (episode.json.shots)\n${formatShotBreakdown().slice(0, 25_000)}`,
         bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 3_000)}` : '',
-        `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 15_000)}`,
+        `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 15_000)}${cardsBlock(batchShots)}`,
         `## 5. Code des plans (${epSrc.isModular ? 'shared.tsx + shots/S*.tsx' : 'shots.tsx'})\n${summarizeShotsCode(epSrc, { onlyShots: batchShots, shotTimings, perShotChars: 2_600 })}`,
         `## 6. Mesures automatiques (lues dans les plans et timeline.json)\n${autoMetrics}`,
         images.length
@@ -712,6 +731,10 @@ export async function reviewEpisodeBoard(
   finalReport.batches = batchCount;
   finalReport.sawImages = sawImagesOverall;
   finalReport.blocking = finalReport.ok && !finalReport.pass && !opts.final;
+  if (opts.final && finalReport.ok && !finalReport.pass) {
+    const file = writeUnresolvedDefects(projectRoot, slug, finalReport);
+    if (file) finalReport.defectsFile = file;
+  }
 
   try {
     fs.mkdirSync(outDir, { recursive: true });
@@ -721,6 +744,78 @@ export async function reviewEpisodeBoard(
   }
 
   return finalReport;
+}
+
+/**
+ * The shots the last review refused, when nothing that could fix them has changed since (null otherwise).
+ * Asking the reviewer again would cost a paid call and give the same verdict (z8nvytvrw5c, 2026-11-11: 16 minutes for nothing).
+ * Changes that count: a refused shot's own file, any shared file of the episode, DIRECTOR.md, episode.json.
+ */
+export function refusedUnchanged(projectRoot: string, slug: string): string[] | null {
+  const prev = loadPreviousReview(path.join(projectRoot, 'out', slug));
+  if (!prev?.ok || prev.pass || !prev.blocking || !prev.createdAt) return null;
+  const since = (Date.parse(prev.createdAt) || 0) + 500;
+  const refused = sortShotIds(prev.issues.filter((i) => i.severity === 'error').flatMap((i) => extractShotIds(i.shot)));
+  const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+  const newer = (file: string): boolean => {
+    try {
+      return fs.statSync(file).mtimeMs > since;
+    } catch {
+      return false;
+    }
+  };
+  const walk = (dir: string, depth = 0): boolean => {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return false;
+    }
+    for (const n of names) {
+      const f = path.join(dir, n);
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(f);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (depth < 2 && walk(f, depth + 1)) return true;
+        continue;
+      }
+      // a modular shot file only matters when that shot was refused
+      const m = /^(S\d+)\.tsx$/i.exec(n);
+      if (m && path.basename(dir) === 'shots' && !refused.includes(m[1]!.toUpperCase())) continue;
+      if (/\.(tsx?|json|md)$/i.test(n) && !/^(timeline|words)\.json$/.test(n) && st.mtimeMs > since) return true;
+    }
+    return false;
+  };
+  if (walk(epDir)) return null;
+  return refused.length ? refused : null;
+}
+
+/** Written next to the video when the last review round still refused it: the video ships, with this list. */
+export function writeUnresolvedDefects(projectRoot: string, slug: string, report: ReviewReport): string | null {
+  const errors = report.issues.filter((i) => i.severity === 'error');
+  if (report.pass || !errors.length) return null;
+  const rel = `out/${slug}/DEFAUTS-NON-CORRIGES.md`;
+  const body = [
+    `# Défauts non corrigés — ${slug}`,
+    '',
+    `Le Reviewer (${report.model}) a refusé la planche au dernier tour (tour ${report.round ?? '?'}). La vidéo est rendue quand même : voici ce qui n'est pas corrigé.`,
+    '',
+    `Résumé : ${report.summary}`,
+    '',
+    ...errors.map((e) => `- **${e.shot}** — ${e.problem}\n  → ${e.fix}`),
+    '',
+  ].join('\n');
+  try {
+    fs.mkdirSync(path.join(projectRoot, 'out', slug), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, rel), body);
+    return rel;
+  } catch {
+    return null;
+  }
 }
 
 /** A board that was not reviewed cannot stay refused: the reviewer failed, is off, or has no round left. */
@@ -757,6 +852,11 @@ export function formatReviewFeedback(report: ReviewReport, slug: string, wordFra
       lines.push(`- [${err.shot}] Problème : ${err.problem}\n  → Correctif : ${err.fix}`);
     }
     if (wordFrames.length) lines.push(`\nMoment de chaque mot dans ces plans (mot@image, horloge du plan) pour placer les beats :\n${wordFrames.join('\n')}`);
+    if (report.defectsFile) {
+      lines.push(
+        `\n⚠ DERNIER TOUR : il n'y a plus de contre-visite. Le rendu n'est plus bloqué, mais ces défauts restent. Corrige ce que tu peux d'abord ; puis, quoi que tu fasses, termine ton message final par « Vidéo livrée avec ${affectedShots.length || errors.length} défaut(s) non corrigé(s) » et cite-les. La liste est dans ${report.defectsFile}.`,
+      );
+    }
     const rerunArgs = affectedShots.length ? `, args: ${JSON.stringify(affectedShots)}` : '';
     lines.push(
       `\nApplique ces corrections plan par plan avec edit_shot { episode: "${slug}", id: "S...", code: "..." } (sans toucher aux autres plans déjà validés), relance uniquement les plans modifiés via whatif_run { episode: "${slug}", step: "stills"${rerunArgs} } puis whatif_run { episode: "${slug}", step: "board" }, et enchaîne ensuite sfx -> render -> master.`,

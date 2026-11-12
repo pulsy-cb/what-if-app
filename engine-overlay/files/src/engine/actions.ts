@@ -69,6 +69,9 @@ const GESTURE_TABLE = {
   wave: (w: number, _m: number, w2: number) => ({ armR: { a: 132 + w * 14, b: 42 + w2 * 18 }, armL: { a: 16, b: 12 }, headTilt: 4 }),
   type: (w: number) => ({ armL: { a: 36 + w * 5, b: 62 - w * 6 }, armR: { a: 36 - w * 5, b: 62 + w * 6 }, headTilt: 6 }),
   eat: (w: number) => ({ armR: { a: 76 + w * 28, b: 84 + w * 22 }, armL: { a: 28, b: 48 }, headTilt: w * 4 }),
+  facepalm: (w: number) => ({ armR: { a: 122 + w * 2, b: 120 }, armL: { a: 12, b: 10 }, headTilt: 12 }),
+  shout: (w: number, m: number) => ({ armR: { a: 104 + w * 10, b: 52 }, armL: { a: 98 - w * 10, b: 50 }, headTilt: -4, talk: Math.min(1, m * 1.4) }),
+  push: (w: number) => ({ armR: { a: 72 + w * 5, b: 8 }, armL: { a: 68 - w * 5, b: 10 }, squash: 0.02 }),
   nod: (_w: number, _m: number, _w2: number, t = 0) => ({ headTilt: Math.sin(t * 0.55) * 7, armL: { a: 16, b: 14 }, armR: { a: 18, b: 16 } }),
   shake: (_w: number, _m: number, _w2: number, t = 0) => ({ look: Math.sin(t * 0.7) * 0.9, headTilt: Math.sin(t * 0.7) * 3, armL: { a: 16, b: 14 }, armR: { a: 18, b: 16 } }),
 } satisfies Record<string, (w: number, m: number, w2: number, t?: number) => ActBits>;
@@ -201,15 +204,96 @@ export const clip = (name: Clip, t: number, opts: Ctx & { from?: number; dur?: n
   return mirrorHead(out, yaw);
 };
 
-export type ActName = Gesture | Clip;
+// ---------------------------------------------------------------------------------------------- your own actions
+// A story always needs a gesture the list does not have. An action is only numbers through time, so anyone can add one:
+//   const DIG = defineAction('dig', { loop: true, dur: 22, tilt: 24, armR: { a: [[0, 40], [0.5, 62], [1, 40]], b: 20 } });
+// then act: DIG (or act: 'dig'); or pass the object itself as act on a person. A value is a number, or keys [[p, value], …]
+// with p from 0 (start of the action) to 1 (its end). Arms and legs: a = swing from the shoulder / hip in degrees (0 hangs
+// down, 90 points forward, 140 is up), b = bend of the elbow / knee. tilt leans the torso toward where the person faces.
+type Keyed = number | [number, number][];
+type LimbKeyed = { a: Keyed; b: Keyed };
+export type OwnActionSpec = {
+  /** frames for one pass (default 24) */ dur?: number;
+  /** true: repeats while the shot lasts (a gesture); false: plays once from `from` and holds its end (a clip) */ loop?: boolean;
+  armL?: LimbKeyed; armR?: LimbKeyed; legL?: LimbKeyed; legR?: LimbKeyed;
+  /** torso lean, degrees, toward the facing side */ tilt?: Keyed; headTilt?: Keyed; squash?: Keyed; lift?: Keyed; look?: Keyed;
+  /** the mouth moves */ talk?: boolean; expr?: string; handL?: string; handR?: string;
+  /** stand | sit | kneel | crouch while doing it */ stance?: Stance;
+};
+const OWN: Record<string, OwnActionSpec> = {};
+const LIMBS = ['armL', 'armR', 'legL', 'legR'] as const;
+const NUMS = ['tilt', 'headTilt', 'squash', 'lift', 'look'] as const;
+const KNOWN_KEYS = new Set<string>(['dur', 'loop', 'talk', 'expr', 'handL', 'handR', 'stance', ...LIMBS, ...NUMS]);
+const okKeyed = (v: unknown): boolean => typeof v === 'number' || (Array.isArray(v) && v.length > 0 && v.every((k) => Array.isArray(k) && k.length === 2 && k.every((n) => typeof n === 'number')));
+/** Add an action to the engine under a name. Returns the name, typed for `act`. A wrong shape fails here, with the reason. */
+export const defineAction = (name: string, spec: OwnActionSpec): ActName => {
+  if (!name || typeof spec !== 'object' || !spec) throw new Error(`defineAction(name, { ... }): give a name and the values, got ${JSON.stringify(name)}`);
+  for (const k of Object.keys(spec)) if (!KNOWN_KEYS.has(k)) throw new Error(`defineAction('${name}'): unknown field "${k}". Fields: ${[...KNOWN_KEYS].join(', ')}`);
+  for (const l of LIMBS) { const v = spec[l]; if (v !== undefined && (!okKeyed(v.a) || !okKeyed(v.b))) throw new Error(`defineAction('${name}').${l} must be { a, b }, each a number or keys [[0, 14], [1, 90]]`); }
+  for (const n of NUMS) if (spec[n] !== undefined && !okKeyed(spec[n])) throw new Error(`defineAction('${name}').${n} must be a number or keys [[0, 0], [1, 20]]`);
+  OWN[name] = spec;
+  return name as ActName;
+};
+const INLINE = new Map<string, string>();
+/** An action given as an object on a person: registered once under a name of its own. */
+export const actionName = (a: ActName | OwnActionSpec | undefined): ActName | undefined => {
+  if (a === undefined || typeof a === 'string') return a;
+  const key = JSON.stringify(a);
+  if (!INLINE.has(key)) INLINE.set(key, defineAction(`own-${INLINE.size + 1}`, a) as string);
+  return INLINE.get(key) as ActName;
+};
+export const isOwnAction = (n: string): boolean => n in OWN;
+export const ownStance = (n: string | undefined): Stance | undefined => (n ? OWN[(ACTION_ALIASES as Record<string, string>)[n] ?? n]?.stance : undefined);
+const keyed = (v: Keyed, p: number): number => (typeof v === 'number' ? v : curve(p, v));
+const own = (spec: OwnActionSpec, t: number, opts: Ctx & { from?: number; dur?: number }): ActBits => {
+  const tempo = opts.tempo ?? 1;
+  const dur = Math.max(1, (opts.dur ?? spec.dur ?? 24) / tempo);
+  const f = Math.max(0, t - (opts.from ?? 0));
+  const p = spec.loop ? (f % dur) / dur : clamp01(f / dur);
+  const yaw = opts.yaw ?? 0;
+  // an arm the action does not name hangs as in idle, not straight down behind the body
+  const out: ActBits = { armL: { a: 14, b: 12 }, armR: { a: 14, b: 12 } };
+  for (const l of LIMBS) { const v = spec[l]; if (v) out[l] = { a: keyed(v.a, p), b: keyed(v.b, p) }; }
+  for (const n of NUMS) { const v = spec[n]; if (v !== undefined) out[n] = keyed(v, p) * (n === 'tilt' ? leanDir(yaw) : 1); }
+  if (spec.talk) out.talk = mouth(t);
+  if (spec.expr) out.expr = spec.expr;
+  if (spec.handL) out.handL = spec.handL;
+  if (spec.handR) out.handR = spec.handR;
+  // like a gesture: facing screen-left, the working arm is the near one
+  return mirrorHead(yaw < 0 ? swapArms(out) : out, yaw);
+};
+// The ones the stories asked for first (prof, 2026-11-12), written with the same tool anyone has:
+/** leans over a desk or a counter, one hand on it */
+defineAction('lean', { dur: 12, tilt: [[0, 0], [1, 22]], headTilt: [[0, 0], [1, 6]], armR: { a: [[0, 14], [1, 56]], b: [[0, 12], [1, 4]] }, armL: { a: 20, b: 10 } });
+/** digs in a bag, a drawer, a locker: both hands down in front, working */
+defineAction('rummage', { loop: true, dur: 20, tilt: 24, headTilt: 12, armR: { a: [[0, 40], [0.5, 62], [1, 40]], b: [[0, 30], [0.5, 8], [1, 30]] }, armL: { a: [[0, 60], [0.5, 38], [1, 60]], b: [[0, 8], [0.5, 30], [1, 8]] } });
+/** brings a flat hand down hard on a table */
+defineAction('slam', { dur: 14, armR: { a: [[0, 20], [0.4, 150], [0.62, 52], [1, 52]], b: [[0, 12], [0.4, 30], [0.62, 4], [1, 4]] }, armL: { a: 18, b: 12 }, tilt: [[0, 0], [0.4, -6], [0.62, 20], [1, 16]], squash: [[0, 0], [0.62, 0.05], [1, 0]] });
+/** holds something out to someone */
+defineAction('give', { dur: 14, armR: { a: [[0, 14], [1, 82]], b: [[0, 12], [1, 6]] }, armL: { a: 16, b: 12 }, tilt: [[0, 0], [1, 6]] });
+/** reads something held in both hands */
+defineAction('read', { loop: true, dur: 60, armR: { a: 58, b: 88 }, armL: { a: 52, b: 84 }, headTilt: [[0, 12], [0.5, 14], [1, 12]] });
+export type OwnAction = 'lean' | 'rummage' | 'slam' | 'give' | 'read';
+
+export type ActName = Gesture | Clip | ActionAlias | OwnAction;
+/** Words the stories ask for that are another action: kneel and crouch are stances (set `stance`), the rest are synonyms. */
+export const ACTION_ALIASES = {
+  kneel: 'idle', crouch: 'idle', yell: 'shout', scream: 'shout', 'face-palm': 'facepalm', shove: 'push', laugh: 'talk',
+  'lean-on': 'lean', search: 'rummage', dig: 'rummage', hand: 'give', offer: 'give', bang: 'slam',
+} as const;
+export type ActionAlias = keyof typeof ACTION_ALIASES;
+/** The stance an action word implies (act: 'kneel' kneels), or undefined. */
+export const stanceOfAction = (name: string | undefined): Stance | undefined => (name === 'kneel' || name === 'crouch' ? name : undefined);
 export const isClip = (n: string): n is Clip => n in CLIP_TABLE;
 export const isGesture = (n: string): n is Gesture => n in GESTURE_TABLE;
 
 /** Resolve a name: a clip or a gesture. An unknown name fails with the list, so it is fixed at once. */
 export const act = (name: ActName | string, t: number, opts: Ctx & { from?: number; dur?: number } = {}): ActBits => {
+  name = (ACTION_ALIASES as Record<string, string>)[name] ?? name;
+  if (OWN[name]) return own(OWN[name]!, t, opts);
   if (isClip(name)) return clip(name, t, opts);
   if (isGesture(name)) return gesture(name, t, opts);
-  throw new Error(`unknown action "${name}". Gestures: ${GESTURES.join(', ')}. Clips: ${CLIPS.join(', ')}. For anything else write the keyframes with poseAt.`);
+  throw new Error(`unknown action "${name}". Gestures: ${GESTURES.join(', ')}. Clips: ${CLIPS.join(', ')}. Defined: ${Object.keys(OWN).join(', ')}. For anything else define it: defineAction('${name}', { dur: 20, armR: { a: [[0, 14], [1, 90]], b: 10 }, tilt: 12 }), or pass that object as act.`);
 };
 
 /** Turn on a beat: yaw moves to each key over a few frames, through a blink, so the swap of drawings is not seen. */

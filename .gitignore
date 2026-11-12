@@ -7,3 +7,8 @@ secrets/
 !.env.example
 *.log
 __pycache__/
+
+# captures de revue : locales, jamais commitées (règle 2026-09-18)
+docs/screenshots/
+.DS_Store
+**/.DS_Store

@@ -497,6 +497,20 @@ export type Placed = {
 };
 
 /** Finds a piece by id, or by a loose name the model tends to use (chair2, table, couch). */
+/** The message for a piece id this place does not have: what it has, which of those seat someone, and the closest name. */
+const missingPieceMessage = (id: string, list: { id: string; def?: { seats?: unknown } }[], where: string): string => {
+  const ids = [...new Set(list.map((x) => x.id))];
+  const dist = (a: string, b: string): number => {
+    const m: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 1; j <= b.length; j++) m[0]![j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i]![j] = Math.min(m[i - 1]![j]! + 1, m[i]![j - 1]! + 1, m[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    return m[a.length]![b.length]!;
+  };
+  const want = id.toLowerCase();
+  const near = [...ids].sort((x, y) => dist(want, x.toLowerCase()) - dist(want, y.toLowerCase()))[0];
+  const seats = [...new Set(list.filter((x) => x.def?.seats).map((x) => x.id))];
+  return `no piece "${id}" in this ${where}. It has: ${ids.join(', ')}.${seats.length ? ` Pieces someone can sit on (use as on: "..."): ${seats.join(', ')}.` : ' None of them seats anyone: give the person an `at` and stance: "sit".'}${near ? ` Closest to "${id}": "${near}".` : ''} Name pieces with { p, id } in place('name', { pieces: [...] }) if you need your own.`;
+};
 const finderOf = (resolved: Resolved[]) => (id: string, i = 0): { piece: Resolved; idx: number } | undefined => {
   const direct = resolved.find((x) => x.id === id);
   if (direct) return { piece: direct, idx: i };
@@ -622,7 +636,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
     // seats always come from the front layout: a shot in the reverse view mirrors the people itself
     const frontSeat = (id: string, i = 0) => {
       const found = findFront(id, i);
-      if (!found) throw new Error(`no piece "${id}" in this place. It has: ${frontList.map((x) => x.id).join(', ')}.`);
+      if (!found) throw new Error(missingPieceMessage(id, frontList as never, 'place'));
       const { piece: x, idx } = found;
       if (!x.def.seats) throw new Error(`piece "${id}" has no seat: give the person an \`at\` instead.`);
       return x.def.seats(x, idx);
@@ -641,7 +655,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       wantsStool: (id) => !!findFront(id)?.piece.def.stool || /^stool[1-4]?$/i.test(id),
       pointOf: (id) => {
         const x = findPiece(id)?.piece;
-        if (!x) throw new Error(`no piece "${id}" in this ${view === 'reverse' ? 'reverse view' : 'place'}. It has: ${resolved.map((y) => y.id).join(', ')}.`);
+        if (!x) throw new Error(missingPieceMessage(id, resolved as never, view === 'reverse' ? 'reverse view' : 'place'));
         if (x.def.kind !== 'floor') return r.P(x.u + x.len / 2, 0.45, 0);
         return r.P(x.u + x.len / 2, x.def.top ?? 0.8, x.w + x.deep / 2);
       },

@@ -124,6 +124,24 @@ const colorOf = (name: string | undefined, table: Record<string, string>, fallba
   throw new Error(`cast: unknown ${label} "${trimmed}" (known: ${Object.keys(table).slice(0, 22).join(', ')}, … or #RRGGBB)`);
 };
 
+const lumOf = (hex: string): number => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return 0.5;
+  const n = parseInt(m[1]!, 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+};
+/** Hair within 0.12 of the skin's brightness: darker when it is darker or equal, lighter when it is lighter. */
+const separateHair = (hair: string, skin: string): string => {
+  const dh = lumOf(hair) - lumOf(skin);
+  if (Math.abs(dh) >= 0.12) return hair;
+  if (dh <= 0) return shadeOf(hair, 0.45);
+  const m = /^#?([0-9a-f]{6})$/i.exec(hair.trim());
+  if (!m) return hair;
+  const n = parseInt(m[1]!, 16);
+  const up = (v: number) => Math.min(255, Math.round(v + (255 - v) * 0.5));
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => up(v).toString(16).padStart(2, '0')).join('')}`;
+};
+
 /** A small seeded generator: the same seed gives the same character. Every draw is taken in a fixed order. */
 const rngOf = (seed: string) => {
   let h = 2166136261;
@@ -251,6 +269,8 @@ export const cast = (input: CastSpec = {}): Character => {
   const iris: [string, string] | undefined = spec.eyes === undefined ? undefined : typeof spec.eyes === 'string' ? [eyeOf(spec.eyes), eyeOf(spec.eyes)] : [eyeOf(spec.eyes[0]), eyeOf(spec.eyes[1])];
   const print = spec.print ? { text: String(spec.print.text).slice(0, 6), color: colorOf(spec.print.color, COLORS, COLORS.coral!, 'print colour') } : undefined;
   const skin = colorOf(spec.skin ?? seeded.skin, SKIN_MAP, SKINS.peach, 'skin tone');
+  // Hair that is about the skin's brightness makes the face disappear into it (the-er, 2026-11-11): push it apart.
+  const hairShown = isHeadwear ? hair : separateHair(hair, skin);
   const accent = isHeadwear
     ? (hairSpec.color ? hair : shadeOf(worn.over?.color ?? top.color, 0.85))
     : colorOf(seeded.accent, COLORS, COLORS.cream!, 'accent colour');
@@ -265,7 +285,7 @@ export const cast = (input: CastSpec = {}): Character => {
     line: INK,
     shoe: feet.color,
     face: INK,
-    hair,
+    hair: hairShown,
     extra: newHair ? 'bald' : hairStyle === 'tuft' ? undefined : hairStyle,
     accessory,
     cast: {

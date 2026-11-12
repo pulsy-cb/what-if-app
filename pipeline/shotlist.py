@@ -786,6 +786,8 @@ def main() -> int:
             "set": room,
             "key": max(10, min(max(10, span - 4), round(span * 0.55))),
             "note": label,
+            # the staging card: filled by the agent (stage_shots) before the shot is coded
+            "stage": None,
         }
         if accent_hint:
             shot_entry["accent"] = accent_hint

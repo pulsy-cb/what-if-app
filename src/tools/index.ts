@@ -1,6 +1,8 @@
 import type { JsonSchema, Tool, ToolContext, ToolResult } from './types.js';
 import { validateSchema } from './types.js';
 import { fsTools } from './fs.js';
+import { shotWords } from './shot-words.js';
+import { stageShots } from './staging.js';
 import { shellTools } from './shell.js';
 import { whatifTools } from './whatif.js';
 
@@ -56,7 +58,7 @@ export class ToolRegistry {
 }
 
 export function defaultRegistry(): ToolRegistry {
-  return new ToolRegistry([...fsTools, ...shellTools, ...whatifTools]);
+  return new ToolRegistry([...fsTools, shotWords, stageShots, ...shellTools, ...whatifTools]);
 }
 
 export * from './types.js';

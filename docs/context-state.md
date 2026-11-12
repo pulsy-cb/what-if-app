@@ -57,3 +57,14 @@
 - `npm test` 28/29 : le test de main lié aux données échoue aussi sur `origin/main`.
 - Audit : `docs/audits/audit-run-telephone-salon-2026-11-10.md`. Cause principale : l'agent contourne `shot()`, et le Reviewer est aveugle (`episode.json` de plus de 25 Ko non lu). Solution P2 en attente de validation.
 - Suite (complétée, 32/32 tests + rendus 9:16/16:9 vérifiés + rendu Modal vidéo découpé en parallèle sur `main`) : `docs/feature-plans/suite-telephone-salon.md`
+
+## 2026-11-12 — main récupéré, nouvelles données
+- `main` passé de `b31632d` à `474cb3a` (`pull --ff-only`). La branche `feat/visual-director-engine-overlay` et la suite telephone-salon sont incluses.
+- Modifications locales mises de côté : `stash@{0}` « local-avant-pull-main-2026-11-12 ». Tout leur contenu est déjà dans main ; c'est une simple sauvegarde.
+- Captures locales copiées dans `../screenshots-local-backup-2026-11-12`. Elles sont identiques à celles que main versionne désormais.
+- Données : zip `what-if-data-code-db-20261112-095841.zip` restauré, 34 projets, `integrity_check` ok. Sauvegarde : `data/app.db.bak-avant-zip-2026-11-12`.
+- `npm test` 49/49, avec un python qui a numpy. Avec le python système, 46/49 : les 3 échecs viennent de numpy manquant.
+- Audit des nouveautés et des 16 projets : `docs/audits/audit-nouveautes-2026-11-12.md` (corrections P2 en attente de validation)
+- Corrections de l'audit du 12 nov. faites (14 points), non commitées : `docs/feature-plans/corrections-audit-2026-11-12.md`. Tests 54/54 (avec numpy).
+- Plan « améliorer la mise en scène sans image » (fiche par plan `stage_shots`, code vérifié contre la fiche, `walkTo`, `hold`, plan d'ensemble vertical) : **codé, 57/57 tests, essai Codex fait sur une copie de `prof` (15 min, idle 26 → 4, 4 objets tenus, refusé au dernier tour avec 4 défauts), commité `229f580`**. **Lot 2 non commité** : gestes ouverts (`defineAction`, geste écrit sur la personne), `lean`/`rummage`/`slam`/`give`/`read`, `behind`, `cam: 'deep'`, fiches avec `subject` et refus des verbes vagues ; 58/58 tests, 6 mutations sur 6, pas encore de nouvel essai LLM, `docs/feature-plans/ameliorer-mise-en-scene.md`. La génération d'image est mise de côté.
+- Essai images de référence (étape 1, épisode `prof`) : premier essai sur l'API gflow (`nano2-lite`) : 3 images générées, envoi des planches du moteur bloqué par les conditions d'envoi de Flow (à accepter par Pulsy), résultats au §7 ; essai Agnes Image 2.5 Flash avec les planches du moteur : style et décor fidèles, identité des personnages fragile à 3, résultats au §8 ; deuxième tour en 2K : 5 images sur 6 (limite du compte gratuit), objets et poses bons, un personnage en trop dans chaque image, §9 ; réponse sur les directions trop vagues, §10 : `docs/feature-plans/essai-images-de-reference.md`

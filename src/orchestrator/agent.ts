@@ -8,7 +8,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
-import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, reviewEpisodeBoard } from './reviewer.js';
+import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, refusedUnchanged, reviewEpisodeBoard } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -380,8 +380,15 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
                 /* no prior review */
               }
             }
-            const reviewer = reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;
-            if (epSlug && !reviewer) clearReviewBlock(project.root, epSlug);
+            const stuck = epSlug ? refusedUnchanged(project.root, epSlug) : null;
+            if (stuck) {
+              // nothing that could fix the refused shots changed: no paid review, the render stays refused
+              heldNotes.push(
+                `[orchestrateur] Le Reviewer n'est pas rappelé : tu n'as modifié aucun des plans refusés (${stuck.join(', ')}) ni un fichier partagé. Le rendu reste bloqué. Corrige ces plans avec edit_shot (ou le fichier partagé qui les concerne), relance leurs stills puis board.`,
+              );
+            }
+            const reviewer = !stuck && reviewRounds < config.reviewMaxRounds && deps.reviewProvider ? deps.reviewProvider() : null;
+            if (epSlug && !reviewer && !stuck) clearReviewBlock(project.root, epSlug);
             if (reviewer && epSlug) {
               reviewRounds++;
               const revId = `review-${step}-${reviewRounds}`;

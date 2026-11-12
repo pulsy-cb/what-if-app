@@ -10,6 +10,7 @@ import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 import { readEpisodeShots, syncShotsBarrel } from './episode-source.js';
+import { stagingCodeProblems, stagingProblems, usesStaging } from './staging.js';
 
 /** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
 function hexLuminance(hex: string): number | null {
@@ -944,6 +945,15 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
       `shots.tsx only animates people ${totalPoseFaceCalls} time(s) across ${tlShots.length} shots (need at least ${minPoseFaceCalls}): give them an act and a face in shot() or <Staged>, or use poseAt()/faceAt().`,
     );
   }
+
+  // the staging cards come first: a shot coded without its card, or against it, is redone anyway
+  const epShotList: any[] = Array.isArray(episode?.shots) ? episode.shots : [];
+  const staged = usesStaging(epShotList);
+  const stagingErrs = [
+    ...(staged ? stagingProblems(epShotList) : []),
+    ...(fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx')) ? stagingCodeProblems(epShotList, bodies, staged) : []),
+  ];
+  errors.unshift(...stagingErrs.slice(0, 8));
 
   if (errors.length) {
     return `shots.tsx failed the animation & composition check:\n- ${errors.slice(0, 10).join('\n- ')}`;

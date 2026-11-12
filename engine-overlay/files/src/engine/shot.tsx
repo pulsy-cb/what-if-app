@@ -7,10 +7,15 @@ import type { Placed } from './rooms';
 import { mirrorSpot, mirrorYaw } from './rooms';
 import type { PersonLook } from './person';
 import { bodyOf } from './person';
-import type { ActName, Stance } from './actions';
+import type { ActName, OwnActionSpec, Stance } from './actions';
+import { actionName, ownStance, stanceOfAction } from './actions';
+export { defineAction } from './actions';
 import { faceAt } from './rig';
 import type { Expr } from './rig';
 import { HeadVfx, HookTitle, ShockBurst, StampCard, ValueTag } from './accents';
+import { held } from './objects';
+import type { HeldName, HeldOpts } from './objects';
+export { held, HELD_NAMES } from './objects';
 import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
 
 // A shot described instead of drawn. `shot({ ... })` gives the component a timeline expects: the place, who is there,
@@ -18,7 +23,8 @@ import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec }
 // way out: a literal camera, a literal position, `extra` for your own SVG, or a hand-written shot beside this one.
 
 type ShotProps = { t: number; len: number; f?: number };
-export type CamSize = 'establishing' | 'wide' | 'medium' | 'close';
+/** 'deep': two depths in one frame, the nearest person large in the lower half and the others small behind */
+export type CamSize = 'establishing' | 'wide' | 'medium' | 'close' | 'deep';
 export type CamSpec = CamSize | { x: number; y: number; zoom: number };
 
 type Timed<T> = T | ((t: number, len: number) => T);
@@ -30,7 +36,7 @@ export type ReachTarget = number | string | { u: number; w: number; v?: number }
 /** part: where on a person the hand goes (default chest) */
 export type ReachSpec = { to: ReachTarget; side?: 'L' | 'R'; part?: 'head' | 'chest' | 'hand' };
 /** from frame `at`, this person does something else. Frames are the shot's own clock (0..len): use the word frames given for the shot. */
-export type PersonBeat = { at: number; act?: ActName; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null };
+export type PersonBeat = { at: number; act?: ActName | OwnActionSpec; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null };
 /** from frame `at`, the camera changes: another size, another person, or a shake (an impact) */
 export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level' };
 export type PersonSpec = {
@@ -39,10 +45,17 @@ export type PersonSpec = {
   /** a hand goes to someone or something, from the start */ reach?: ReachSpec;
   /** what changes during the shot, at given frames */ beats?: PersonBeat[];
   /** on the floor; a function of (t, len) to move someone */ at?: Timed<Place>;
+  /** walks from `at` to this floor point during the shot (from frame `from`, over `dur` frames; default the whole shot).
+   * Sets act 'walk' and the direction by itself. Without it, act: 'walk' steps on the spot. */
+  walkTo?: { u: number; w: number };
+  /** a thing in the hand: 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box',
+   * or { what, color, scale, side }. Sets act 'hold' when no act is given. */
+  hold?: HeldName | ({ what: HeldName; side?: 'L' | 'R' } & HeldOpts);
   /** or on a piece of furniture: seats the person there */ on?: string;
   seat?: number;
   yaw?: number;
-  act?: ActName;
+  /** a name from the list, one made with defineAction('name', { … }), or the values themselves: { loop, dur, armR: { a, b }, tilt… } */
+  act?: ActName | OwnActionSpec;
   from?: number;
   dur?: number;
   stance?: Stance;
@@ -73,6 +86,10 @@ export type ShotSpec = {
   /** camera changes during the shot: a punch-in on the key word, a switch to the other person, a shake */ beats?: CamBeat[];
   people?: PersonSpec[];
   duo?: DuoSpec;
+  /** objects that sit ON a piece of the place (a cake on the table, a phone on the desk): drawn with their origin on the piece's top, y up is negative. A hand-placed translate() in `extra` floats when the camera or place changes. */
+  props?: { on: string; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
+  /** your own SVG in the world BEHIND the people, on the room (a door that opens, a poster, a light): someone walking in passes in front of it */
+  behind?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
   /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
   /** screen-space diegetic time/place/chapter stamp (16:9 & 9:16 safe, never zoomed by the camera) */
   stamp?: StampSpec;
@@ -94,12 +111,15 @@ const BODY = 378;
 
 /** The camera for a person: zoom from how much of them shows, off-centre so they look into the frame. */
 export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number }, yaw = 0): { x: number; y: number; zoom: number } => {
-  if (size === 'establishing') return { x: 900, y: PORTRAIT ? 440 : 500, zoom: 0.85 };
+  // a tall frame at zoom 0.85 was one third ceiling and one third empty floor (prof, 2026-11-12): go in until the room fills the height
+  if (size === 'establishing') return PORTRAIT ? { x: 900, y: 500, zoom: 1.4 } : { x: 900, y: 500, zoom: 0.85 };
   const s = p.scale;
-  const fit: Record<Exclude<CamSize, 'establishing'>, { height: number; width: number; share: number; chest: number }> = {
+  if (size === 'deep') size = 'medium';
+  const fit: Record<Exclude<CamSize, 'establishing' | 'deep'>, { height: number; width: number; share: number; chest: number }> = {
     wide: { height: 378 * s, width: 620 * s, share: PORTRAIT ? 0.46 : 0.62, chest: 0.52 },
-    medium: { height: 250 * s, width: 400 * s, share: PORTRAIT ? 0.52 : 0.72, chest: 0.78 },
-    close: { height: 190 * s, width: 280 * s, share: PORTRAIT ? 0.46 : 0.72, chest: 0.92 },
+    // headroom: buns, afros and a push-in of 5 % took the crown to the edge (the-er, la-promesse, 2026-11-11)
+    medium: { height: 250 * s, width: 400 * s, share: PORTRAIT ? 0.5 : 0.68, chest: 0.74 },
+    close: { height: 190 * s, width: 280 * s, share: PORTRAIT ? 0.44 : 0.66, chest: 0.87 },
   };
   const c = fit[size];
   const zoom = clamp(Math.min((FRAME.h * c.share) / c.height, FRAME.w / c.width), 0.6, 4.5);
@@ -144,16 +164,29 @@ const sortBeats = <T extends { at: number },>(b: T[] | undefined): T[] => [...(b
 
 /** Turn a description into a shot. */
 export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
+  const pl0 = spec.place as unknown as { items?: unknown; ground?: unknown } | string | undefined;
+  if (!pl0 || typeof pl0 === 'string' || typeof pl0.items !== 'function' || !pl0.ground) {
+    throw new Error(`shot({ place }) needs what place('name') returns, got ${typeof pl0 === 'string' ? `the string "${pl0}"` : pl0 === undefined ? 'nothing (undefined: is the place defined above this shot, and exported from shared.tsx?)' : 'something else'}. Write const ROOM = place('classroom') once in shared.tsx and pass place: ROOM.`);
+  }
   const ShotComp: React.FC<ShotProps> = ({ t, len }) => {
     const reverse = spec.view === 'reverse';
     const pl = reverse ? spec.place.reverse : spec.place;
     const flipYaw = (y: number | undefined) => (y === undefined || !reverse ? y : mirrorYaw(y));
     const flipAt = <T extends Place>(at: T): Place => (reverse && 'u' in at ? mirrorSpot(at as { u: number; w: number }) : at);
     const people = spec.people ?? [];
+    // how far along a walkTo this person is, 0..1
+    const walkK = (p: PersonSpec): number => {
+      const f0 = p.from ?? 0;
+      return clamp((t - f0) / Math.max(1, p.dur ?? len - f0), 0, 1);
+    };
     const whereOf = (p: PersonSpec, idx = 0): Place => {
       if (p.on) return flipAt(pl.seat(p.on, p.seat ?? 0));
-      const at = timed(p.at, t, len);
-      return flipAt(at ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 });
+      const at = timed(p.at, t, len) ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
+      if (p.walkTo && 'u' in at) {
+        const k = walkK(p);
+        return flipAt({ u: at.u + (p.walkTo.u - at.u) * k, w: at.w + (p.walkTo.w - at.w) * k });
+      }
+      return flipAt(at);
     };
     const spotOfPerson = (i: number) => {
       const where = whereOf(people[i]!, i);
@@ -180,7 +213,16 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const dx = spotOfPerson(j).x - spotOfPerson(i).x;
       return Math.sign(dx || 1) * Math.max(Math.abs(yaw ?? 0), 0.5);
     };
-    const baseYaw = (p: PersonSpec): number | undefined => p.yaw ?? (p.on ? pl.seatYaw?.(p.on) : undefined);
+    const baseYaw = (p: PersonSpec): number | undefined => {
+      if (p.yaw !== undefined) return p.yaw;
+      if (p.walkTo && !p.on && walkK(p) < 1) {
+        const a = timed(p.at, t, len);
+        const du = p.walkTo.u - (a && 'u' in a ? a.u : 0.5);
+        // across the room: a profile; toward or away from the camera: nearly front or back
+        return Math.abs(du) > 0.04 ? Math.sign(du) * 0.85 : 0;
+      }
+      return p.on ? pl.seatYaw?.(p.on) : undefined;
+    };
     const yawAt = (i: number): number => {
       const p = people[i]!;
       let y = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
@@ -214,7 +256,33 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       }
       return pl.ground.project(0.5, 0.45);
     };
+    // two depths: from the top of the farthest head to the waist of the nearest person, who fills the lower half
+    const deepCam = (): { x: number; y: number; zoom: number } | null => {
+      if (people.length < 2) return null;
+      const g = people.map((_, i) => spotOfPerson(i));
+      const near = g.reduce((a, b) => (b.scale > a.scale ? b : a));
+      const top = Math.min(...g.map((p) => p.y - 410 * p.scale));
+      const bottom = near.y - BODY * near.scale * 0.34;
+      // the others whole, the nearest person only to the middle of the body: an over-the-shoulder frame may cut them at the edge
+      const half = (p: { scale: number }) => (p === near ? 40 : 120) * p.scale;
+      const x0 = Math.min(...g.map((p) => p.x - half(p)));
+      const x1 = Math.max(...g.map((p) => p.x + half(p)));
+      // go in a little past the width: the nearest person is cut by the edge, as over a shoulder, and the frame fills
+      const zoom = clamp(Math.min(FRAME.h / ((bottom - top) * 1.04), (FRAME.w / ((x1 - x0) * 1.04)) * 1.12), 0.6, 4.5);
+      const halfW = FRAME.w / (2 * zoom);
+      // the people behind stay whole in the frame
+      const far = g.filter((p) => p !== near);
+      const fx0 = Math.min(...far.map((p) => p.x - 95 * p.scale));
+      const fx1 = Math.max(...far.map((p) => p.x + 95 * p.scale));
+      const lo = fx1 - halfW;
+      const hi = fx0 + halfW;
+      const x = lo <= hi ? clamp((x0 + x1) / 2, lo, hi) : (fx0 + fx1) / 2;
+      // spare height (the width still limits the zoom): most of it goes down the nearest body, none to a bare ceiling
+      const spare = Math.max(0, FRAME.h / zoom - (bottom - top));
+      return { x, y: (top + bottom) / 2 + spare * 0.2, zoom };
+    };
     const cameraFor = (c: CamSpec, on: number) => {
+      if (c === 'deep') { const d = deepCam(); if (d) return d; }
       const groupWide = c === 'wide' && on === 0 && spec.on === undefined && people.length >= 2;
       const sized = typeof c === 'string' ? frameOn(c, focusOn(groupWide ? -2 : on), !groupWide && people[on] ? yawAt(on) : 0) : c;
       // a tall frame must not reach below the room's near floor edge, where nothing is drawn
@@ -254,8 +322,15 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const lift = angle === 'low' ? -0.1 : angle === 'high' ? 0.1 : 0;
     const viewH = FRAME.h / zoom;
     const angleT = tall === 1 ? undefined : `translate(0 ${feet}) scale(1 ${tall}) translate(0 ${-feet})`;
+    const behindNode = spec.behind ? (typeof spec.behind === 'function' ? spec.behind(t, len) : spec.behind) : null;
+    const extraNode = spec.extra ? (typeof spec.extra === 'function' ? spec.extra(t, len) : spec.extra) : null;
+    const pieceLike = (Array.isArray(extraNode) ? extraNode : [extraNode]).find((n) => n && typeof n === 'object' && !Array.isArray(n) && !('$$typeof' in (n as object)) && typeof (n as { p?: unknown }).p === 'string');
+    if (pieceLike) {
+      throw new Error(`extra takes SVG, but got a piece description {p: "${(pieceLike as { p: string }).p}", ...}. A piece of furniture or decor goes in the place: place('name', { add: [{ p: "${(pieceLike as { p: string }).p}", id: "...", at: { u, w } }] }), and shot({ place }) uses that. For an object that sits on a piece use shot({ props: [{ on: "<piece id>", node: <g>...</g> }] }).`);
+    }
     const jolt = shake ? { x: Math.sin(t * 2.7) * shake, y: Math.cos(t * 3.1) * shake * 0.6 } : { x: 0, y: 0 };
     return (
+      <g>
       <g transform={camT(base.x + jolt.x / zoom, base.y + lift * viewH + jolt.y / zoom, zoom)}>
       <g transform={angleT}>
         <Stage ground={pl.ground} t={t} focus={focus}>
@@ -263,7 +338,16 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             <pl.Shell t={t} />
           </g>
           {pl.items(t)}
-          {people.flatMap((p) => {
+          {behindNode ? <StageItem depth={0.001}>{behindNode}</StageItem> : null}
+          {people.flatMap((p, pi) => {
+            // seated on the floor plan with no piece under them: a stool, so nobody sits on thin air (the-er, 2026-11-11)
+            if (!p.on && p.stance === 'sit') {
+              const at = whereOf(p, pi);
+              if (!('u' in at)) return [];
+              const g = pl.ground.project((at as { u: number; w: number }).u, (at as { u: number; w: number }).w);
+              const b = legsOf(p);
+              return [<StageItem key={`sit-${pi}`} depth={(at as { w: number }).w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
+            }
             if (!p.on || !pl.wantsStool(p.on)) return [];
             const s = flipAt(pl.seat(p.on, p.seat ?? 0)) as { u: number; w: number };
             const g = pl.ground.project(s.u, s.w);
@@ -271,7 +355,18 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
           })}
           {people.map((p, i) => {
-            const { who, on, act, from, dur, stance, rimId, vfx, headGear, torsoGear, handLProp, handRProp } = p;
+            const { who, on, from, dur, stance, rimId, vfx, headGear, torsoGear } = p;
+            const holdSpec = typeof p.hold === 'string' ? { what: p.hold } : p.hold;
+            const heldNode = holdSpec ? held(holdSpec.what, holdSpec) : undefined;
+            const handLProp = p.handLProp ?? (holdSpec?.side === 'L' ? heldNode : undefined);
+            const handRProp = p.handRProp ?? (holdSpec && holdSpec.side !== 'L' ? heldNode : undefined);
+            const moving = !!p.walkTo && !on && walkK(p) < 1;
+            const WALKS = ['walk', 'run', 'sneak'];
+            // a walk ends where it goes: no stepping on the spot after the arrival
+            const pAct = actionName(p.act);
+            const act: ActName | undefined = p.walkTo && !on
+              ? (moving ? (pAct && WALKS.includes(pAct) ? pAct : 'walk') : (pAct && !WALKS.includes(pAct) ? pAct : holdSpec ? 'hold' : 'idle'))
+              : pAct ?? (holdSpec ? 'hold' : undefined);
             const beats = sortBeats(p.beats);
             // faces given in beats join the face keyframes
             const baseFace: [number, FaceExpr][] = p.face === undefined ? [] : typeof p.face === 'string' ? [[0, p.face]] : p.face;
@@ -279,7 +374,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             let yawRun = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
             const stageBeats: StageBeat[] = beats.map((b) => {
               if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
-              return { at: b.at, act: b.act, yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
+              return { at: b.at, act: actionName(b.act), yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
             });
             const reach = targetOf(p.reach);
             const combinedHead = vfx?.length ? (
@@ -291,15 +386,21 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               headGear
             );
             return (
-              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={from} dur={dur} stance={stance ?? (on ? 'sit' : undefined)}
+              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
                 pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
                 rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
             );
           })}
           {spec.duo ? <Duo a={{ at: flipAt(spec.duo.a.at) as { u: number; w: number }, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: flipAt(spec.duo.b.at) as { u: number; w: number }, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
-          {spec.extra ? <g>{typeof spec.extra === 'function' ? spec.extra(t, len) : spec.extra}</g> : null}
+          {(spec.props ?? []).map((pr, i) => {
+            const at = pl.pointOf(pr.on);
+            return <g key={`prop-${i}`} transform={`translate(${at.x + (pr.dx ?? 0)} ${at.y + (pr.dy ?? 0)}) scale(${pr.scale ?? 1})`}>{pr.node}</g>;
+          })}
+          {extraNode ? <g>{extraNode}</g> : null}
         </Stage>
       </g>
+      </g>
+      {/* screen space: the title, stamp, tag and overlay must not follow the camera (prof, 2026-11-11: title off-centre and cut in 9:16) */}
       {spec.burst ? <ShockBurst {...spec.burst} t={t} /> : null}
       {spec.stamp ? <StampCard {...spec.stamp} t={t} /> : null}
       {spec.tag ? <ValueTag {...spec.tag} t={t} /> : null}
