@@ -466,7 +466,9 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             const combinedHead = vfx?.length ? (
               <g>
                 {headGear}
-                <HeadVfx items={vfx} t={t} />
+                <g transform="translate(0 -176)">
+                  <HeadVfx items={vfx} t={t} />
+                </g>
               </g>
             ) : (
               headGear

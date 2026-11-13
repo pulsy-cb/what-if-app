@@ -4169,3 +4169,196 @@ test('after the custom run: a coded shot keeps its card, render asked again clos
   assert.match(directorGuide, /screen: 'photo', photo: \{ people: \[ALIX, SLOANE\]/);
   assert.match(directorGuide, /card of a coded shot is frozen/);
 });
+
+test('7669887273659305246-1 & post-final rerun fixes: tabletop/phone angle exemption, 9:16 0.25 depth, Keyed number[][], HeadVfx -176, mtime pipelineTodo & read_file loop-breaker', async () => {
+  const { stagingCodeProblems } = await import('../dist/tools/staging.js');
+  const { episodeStatus, pipelineTodo } = await import('../dist/orchestrator/context.js');
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { ToolRegistry } = await import('../dist/tools/index.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+
+  // 1. tabletopShot & phoneShot exempt from card.angle === 'high' | 'low'; plain shot() still requires it
+  const highCard = {
+    see: 'Vue plongeante sur le comptoir avec le ticket de caisse.',
+    people: [],
+    objects: ['receipt'],
+    angle: 'high',
+    moves: false,
+  };
+  assert.deepEqual(
+    stagingCodeProblems(
+      [{ id: 'S7', size: 'insert', stage: highCard }],
+      { S7: `tabletopShot({ surface: 'wood', items: [{ what: 'paper', at: [0, 0] }] })` },
+      true,
+      '9:16',
+    ),
+    [],
+    'tabletopShot is already a top-down view and has no angle prop',
+  );
+  assert.deepEqual(
+    stagingCodeProblems(
+      [{ id: 'S8', size: 'insert', stage: highCard }],
+      { S8: `phoneShot({ name: 'Banque', messages: [{ at: 4, text: '-40 €' }] })` },
+      true,
+      '9:16',
+    ),
+    [],
+    'phoneShot is already an insert screen view and has no angle prop',
+  );
+  assert.match(
+    stagingCodeProblems(
+      [{ id: 'S9', size: 'wide', stage: highCard }],
+      { S9: `shot({ place: ROOM, cam: 'wide', props: [{ on: 'desk', node: held('paper') }] })` },
+      true,
+      '9:16',
+    ).join('\n'),
+    /S9: the card asks for a high angle/,
+  );
+
+  // 2. 9:16 two-person depth counts w spread >= 0.25 (e.g. 0.30 vs 0.55)
+  const four916 = ['S1', 'S2', 'S3', 'S4'].map((id) => ({ id, size: 'medium', stage: null }));
+  const spread025 = `shot({ place: P, cam: 'medium', people: [{ who: A, at: { u: 0.35, w: 0.3 } }, { who: B, at: { u: 0.65, w: 0.55 } }] })`;
+  const flat005 = `shot({ place: P, cam: 'medium', people: [{ who: A, at: { u: 0.35, w: 0.45 } }, { who: B, at: { u: 0.65, w: 0.5 } }] })`;
+  assert.deepEqual(
+    stagingCodeProblems(four916, { S1: spread025, S2: spread025, S3: flat005, S4: flat005 }, false, '9:16'),
+    [],
+    '2/4 shots with spread 0.25 meet the 1/3 depth requirement in 9:16',
+  );
+
+  // 3. Engine: actions.ts widens Keyed to readonly (readonly number[])[], and shot.tsx translates HeadVfx by (0 -176)
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const actionsSrc = fs.readFileSync(path.join(eng, 'actions.ts'), 'utf8');
+  assert.match(actionsSrc, /type Keyed = number \| readonly \(readonly number\[\]\)\[\];/);
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  assert.match(shotSrc, /<g transform="translate\(0 -176\)">\s*<HeadVfx items=\{vfx\} t=\{t\} \/>\s*<\/g>/);
+
+  // 4. Mtime-aware episodeStatus & pipelineTodo when editing shots after final.mp4 exists
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-rerun-'));
+  try {
+    const slug = 'ep1';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const shotsDir = path.join(epDir, 'shots');
+    const outDir = path.join(dir, 'out', slug);
+    const boardDir = path.join(outDir, 'board');
+    const pubDir = path.join(dir, 'public', slug);
+    fs.mkdirSync(shotsDir, { recursive: true });
+    fs.mkdirSync(boardDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+
+    const baseT = Math.floor(Date.now() / 1000) - 100;
+    const writeAt = (f, content, sec) => {
+      fs.writeFileSync(f, content);
+      fs.utimesSync(f, sec, sec);
+    };
+    writeAt(path.join(epDir, 'episode.json'), JSON.stringify({ id: slug, script: ['Bonjour à tous voici une histoire'], shots: [{ id: 'S1' }, { id: 'S2' }] }), baseT);
+    writeAt(path.join(epDir, 'words.json'), JSON.stringify([{ w: 'Bonjour', s: 0, e: 1.2 }]), baseT);
+    writeAt(path.join(epDir, 'timeline.json'), JSON.stringify({ fps: 30, total: 600, shots: [{ id: 'S1', len: 300 }, { id: 'S2', len: 300 }] }), baseT);
+    writeAt(path.join(epDir, 'DIRECTOR.md'), 'Mise en scène détaillée '.repeat(15), baseT);
+    writeAt(path.join(pubDir, 'voice.wav'), 'wav', baseT);
+    writeAt(path.join(pubDir, 'sfx.wav'), 'wav', baseT);
+    writeAt(path.join(shotsDir, 'S1.tsx'), 'export const S1 = () => null;', baseT + 10);
+    writeAt(path.join(boardDir, 'S1.png'), 'png', baseT + 20);
+    fs.utimesSync(boardDir, baseT + 20, baseT + 20);
+    writeAt(path.join(outDir, 'storyboard.jpg'), 'jpg', baseT + 30);
+    writeAt(path.join(outDir, `${slug}-raw.mp4`), 'mp4', baseT + 40);
+    writeAt(path.join(outDir, `${slug}-final.mp4`), 'mp4', baseT + 50);
+
+    assert.deepEqual(pipelineTodo(dir), [], 'finished episode with fresh artifacts has empty todo');
+
+    // Editing S1.tsx after final.mp4 invalidates stills, board, render, master
+    writeAt(path.join(shotsDir, 'S1.tsx'), 'export const S1 = () => <g />;', baseT + 60);
+    assert.deepEqual(pipelineTodo(dir), ['stills', 'board', 'render', 'master']);
+
+    // Re-running stills updates board/S1.png -> leaves board, render, master
+    writeAt(path.join(boardDir, 'S1.png'), 'png2', baseT + 70);
+    assert.deepEqual(pipelineTodo(dir), ['board', 'render', 'master']);
+
+    // Re-running board updates storyboard.jpg -> leaves render, master
+    writeAt(path.join(outDir, 'storyboard.jpg'), 'jpg2', baseT + 80);
+    assert.deepEqual(pipelineTodo(dir), ['render', 'master']);
+
+    // Re-running render + master updates raw.mp4 & final.mp4 -> todo empty again!
+    writeAt(path.join(outDir, `${slug}-raw.mp4`), 'mp42', baseT + 90);
+    writeAt(path.join(outDir, `${slug}-final.mp4`), 'mp42', baseT + 95);
+    assert.deepEqual(episodeStatus(dir)[0].todo, []);
+
+    // 5. Follow-up user prompt asking to re-render / fix when final.mp4 already exists nudges the model if it tries to stop at step 0
+    const db = new Db(path.join(dir, 'app.db'));
+    try {
+      db.createProject('p', 'p', dir);
+      const config = { ...loadConfig(), maxSteps: 10, reviewMaxRounds: 0, approvalsMode: 'off', contextChars: 60_000 };
+      let rerunTriggered = false;
+      const regRerun = new ToolRegistry([
+        {
+          name: 'whatif_run',
+          description: 'w',
+          policy: 'auto',
+          schema: { type: 'object' },
+          run: async () => {
+            rerunTriggered = true;
+            return { ok: true, summary: 'rendered fresh video' };
+          },
+        },
+        { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+      ]);
+      let turnCall = 0;
+      const provRerun = {
+        id: 'fake',
+        label: 'fake',
+        model: 'fake',
+        chat: async () => {
+          turnCall++;
+          if (turnCall === 1) return { text: 'La vidéo finale est déjà prête !', toolCalls: [] };
+          if (turnCall === 2) return { text: '', toolCalls: [{ id: 'r1', name: 'whatif_run', args: { episode: slug, step: 'render' } }] };
+          return { text: 'Nouveau rendu terminé.', toolCalls: [] };
+        },
+      };
+      const thRerun = db.createThread('p', 'rerun');
+      db.addMessage(thRerun.id, 'user', 'Recommence quand même le rendu de la vidéo');
+      await runTurn({ db, bus: { emit() {} }, config, registry: regRerun, approvals: null, provider: () => provRerun, reviewProvider: () => null }, thRerun.id, new AbortController().signal);
+      assert.equal(rerunTriggered, true, 'orchestrator nudges past premature "already rendered" stop on explicit rerun request');
+      assert.equal(db.listMessages(thRerun.id).at(-1).content, 'Nouveau rendu terminé.');
+
+      // 6. Single read_file between identical failing whatif_run calls does NOT reset consecutiveFails
+      let failRuns = 0;
+      const regReadLoop = new ToolRegistry([
+        {
+          name: 'whatif_run',
+          description: 'w',
+          policy: 'auto',
+          schema: { type: 'object' },
+          run: async () => {
+            failRuns++;
+            return { ok: false, summary: 'cannot run stills yet — S7: missing angle' };
+          },
+        },
+        { name: 'read_file', description: 'r', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'file content' }) },
+        { name: 'git', description: 'g', policy: 'auto', schema: { type: 'object' }, run: async () => ({ ok: true, summary: 'ok' }) },
+      ]);
+      let rlStep = 0;
+      const provReadLoop = {
+        id: 'fake',
+        label: 'fake',
+        model: 'fake',
+        chat: async () => {
+          rlStep++;
+          return rlStep % 2 === 1
+            ? { text: '', toolCalls: [{ id: `wf${rlStep}`, name: 'whatif_run', args: { episode: slug, step: 'stills' } }] }
+            : { text: '', toolCalls: [{ id: `rf${rlStep}`, name: 'read_file', args: { path: 'S7.tsx' } }] };
+        },
+      };
+      const thLoop = db.createThread('p', 'readloop');
+      db.addMessage(thLoop.id, 'user', 'go');
+      await runTurn({ db, bus: { emit() {} }, config: { ...config, maxSteps: 20 }, registry: regReadLoop, approvals: null, provider: () => provReadLoop, reviewProvider: () => null }, thLoop.id, new AbortController().signal);
+      assert.equal(failRuns, 5, 'interleaved single read_file calls must not mask 5 identical whatif_run failures');
+      const loopMsgs = db.listMessages(thLoop.id);
+      assert.ok(loopMsgs.some((m) => /Lire un fichier \(read_file\) sans rien modifier ne corrige PAS/.test(m.content)));
+      assert.match(loopMsgs.at(-1).content, /Arrêt : l'outil "whatif_run" a échoué 5 fois de suite/);
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -162,7 +162,7 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
       two.push(String(s.id));
       const ws = [...body.matchAll(/\bw\s*:\s*(\d*\.?\d+)/g)].map((m) => Number(m[1]));
       const spread = ws.length >= 2 ? Math.max(...ws) - Math.min(...ws) : 0;
-      if (!/cam\s*:\s*['"]deep['"]/.test(body) && spread < 0.3) flat.push(String(s.id));
+      if (!/cam\s*:\s*['"]deep['"]/.test(body) && spread < 0.25) flat.push(String(s.id));
     }
     if (two.length >= 4 && two.length - flat.length < Math.ceil(two.length / 3)) {
       out.push(`${two.length - flat.length}/${two.length} shots with two people or more use depth (need ${Math.ceil(two.length / 3)}): in 9:16 people side by side leave the lower third empty. On some of ${flat.slice(0, 8).join(', ')} use cam: 'deep' with one person near (w 0.85-0.95) and the other behind, about 0.2 in u apart`);
@@ -184,7 +184,7 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     if (handled.length && !DRAWS_OBJECT.test(body)) {
       out.push(`${id}: the card shows ${handled.join(', ')} but the code draws no object: use hold: '<object>' on the person (or hold: { node: <g>…</g> } for your own drawing), props: [{ on: '<piece>', node: held('<object>') }], or tabletopShot / phoneShot`);
     }
-    if ((card.angle === 'low' || card.angle === 'high') && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
+    if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
       out.push(`${id}: the card asks for a ${card.angle} angle but the code has no angle: '${card.angle}'`);
     }
     const acts = [...body.matchAll(/\bact\s*[:=]\s*\{?\s*['"]([\w-]+)['"]/g)].map((m) => m[1]);

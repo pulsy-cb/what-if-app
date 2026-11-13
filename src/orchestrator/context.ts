@@ -93,13 +93,14 @@ commands for a human to paste: you call the tools.
      fix \`shots.tsx\` and re-run \`stills\` (for the changed shot IDs) and \`board\`.
 7. whatif_run sfx — mixes continuous crossfade-tiled location ambiences + semantic foley in \`public/<slug>/sfx.wav\` and sets voice-first stem
    volumes in \`timeline.json\` (no looped background music unless explicitly requested).
-8. whatif_run render — renders the video on **Modal** and automatically masters \`out/<slug>/<slug>-final.mp4\` (-14 LUFS, peaks <= -1 dBTP) + \`out/<slug>/report.json\` (calling \`whatif_run master\` afterward is instant if already mastered). Once \`<slug>-final.mp4\` is written, update \`PROJECT.md\` in ONE call and deliver the final summary immediately (do not call \`whatif_status\`, \`view_image\`, or extra \`git\` checkpoints after \`final.mp4\` is ready).
+8. whatif_run render — renders the video on **Modal** and automatically masters \`out/<slug>/<slug>-final.mp4\` (-14 LUFS, peaks <= -1 dBTP) + \`out/<slug>/report.json\` (calling \`whatif_run master\` afterward is instant if already mastered). Once \`<slug>-final.mp4\` is freshly written in the current run, update \`PROJECT.md\` in ONE call and deliver the final summary immediately (do not call \`whatif_status\`, \`view_image\`, or extra \`git\` checkpoints after \`final.mp4\` is ready).
 
 ## How you work
 - **Run the pipeline end to end in one turn, unattended.** Nobody is watching for a question: go
   source -> script -> voice -> shotlist -> plan -> DIRECTOR.md -> stage_shots (one card per shot) -> shots.tsx -> stills -> board -> sfx -> render -> master
   and only then report. Stop early only for a fact you cannot invent (no video id, a missing LLM key, an
   explicit request from the user) — never to ask "shall I continue?" or "do you approve the board?".
+- **Revisions & re-renders after \`<slug>-final.mp4\` exists**: an existing \`final.mp4\` NEVER blocks a new user request to fix shots, change staging, re-render, or start over. Act with tools immediately: update cards if requested (\`stage_shots { ..., userAsked: true }\`), edit only the targeted shots (\`edit_shot\`), then re-run \`stills\` (for changed shot IDs), \`board\`, and \`render\` (or pass \`args: ["--force"]\` / create a new episode with \`whatif_new\` when asked to restart from scratch).
 - read_file before edit_file: oldText must match exactly (the block it returns is the one to copy).
 - read_file returns the whole file in one call: never slice a file into 80-line windows, it burns steps.
 - npm install in the studio needs its devDependencies (@types/react): whatif_run install does that. If
@@ -346,6 +347,39 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
     }
     const dir = path.join(projectRoot, 'out', slug);
     const has = (rel: string) => fs.existsSync(path.join(dir, rel));
+    const mtime = (file: string): number => {
+      try {
+        return fs.statSync(file).mtimeMs;
+      } catch {
+        return 0;
+      }
+    };
+    const shotsMtime = readEpisodeShots(src).latestMtimeMs;
+    const boardDirMtime = (() => {
+      const bDir = path.join(dir, 'board');
+      try {
+        let latest = fs.statSync(bDir).mtimeMs;
+        for (const f of fs.readdirSync(bDir)) {
+          const mt = mtime(path.join(bDir, f));
+          if (mt > latest) latest = mt;
+        }
+        return latest;
+      } catch {
+        return 0;
+      }
+    })();
+    const boardMtime = mtime(path.join(dir, 'storyboard.jpg'));
+    const rawMtime = mtime(path.join(dir, `${slug}-raw.mp4`));
+    const finalMtime = mtime(path.join(dir, `${slug}-final.mp4`));
+
+    const stillsFresh = has('board') && (!shotsMtime || !boardDirMtime || shotsMtime <= boardDirMtime + 1_000);
+    const boardFresh =
+      has('storyboard.jpg') &&
+      (!shotsMtime || shotsMtime <= boardMtime + 1_000) &&
+      (!boardDirMtime || boardDirMtime <= boardMtime + 1_000);
+    const renderFresh = has(`${slug}-raw.mp4`) && boardFresh && (!boardMtime || boardMtime <= rawMtime + 1_000);
+    const masterFresh = has(`${slug}-final.mp4`) && renderFresh && (!rawMtime || rawMtime <= finalMtime + 1_000);
+
     const words = countScriptWords(ep.script);
     const steps: [string, boolean][] = [
       ['script', Array.isArray(ep.script) && ep.script.length > 0 && !JSON.stringify(ep.script).includes('TODO')],
@@ -353,11 +387,11 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
       ['timeline', fs.existsSync(path.join(src, 'timeline.json')) && Number(ep?.shots?.length ?? 0) > 1],
       ['voice', fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'))],
       ['director', fs.existsSync(path.join(src, 'DIRECTOR.md'))],
-      ['stills', has('board')],
-      ['board', has('storyboard.jpg')],
+      ['stills', stillsFresh],
+      ['board', boardFresh],
       ['sfx', fs.existsSync(path.join(projectRoot, 'public', slug, 'sfx.wav'))],
-      ['render', has(`${slug}-raw.mp4`)],
-      ['master', has(`${slug}-final.mp4`)],
+      ['render', renderFresh],
+      ['master', masterFresh],
     ];
     let seconds = '';
     try {

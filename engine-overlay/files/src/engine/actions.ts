@@ -25,14 +25,14 @@ const foldYaw = (yaw: number) => {
 };
 
 /** A value through keyed times (0..1), smoothed between keys. */
-const curve = (p: number, keys: [number, number][]): number => {
-  if (p <= keys[0]![0]) return keys[0]![1];
+const curve = (p: number, keys: readonly (readonly number[])[]): number => {
+  if (p <= keys[0]![0]!) return keys[0]![1]!;
   for (let i = 0; i < keys.length - 1; i++) {
-    const [p0, v0] = keys[i]!;
-    const [p1, v1] = keys[i + 1]!;
+    const p0 = keys[i]![0]!, v0 = keys[i]![1]!;
+    const p1 = keys[i + 1]![0]!, v1 = keys[i + 1]![1]!;
     if (p <= p1) return lerp(v0, v1, smooth((p - p0) / Math.max(1e-6, p1 - p0)));
   }
-  return keys[keys.length - 1]![1];
+  return keys[keys.length - 1]![1]!;
 };
 const mouth = (t: number) => {
   if (t < 2) return 0;
@@ -210,7 +210,7 @@ export const clip = (name: Clip, t: number, opts: Ctx & { from?: number; dur?: n
 // then act: DIG (or act: 'dig'); or pass the object itself as act on a person. A value is a number, or keys [[p, value], …]
 // with p from 0 (start of the action) to 1 (its end). Arms and legs: a = swing from the shoulder / hip in degrees (0 hangs
 // down, 90 points forward, 140 is up), b = bend of the elbow / knee. tilt leans the torso toward where the person faces.
-type Keyed = number | [number, number][];
+type Keyed = number | readonly (readonly number[])[];
 type LimbKeyed = { a: Keyed; b: Keyed };
 export type OwnActionSpec = {
   /** frames for one pass (default 24) */ dur?: number;

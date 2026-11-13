@@ -167,6 +167,29 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           /\?\s*$/.test(firstUserMsg.content.trim()) &&
           !/\b(continue|lance|fais|crée|creer|génère|genere|run|render|stills|épisode|episode|vidéo|video)\b/i.test(firstUserMsg.content);
 
+        const lastHistMsg = history[history.length - 1];
+        const asksRerunOrEdit =
+          !isPureQuestion &&
+          !ranPipeline &&
+          todo.length === 0 &&
+          step === 0 &&
+          nudges < 2 &&
+          lastHistMsg?.role === 'user' &&
+          !lastHistMsg.content.startsWith('[orchestrateur]') &&
+          /\b(corrige|modifie|refais|recommence|relance|reprends|remplace|change|retouche|réécri|reecri|stills|board|render)\b/i.test(
+            lastHistMsg.content,
+          );
+
+        if (asksRerunOrEdit) {
+          nudges++;
+          const nudge =
+            `[orchestrateur] L'utilisateur demande une modification ou une relance même si un rendu précédent existe déjà. ` +
+            `N'annonce pas que la vidéo est déjà prête : exécute directement les outils demandés maintenant (edit_shot / stage_shots { userAsked: true } / whatif_run { step: "stills" | "board" | "render" }).`;
+          db.addMessage(threadId, 'user', nudge);
+          bus.emit(threadId, 'notice', { text: nudge });
+          continue;
+        }
+
         if (!isPureQuestion && (ranPipeline || todo.length > 0) && todo.length && nudges < 6) {
           nudges++;
           const nudge =
@@ -354,7 +377,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (consecutiveFails >= 3) {
               const loopNote =
                 `[orchestrateur] L'appel "${call.name}" a échoué ${consecutiveFails} fois de suite avec exactement les mêmes arguments. ` +
-                `Ne relance PAS le même appel tel quel : corrige la cause exacte (ou utilise edit_shot / read_file sur le bloc concerné).`;
+                `Lire un fichier (read_file) sans rien modifier ne corrige PAS l'erreur : modifie d'abord les fichiers en cause (edit_shot / edit_file / write_file / stage_shots) avant de relancer "${call.name}".`;
               heldNotes.push(loopNote);
               bus.emit(threadId, 'notice', { text: loopNote });
               if (consecutiveFails >= 5) {
@@ -368,8 +391,15 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               }
             }
           } else {
-            lastFailSig = '';
-            consecutiveFails = 0;
+            const isReadOnlyLookup = ['read_file', 'list_files', 'search_files', 'repo_map', 'whatif_status', 'view_image'].includes(
+              call.name,
+            );
+            const resetsFailStreak =
+              !isReadOnlyLookup || tool?.mutating || lastFailSig.startsWith(`${call.name}:`);
+            if (resetsFailStreak) {
+              lastFailSig = '';
+              consecutiveFails = 0;
+            }
           }
 
           for (const a of result.artifacts ?? []) {
