@@ -13,12 +13,14 @@ export { defineAction } from './actions';
 import { faceAt } from './rig';
 import type { Expr } from './rig';
 import { HeadVfx, HookTitle, ShockBurst, StampCard, ValueTag } from './accents';
-import { held } from './objects';
+import { held, heldBottom, HELD_LEVEL } from './objects';
+import type { Carry } from './stage';
 import { animalHead, worn, wornOnTorso } from './worn';
 import type { AnimalSpec, WornSpec } from './worn';
 export { worn, animalHead, WORN_NAMES, ANIMAL_KINDS } from './worn';
 import type { HeldName, HeldOpts } from './objects';
 export { held, HELD_NAMES } from './objects';
+export type { Carry } from './stage';
 import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
 
 // A shot described instead of drawn. `shot({ ... })` gives the component a timeline expects: the place, who is there,
@@ -51,9 +53,12 @@ export type PersonSpec = {
   /** walks from `at` to this floor point during the shot (from frame `from`, over `dur` frames; default the whole shot).
    * Sets act 'walk' and the direction by itself. Without it, act: 'walk' steps on the spot. */
   walkTo?: { u: number; w: number };
-  /** a thing in the hand: 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box',
-   * or { what, color, scale, side }. Sets act 'hold' when no act is given. */
-  hold?: HeldName | ({ what?: HeldName; /** your own drawing, carried by the hand, around (0, 10) in hand units */ node?: React.ReactNode; side?: 'L' | 'R' } & HeldOpts);
+  /** a thing in the hand: 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle',
+   * or { what, color, scale, side }. Sets act 'hold' when no act is given.
+   * `level: true` keeps it level whatever the arm does (tray, plate and bottle are level by themselves).
+   * `release` makes it leave the hand: { at: 52, to: 'table' } puts it on a piece, { at: 21, to: { u, w }, how: 'throw' }
+   * throws it to a floor point (v: 0 floor … 1 head height), { at: 30, how: 'drop' } lets it fall at the feet. */
+  hold?: HeldName | ({ what?: HeldName; /** your own drawing, carried by the hand, around (0, 10) in hand units */ node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec } & HeldOpts);
   /** worn things: 'crown' | 'eye-mask' | 'face-mask' | 'sunglasses' | 'cat-ears' | 'headphones' | 'collar' | 'tie' | 'scarf' | 'medal'… or { what, color } */
   wear?: WornSpec[];
   /** an animal that stands and talks: ears, muzzle, whiskers, mane on this person's head. 'cat' | 'dog' | 'lion' | 'bear' | 'rabbit' | 'wolf' | 'fox' | 'pig' | 'mouse', or { kind, fur, inner } */
@@ -169,8 +174,11 @@ const poseOf = (p: { face?: FaceSpecT; pose?: Timed<Record<string, unknown>> }, 
   return { ...face, ...timed(p.pose, t, len) };
 };
 
+/** When and where a held thing leaves the hand. `to`: a piece id, a floor point (v: height, 0 floor … 1 head) or a person index. */
+export type ReleaseSpec = { at: number; to?: string | { u: number; w: number; v?: number } | number; how?: 'put' | 'throw' | 'drop'; dur?: number; /** nudge where it rests */ dx?: number; dy?: number };
+
 /** `hold` as written by many hands: a name, { what }, the same under kind / name / object / item, a drawing, or { node }. */
-const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L' | 'R' } & HeldOpts) | undefined => {
+const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec } & HeldOpts) | undefined => {
   if (h === undefined || h === null || h === false) return undefined;
   if (typeof h === 'string') return { what: h };
   if (React.isValidElement(h)) return { node: h };
@@ -196,9 +204,9 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const flipAt = <T extends Place>(at: T): Place => (reverse && 'u' in at ? mirrorSpot(at as { u: number; w: number }) : at);
     const people = spec.people ?? [];
     // how far along a walkTo this person is, 0..1
-    const walkK = (p: PersonSpec): number => {
+    const walkK = (p: PersonSpec, at: number = t): number => {
       const f0 = p.from ?? 0;
-      return clamp((t - f0) / Math.max(1, p.dur ?? len - f0), 0, 1);
+      return clamp((at - f0) / Math.max(1, p.dur ?? len - f0), 0, 1);
     };
     // A hand that reaches for a piece from too far stops in mid-air: half of the defects left by the reviewer were a
     // hand that touches nothing (8 projects, 2026-11-13). The person stands within arm's length of what they reach for.
@@ -213,13 +221,13 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       if (Math.abs(dx) <= ARM_REACH * g.scale) return null;
       return { x: to.x - Math.sign(dx) * ARM_REACH * 0.85 * g.scale, y: g.y, scale: g.scale, w: here.w } as Place;
     };
-    const whereOf = (p: PersonSpec, idx = 0): Place => {
+    const whereOf = (p: PersonSpec, idx = 0, when: number = t): Place => {
       if (p.on) return flipAt(pl.seat(p.on, p.seat ?? 0));
-      const at = timed(p.at, t, len) ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
+      const at = timed(p.at, when, len) ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
       const near = stepIn(p, at);
       if (near) return near;
       if (p.walkTo && 'u' in at) {
-        const k = walkK(p);
+        const k = walkK(p, when);
         return flipAt({ u: at.u + (p.walkTo.u - at.u) * k, w: at.w + (p.walkTo.w - at.w) * k });
       }
       return flipAt(at);
@@ -409,8 +417,33 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             const torsoGear = p.torsoGear || torsoWorn.length ? <g>{torsoWorn.map((x, k) => <g key={k}>{worn(x.what, x)}</g>)}{p.torsoGear}</g> : undefined;
             const holdSpec = holdOf(p.hold);
             const heldNode = holdSpec ? (holdSpec.node ?? held(holdSpec.what as string, holdSpec)) : undefined;
-            const handLProp = p.handLProp ?? (holdSpec?.side === 'L' ? heldNode : undefined);
-            const handRProp = p.handRProp ?? (holdSpec && holdSpec.side !== 'L' ? heldNode : undefined);
+            // a thing that stays level or leaves the hand is carried by Staged, which knows the arm at every frame
+            const rel = holdSpec?.release;
+            const level = holdSpec ? holdSpec.level ?? (holdSpec.what !== undefined && HELD_LEVEL.includes(holdSpec.what)) : false;
+            let carry: Carry | undefined;
+            if (holdSpec && (level || rel)) {
+              carry = { node: heldNode, side: holdSpec.side, level, bottom: heldBottom(holdSpec.what) * (holdSpec.scale ?? 1) };
+              if (rel) {
+                if (typeof rel.at !== 'number') throw new Error(`hold.release needs the frame the thing leaves the hand: release: { at: 52, to: 'table' }. Got ${JSON.stringify(rel)}`);
+                const w0 = whereOf(p, i, rel.at);
+                const spot = 'u' in w0 ? pl.ground.project(w0.u, w0.w) : { x: w0.x, y: w0.y, scale: w0.scale ?? 1 };
+                let to: { x: number; y: number };
+                if (rel.to === undefined) to = { x: spot.x + (yawNow < 0 ? -1 : 1) * 46 * spot.scale, y: spot.y };
+                else if (typeof rel.to === 'string') to = pl.pointOf(rel.to);
+                else if (typeof rel.to === 'number') {
+                  if (!people[rel.to]) throw new Error(`hold.release.to ${rel.to}: there is no person ${rel.to} in this shot (people has ${people.length})`);
+                  const g = spotOfPerson(rel.to);
+                  to = { x: g.x, y: g.y - BODY * g.scale * 0.45 };
+                } else {
+                  const s2 = flipAt({ u: rel.to.u, w: rel.to.w }) as { u: number; w: number };
+                  const g = pl.ground.project(s2.u, s2.w);
+                  to = { x: g.x, y: g.y - BODY * g.scale * (rel.to.v ?? 0) * 0.9 };
+                }
+                carry.release = { at: rel.at, how: rel.how ?? (rel.to === undefined ? 'drop' : 'put'), dur: rel.dur, to: { x: to.x + (rel.dx ?? 0), y: to.y + (rel.dy ?? 0) }, spot };
+              }
+            }
+            const handLProp = p.handLProp ?? (!carry && holdSpec?.side === 'L' ? heldNode : undefined);
+            const handRProp = p.handRProp ?? (!carry && holdSpec && holdSpec.side !== 'L' ? heldNode : undefined);
             const moving = !!p.walkTo && !on && walkK(p) < 1;
             const WALKS = ['walk', 'run', 'sneak'];
             // a walk ends where it goes: no stepping on the spot after the arrival
@@ -427,6 +460,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
               return { at: b.at, act: actionName(b.act), yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
             });
+            // the arm stops carrying once the thing is gone, unless the shot says what the person does next
+            if (rel && !pAct && !beats.some((b) => b.act && b.at >= rel.at)) stageBeats.push({ at: rel.at + 4, act: 'idle' });
             const reach = targetOf(p.reach);
             const combinedHead = vfx?.length ? (
               <g>
@@ -439,7 +474,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return (
               <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
                 pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
-                rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} />
+                rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} carry={carry} />
             );
           })}
           {spec.duo ? <Duo a={{ at: flipAt(spec.duo.a.at) as { u: number; w: number }, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: flipAt(spec.duo.b.at) as { u: number; w: number }, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
@@ -475,7 +510,10 @@ export const Shot: React.FC<ShotSpec & { t?: number; len?: number; f?: number }>
 export type PhoneMsg = { at: number; text: string; from?: 'them' | 'me' };
 export type PhoneSpec = {
   /** the contact at the top of the chat, or who the banner is from */ name: string;
-  /** 'chat' (default): a conversation; 'lock': the lock screen with its banners */ screen?: 'chat' | 'lock';
+  /** 'chat' (default): a conversation; 'lock': the lock screen with its banners; 'photo': a picture fills the screen */ screen?: 'chat' | 'lock' | 'photo';
+  /** what the picture shows (screen: 'photo'): people from the cast as busts, an outfit laid flat, or your own drawing
+   * in a 100 x 100 box. `caption` is the line under it, `posted` a "published" tick appearing at a frame. */
+  photo?: { people?: { skin?: string; hair?: string; jacket?: string }[]; outfit?: { top: string; bottom?: string; shoes?: string }; node?: React.ReactNode; caption?: string; back?: string; posted?: { at: number; text?: string } };
   /** bubbles, each appearing at its frame (the shot's own clock) */ messages?: PhoneMsg[];
   /** a banner sliding in from the top at frame `at` */ notify?: { at: number; text: string; from?: string };
   /** the thumb types `text` into the input bar from frame `at` over `dur` frames */ typing?: { at: number; text: string; dur?: number };
@@ -547,6 +585,60 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
         <rect width={W} height={H} fill="url(#phoneLockGlow)" />
         {status}
         <text x={W / 2} y={H * 0.21} textAnchor="middle" fontSize={fs * 4.2} fontWeight={300} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
+        {banner}
+      </g>
+    );
+  }
+  if (spec.screen === 'photo') {
+    const ph = spec.photo ?? {};
+    const top = H * 0.1;
+    const side = W - pad * 1.2;
+    const u = side / 100;
+    const busts = (ph.people ?? []).slice(0, 4);
+    const posted = ph.posted && t >= ph.posted.at ? ease01((t - ph.posted.at) / 6) : 0;
+    return (
+      <g>
+        <rect width={W} height={H} fill="#10141C" />
+        {status}
+        <text x={pad} y={top - fs * 0.5} fontSize={fs * 1.05} fontWeight={700} fill="#F4F6FA" fontFamily={font}>{spec.name}</text>
+        <svg x={pad * 0.6} y={top} width={side} height={side} viewBox="0 0 100 100">
+          <rect width={100} height={100} rx={5} fill={ph.back ?? '#7FA6C9'} />
+          <rect y={66} width={100} height={34} fill="#00000022" />
+          {busts.map((b, i) => {
+            const n = busts.length;
+            const cx = n === 1 ? 50 : 50 + (i - (n - 1) / 2) * Math.min(34, 76 / n);
+            const r = n <= 2 ? 15 : 11;
+            const cy = 48 + (i % 2) * 3;
+            return (
+              <g key={i}>
+                <path d={`M ${cx - r * 1.9} 100 Q ${cx - r * 1.9} ${cy + r * 1.5} ${cx} ${cy + r * 1.3} Q ${cx + r * 1.9} ${cy + r * 1.5} ${cx + r * 1.9} 100 Z`} fill={b.jacket ?? '#4E6FA8'} stroke="#1F1B2E" strokeWidth={1.4} />
+                <rect x={cx - r * 0.3} y={cy + r * 0.7} width={r * 0.6} height={r * 0.8} fill={b.skin ?? '#E9BE9A'} />
+                <circle cx={cx} cy={cy} r={r} fill={b.skin ?? '#E9BE9A'} stroke="#1F1B2E" strokeWidth={1.4} />
+                <path d={`M ${cx - r * 1.05} ${cy + r * 0.1} Q ${cx - r * 1.15} ${cy - r * 1.25} ${cx} ${cy - r * 1.18} Q ${cx + r * 1.15} ${cy - r * 1.25} ${cx + r * 1.05} ${cy + r * 0.1} Q ${cx} ${cy - r * 0.75} ${cx - r * 1.05} ${cy + r * 0.1} Z`} fill={b.hair ?? '#3A2A20'} stroke="#1F1B2E" strokeWidth={1.2} />
+                <path d={`M ${cx - r * 0.35} ${cy + r * 0.35} Q ${cx} ${cy + r * 0.7} ${cx + r * 0.35} ${cy + r * 0.35}`} fill="none" stroke="#1F1B2E" strokeWidth={1.3} strokeLinecap="round" />
+                <circle cx={cx - r * 0.38} cy={cy - r * 0.05} r={r * 0.09} fill="#1F1B2E" />
+                <circle cx={cx + r * 0.38} cy={cy - r * 0.05} r={r * 0.09} fill="#1F1B2E" />
+              </g>
+            );
+          })}
+          {ph.outfit ? (
+            <g stroke="#1F1B2E" strokeWidth={1.4} strokeLinejoin="round">
+              <path d="M 30 16 L 42 10 Q 50 16 58 10 L 70 16 L 80 30 L 70 36 L 66 30 L 66 54 L 34 54 L 34 30 L 30 36 L 20 30 Z" fill={ph.outfit.top} />
+              <path d="M 35 58 L 65 58 L 68 92 L 54 92 L 50 68 L 46 92 L 32 92 Z" fill={ph.outfit.bottom ?? '#2F3A52'} />
+              {ph.outfit.shoes ? <path d="M 12 86 L 24 86 Q 28 92 24 94 L 10 94 Z M 76 86 L 88 86 Q 92 92 88 94 L 74 94 Z" fill={ph.outfit.shoes} /> : null}
+            </g>
+          ) : null}
+          {ph.node}
+        </svg>
+        {wrapText(ph.caption ?? '', 24).slice(0, 3).map((l, i) => (
+          <text key={i} x={pad} y={top + side + fs * (1.7 + i * 1.3)} fontSize={fs} fill="#F4F6FA" fontFamily={font}>{l}</text>
+        ))}
+        {posted ? (
+          <g opacity={posted} transform={`translate(${W / 2} ${H * 0.74})`}>
+            <rect x={-W * 0.36} y={-fs * 1.1} width={W * 0.72} height={fs * 2.2} rx={fs * 1.1} fill="#35C759" />
+            <text y={fs * 0.35} textAnchor="middle" fontSize={fs} fontWeight={700} fill="#FFF" fontFamily={font}>{`✓ ${ph.posted!.text ?? 'Photo publiée'}`}</text>
+          </g>
+        ) : null}
         {banner}
       </g>
     );

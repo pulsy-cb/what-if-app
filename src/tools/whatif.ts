@@ -10,7 +10,7 @@ import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 import { readEpisodeShots, syncShotsBarrel } from './episode-source.js';
-import { applyCardAngles, stagingCodeProblems, stagingProblems, usesStaging } from './staging.js';
+import { applyCardAngles, missingCards, stagingCodeProblems, usesStaging } from './staging.js';
 
 /** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
 function hexLuminance(hex: string): number | null {
@@ -952,7 +952,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const epShotList: any[] = Array.isArray(episode?.shots) ? episode.shots : [];
   const staged = usesStaging(epShotList);
   const stagingErrs = [
-    ...(staged ? stagingProblems(epShotList) : []),
+    // the wording of the cards is stage_shots' business: replaying it here printed 68 "see is too short" lines at the stills step (custom, 2026-11-13)
+    ...(staged ? missingCards(epShotList) : []),
     ...(fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx')) ? stagingCodeProblems(epShotList, bodies, staged, projectAspect(projectRoot, episode)) : []),
   ];
   errors.unshift(...stagingErrs.slice(0, 8));

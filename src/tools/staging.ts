@@ -69,14 +69,27 @@ export function stageCardProblems(card: any, shot: { id: string; size?: string; 
 
 const signature = (c: StageCard): string => (c.people ?? []).map((p) => `${p.who}:${norm(p.does)}`).sort().join('|');
 
+/** The shots that still have no card, as one line (empty when every shot has one). */
+export function missingCards(shots: any[]): string[] {
+  const missing = shots.filter((s) => !s?.stage).map((s) => String(s.id));
+  return missing.length ? [`${missing.length}/${shots.length} shots have no staging card (${missing.slice(0, 12).join(', ')}): call stage_shots { episode, cards: [...] } BEFORE coding them`] : [];
+}
+
+/** Is this shot written? The scaffold's placeholder file does not count. */
+export function shotCoded(episodeDir: string, id: string): boolean {
+  try {
+    const src = fs.readFileSync(path.join(episodeDir, 'shots', `${id}.tsx`), 'utf8');
+    return !/PLACEHOLDER/.test(src) && new RegExp(`export const ${id}\\b`).test(src);
+  } catch {
+    return false;
+  }
+}
+
 /** Cards as a whole: none missing, no two neighbours alike, nobody doing the same thing all along. */
 export function stagingProblems(shots: any[]): string[] {
   const out: string[] = [];
-  const missing = shots.filter((s) => !s?.stage).map((s) => String(s.id));
-  if (missing.length) {
-    out.push(`${missing.length}/${shots.length} shots have no staging card (${missing.slice(0, 12).join(', ')}): call stage_shots { episode, cards: [...] } BEFORE coding them`);
-    return out;
-  }
+  const missing = missingCards(shots);
+  if (missing.length) return missing;
   shots.forEach((s, i) => out.push(...stageCardProblems(s.stage, { id: String(s.id), size: s.size, note: s.note }, i === 0)));
   for (let i = 1; i < shots.length; i++) {
     const a = shots[i - 1].stage as StageCard;
@@ -104,7 +117,7 @@ export function stagingProblems(shots: any[]): string[] {
 
 // Only a thing someone holds or handles has to be drawn by the shot. The first runs put the furniture and the set in
 // `objects` (barreaux, escaliers, chaise, télé: 150 refusals in 8 projects, 2026-11-13); those belong to the place.
-const HANDLED = /\b(phone|telephone|portable|smartphone|handset|combine|bag|sac|cartable|paper|papier|feuille|lettre|letter|note|copie|crumpled|cup|tasse|mug|verre|glass|keys?|cles?|book|livre|cahier|pen|stylo|crayon|pencil|craie|chalk|folder|dossier|box|boite|carton|wallet|portefeuille|manette|controller|remote|telecommande|camera|billet|ticket|badge|card|carte|bottle|bouteille|knife|couteau|ring|bague|gift|cadeau|photo)s?\b/;
+const HANDLED = /\b(phone|telephone|portable|smartphone|handset|combine|bag|sac|cartable|paper|papier|feuille|lettre|letter|note|copie|crumpled|cup|tasse|mug|verre|glass|keys?|cles?|book|livre|cahier|pen|stylo|crayon|pencil|craie|chalk|folder|dossier|box|boite|carton|wallet|portefeuille|manette|controller|remote|telecommande|camera|billet|ticket|badge|card|carte|bottle|bouteille|tray|plateau|plate|assiette|knife|couteau|ring|bague|gift|cadeau|photo)s?\b/;
 /** The objects of a card that a person holds or handles (the rest is set dressing). */
 export const handledObjects = (objects: unknown): string[] => (Array.isArray(objects) ? objects.filter((o): o is string => typeof o === 'string' && HANDLED.test(norm(o))) : []);
 const NARRATOR = /^(NARR|NARRATOR|NARRATEUR|NARRATRICE|VOIX|VOICE|VOIX_OFF)$/;
@@ -231,11 +244,12 @@ export const stageShots: Tool = {
           required: ['id', 'see', 'subject', 'people', 'objects'],
         },
       },
+      userAsked: { type: 'boolean', description: "true ONLY when the user's own message asks to change these shots after the board exists. Never to make a check pass." },
     },
     required: ['episode', 'cards'],
     additionalProperties: false,
   },
-  async run(input: { episode: string; cards: any[] }, ctx) {
+  async run(input: { episode: string; cards: any[]; userAsked?: boolean }, ctx) {
     const slug = String(input.episode ?? '').trim();
     if (!/^[A-Za-z0-9_-]+$/.test(slug)) throw new Error('episode must be a slug such as "my-episode"');
     const file = path.join(ctx.projectRoot, 'src', 'episodes', slug, 'episode.json');
@@ -246,6 +260,21 @@ export const stageShots: Tool = {
     const byId = new Map(shots.map((s) => [String(s.id).toUpperCase(), s]));
     const unknown: string[] = [];
     let written = 0;
+    // Once the board exists the card is the contract the code is checked against. The first real run with the check
+    // (custom, 2026-11-13) rewrote 138 cards on 32 coded shots to make it pass, and fixed the code 10 times: a bottle
+    // thrown at a wall ended as a card with nobody and nothing in it. So a coded shot keeps its card, unless the
+    // Reviewer refused that shot (and then the card may not lose people or handled objects) or the user asked.
+    const epDir = path.dirname(file);
+    const boarded = fs.existsSync(path.join(ctx.projectRoot, 'out', slug, 'storyboard.jpg'));
+    const refused = new Set<string>();
+    try {
+      const review = JSON.parse(fs.readFileSync(path.join(ctx.projectRoot, 'out', slug, 'review.json'), 'utf8'));
+      if (review && !review.pass) for (const i of review.issues ?? []) if (i?.severity === 'error') for (const id of String(i.shot ?? '').toUpperCase().match(/\bS\d+\b/g) ?? []) refused.add(id);
+    } catch {
+      /* no review yet */
+    }
+    const frozen: string[] = [];
+    const weakened: string[] = [];
     for (const c of Array.isArray(input.cards) ? input.cards : []) {
       const shot = byId.get(String(c?.id ?? '').toUpperCase());
       if (!shot) {
@@ -253,6 +282,18 @@ export const stageShots: Tool = {
         continue;
       }
       const { id: _id, ...card } = c;
+      const sid = String(shot.id);
+      if (boarded && shot.stage && !input.userAsked && JSON.stringify(shot.stage) !== JSON.stringify(card) && shotCoded(epDir, sid)) {
+        if (!refused.has(sid.toUpperCase())) {
+          frozen.push(sid);
+          continue;
+        }
+        const fewer = (Array.isArray(card.people) ? card.people.length : 0) < (shot.stage.people ?? []).length || handledObjects(card.objects).length < handledObjects(shot.stage.objects).length;
+        if (fewer) {
+          weakened.push(sid);
+          continue;
+        }
+      }
       shot.stage = card;
       written++;
     }
@@ -262,6 +303,13 @@ export const stageShots: Tool = {
     // a batch is not a failure: the first run of gpt-6.1-terra read "ERROR" seven times while it was only half-way (2026-11-12)
     const problems = left.length ? shots.flatMap((s, i) => (s.stage ? stageCardProblems(s.stage, { id: String(s.id), size: s.size, note: s.note }, i === 0) : [])) : stagingProblems(shots);
     const head = `${written} card(s) saved${unknown.length ? `; unknown shot ids ignored: ${unknown.join(', ')}` : ''}.`;
+    if (frozen.length || weakened.length) {
+      const lines = [
+        frozen.length ? `${frozen.join(', ')}: NOT changed. These shots are coded and on the board: the card is what the code must show. When a check says the code does not match the card, fix the CODE with edit_shot, not the card.` : '',
+        weakened.length ? `${weakened.join(', ')}: NOT changed. The Reviewer refused these shots, so their card may be rewritten, but it may not lose a person or a handled object: put what is missing into the code with edit_shot.` : '',
+      ].filter(Boolean);
+      return { ok: false, summary: `${head}\n- ${lines.join('\n- ')}` };
+    }
     if (problems.length) return { ok: false, summary: `${head}\nTo fix before coding:\n- ${problems.slice(0, 20).join('\n- ')}` };
     if (left.length) return { ok: true, summary: `${head} ${left.length}/${shots.length} shots still need a card: ${left.join(', ')}. Send them before coding.` };
     return { ok: true, summary: `${head} All ${shots.length} shots are staged. Now code each shot so it matches its card (people, objects, angle, walkTo).` };

@@ -8,7 +8,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
-import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, refusedUnchanged, reviewEpisodeBoard, reviewStageCards } from './reviewer.js';
+import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, giveUpReview, refusedUnchanged, reopenReview, reviewEpisodeBoard, reviewStageCards } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -91,6 +91,18 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
   });
 
   try {
+    // the user is back on a project whose review was closed with defects: what gets fixed now is looked at again
+    try {
+      const opening = db.listMessages(threadId);
+      const lastMsg = opening[opening.length - 1];
+      if (lastMsg?.role === 'user' && !lastMsg.content.startsWith('[orchestrateur]')) {
+        const openSlug = activeEpisodeSlug(project.root, opening);
+        const left = openSlug ? reopenReview(project.root, openSlug) : null;
+        if (left) bus.emit(threadId, 'notice', { text: `Revue rouverte : ${left.join(', ')} seront revus après correction (stills puis board).` });
+      }
+    } catch {
+      /* reopening is a convenience: never a reason to fail the turn */
+    }
     let ranPipeline = false;
     let nudges = 0;
     let lastTodoKey = '';
@@ -99,6 +111,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     let consecutiveFails = 0;
     let checkpointedThisTurn = false;
     let reviewRounds = 0;
+    // render asked again while the reviewer's refusal stands and nothing was fixed
+    let renderAsksRefused = 0;
     // an expensive step failing again with the same error will fail a third time: stop instead of burning hours
     const expensiveFails = new Map<string, number>();
 
@@ -362,8 +376,29 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
           }
 
-          // The cards are read by the reviewer as soon as they are complete, before any shot is coded (text only, advisory)
-          if (call.name === 'stage_shots' && result.ok && /All \d+ shots are staged/.test(String(result.summary ?? '')) && deps.reviewProvider) {
+          if (result.ok && ['edit_shot', 'write_file', 'edit_file'].includes(call.name)) renderAsksRefused = 0;
+          if (!result.ok && call.name === 'whatif_run' && String(call.args?.step ?? '') === 'render' && /the independent reviewer refused this board/.test(String(result.summary ?? ''))) {
+            renderAsksRefused++;
+            const renderSlug = String(call.args?.episode ?? '').trim();
+            const firstRefused = (String(result.summary).match(/\[(S\d+)/) ?? [])[1] ?? 'the first refused shot';
+            if (renderAsksRefused === 2) {
+              // the long list was read eight times in a row without one edit (custom, 2026-11-13): say the one next call
+              const note = `[orchestrateur] Rien n'a changé depuis le refus du Reviewer : redemander render donne la même réponse. Ton prochain appel doit être edit_shot sur ${firstRefused} (puis stills des plans modifiés, puis board). Si tu redemandes render sans rien corriger, la vidéo sortira avec ses défauts.`;
+              heldNotes.push(note);
+              bus.emit(threadId, 'notice', { text: note });
+            } else if (renderAsksRefused >= 3 && renderSlug) {
+              const defects = giveUpReview(project.root, renderSlug);
+              if (defects) {
+                reviewRounds = config.reviewMaxRounds;
+                const note = `[orchestrateur] Render demandé ${renderAsksRefused} fois sans corriger un seul plan refusé : la revue est close, la vidéo sort avec ses défauts (${defects}). Relance whatif_run { step: "render" } maintenant, et cite ce fichier dans ton résumé.`;
+                heldNotes.push(note);
+                bus.emit(threadId, 'notice', { text: note });
+              }
+            }
+          }
+
+          // The cards are read by the reviewer once, when they are complete and before any shot is coded (text only, advisory)
+          if (call.name === 'stage_shots' && deps.reviewProvider) {
             const cardsSlug = String(call.args?.episode ?? '').trim();
             const cardsReviewer = cardsSlug ? deps.reviewProvider() : null;
             if (cardsReviewer) {
@@ -383,11 +418,14 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             result.ok
           ) {
             const epSlug = String(call.args?.episode ?? '').trim();
+            let reopenedReview = false;
             if (epSlug) {
               try {
                 const prevRev = JSON.parse(fs.readFileSync(path.join(project.root, 'out', epSlug, 'review.json'), 'utf8'));
                 // a shot refused three times in a row ended the review: no further round
                 if (prevRev?.ok && Array.isArray(prevRev.gaveUpOn) && prevRev.gaveUpOn.length) reviewRounds = config.reviewMaxRounds;
+                // reopened by the user: the rounds are counted from this turn, not from the run that closed the review
+                else if (prevRev?.reopened) reopenedReview = true;
                 else if (prevRev?.ok && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
                   reviewRounds = prevRev.blocking
                     ? prevRev.round
@@ -398,7 +436,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               }
             }
             const stuck = epSlug ? refusedUnchanged(project.root, epSlug) : null;
-            if (stuck) {
+            if (stuck && reopenedReview) {
+              /* a reopened review with no shot changed: nothing new to look at, and the render is not held back */
+            } else if (stuck) {
               // nothing that could fix the refused shots changed: no paid review, the render stays refused
               heldNotes.push(
                 `[orchestrateur] Le Reviewer n'est pas rappelé : tu n'as modifié aucun des plans refusés (${stuck.join(', ')}) ni un fichier partagé. Le rendu reste bloqué. Corrige ces plans avec edit_shot (ou le fichier partagé qui les concerne), relance leurs stills puis board.`,

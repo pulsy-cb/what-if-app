@@ -3952,10 +3952,48 @@ test('review: a shot refused three reviews in a row ends the review, and the car
     assert.match(formatReviewFeedback(r3, 'e'), /ARRÊT DE LA REVUE : S2 refusé\(s\) 3 fois de suite/);
     assert.match(fs.readFileSync('src/orchestrator/agent.ts', 'utf8'), /prevRev\.gaveUpOn\.length\) reviewRounds = config\.reviewMaxRounds;/);
 
+    // --- the user comes back to the closed review: the counts start again and the changed shots are looked at
+    const { reopenReview, refusedUnchanged } = await import('../dist/orchestrator/reviewer.js');
+    const reviewFile = path.join(root, 'out', 'e', 'review.json');
+    assert.equal(refusedUnchanged(root, 'e'), null, 'a closed review holds nothing back');
+    assert.deepEqual(reopenReview(root, 'e'), ['S2']);
+    const open = JSON.parse(fs.readFileSync(reviewFile, 'utf8'));
+    assert.equal(open.reopened, true);
+    assert.equal(open.gaveUpOn, undefined);
+    assert.equal(open.strikes, undefined);
+    assert.equal(open.blocking, false, 'the render is not held back by a reopening');
+    assert.equal(open.issues.length, 1, 'the defects stay: they say which shots to fix');
+    assert.equal(reopenReview(root, 'e'), null, 'reopened once');
+    assert.deepEqual(refusedUnchanged(root, 'e'), ['S2'], 'nothing fixed yet: no paid review for the same pictures');
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(dir, 'shots', 'S2.tsx'), later, later);
+    assert.equal(refusedUnchanged(root, 'e'), null, 'S2 was edited: worth a look');
+    const r4 = await reviewEpisodeBoard(refuse, root, 'e', undefined, { round: 1 });
+    assert.deepEqual(r4.strikes, { S2: 1 }, 'three new chances, not a fourth refusal');
+    assert.equal(r4.blocking, true);
+    assert.equal(r4.gaveUpOn, undefined);
+    assert.equal(r4.mode, r3.mode, 'looked at the way a later round is: the changed shots, not the whole board again');
+    assert.equal(JSON.parse(fs.readFileSync(reviewFile, 'utf8')).reopened, undefined);
+    assert.equal(reopenReview(root, 'e'), null, 'a review still in progress is not reopened');
+    fs.writeFileSync(reviewFile, JSON.stringify({ ok: true, pass: true, issues: [], createdAt: new Date().toISOString() }));
+    assert.equal(reopenReview(root, 'e'), null, 'an accepted board has nothing to reopen');
+    assert.equal(reopenReview(root, 'nope'), null);
+    const agentSrc = fs.readFileSync('src/orchestrator/agent.ts', 'utf8');
+    assert.match(agentSrc, /lastMsg\?\.role === 'user' && !lastMsg\.content\.startsWith\('\[orchestrateur\]'\)/);
+    assert.match(agentSrc, /else if \(prevRev\?\.reopened\) reopenedReview = true;/);
+
     // --- the cards, read before any code
     let calls = 0;
     let seen = '';
     const reader = (text) => ({ model: 'm', chat: async ({ messages }) => { calls++; seen = messages.map((m) => m.content).join('\n'); return { text }; } });
+    const marker = path.join(root, 'out', 'e', 'cards-review.json');
+    // shots are already coded: the reading comes too late, it would only have cards rewritten instead of shots (custom, 2026-11-13: 26 readings after the code)
+    assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null);
+    assert.equal(calls, 0, 'no reading once a shot is coded');
+    assert.equal(fs.existsSync(marker), false);
+    for (const s of shots) fs.rmSync(path.join(dir, 'shots', `${s.id}.tsx`));
+    // the scaffold's placeholder shot is not code
+    fs.writeFileSync(path.join(dir, 'shots', 'S1.tsx'), '// PLACEHOLDER.\nexport const S1 = () => null;');
     const note = await reviewStageCards(reader('ok {"issues":[{"shot":"S2","problem":"aucun sujet clair","fix":"cadre sur le sac"},{"shot":"S3","problem":""}]}'), root, 'e');
     assert.match(note, /LECTURE DES FICHES, avant le code\] 1 fiche\(s\)/);
     assert.match(note, /- \[S2\] aucun sujet clair\n {2}→ cadre sur le sac/);
@@ -3963,22 +4001,25 @@ test('review: a shot refused three reviews in a row ends the review, and the car
     assert.match(seen, /La prof fouille le sac\./, 'the script is given');
     assert.match(seen, /S2 \[medium\] Plan S2 .* — sujet : the bag/, 'and every card');
     assert.match(seen, /format 9:16, 3 plans/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'out', 'e', 'cards-review.json'), 'utf8')).issues.length, 1);
-    // the same cards are not read twice; changed cards are
+    assert.equal(JSON.parse(fs.readFileSync(marker, 'utf8')).issues.length, 1);
+    // once per episode: neither the same cards nor changed cards are read again
     assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null);
-    assert.equal(calls, 1);
     writeEp(shots.map((s, i) => (i === 0 ? { ...s, stage: card('S1', 'Plan S1 : gros plan sur le sac retourné, trois crayons tombent sur le pupitre') } : s)));
+    assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null, 'changed cards are not read a second time');
+    assert.equal(calls, 1);
+    // nothing to say is silence; an unreadable answer is not a verdict and leaves no marker; incomplete cards are not read at all
+    fs.rmSync(marker);
     assert.equal(await reviewStageCards(reader('{"issues":[]}'), root, 'e'), null, 'nothing to say is silence');
     assert.equal(calls, 2);
-    // an unreadable answer is not a verdict, and incomplete cards are not read at all
-    writeEp(shots.map((s, i) => (i === 0 ? { ...s, stage: card('S1', 'Plan S1 : la prof pose le sac vide sur le pupitre et recule d un pas') } : s)));
+    fs.rmSync(marker);
     assert.equal(await reviewStageCards(reader('je ne sais pas'), root, 'e'), null);
     assert.equal(await reviewStageCards({ model: 'm', chat: async () => { throw new Error('down'); } }, root, 'e'), null);
+    assert.equal(fs.existsSync(marker), false);
     writeEp(shots.map((s, i) => (i === 1 ? { ...s, stage: null } : s)));
     const before = calls;
     assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null);
     assert.equal(calls, before, 'no call while a card is missing');
-    assert.match(fs.readFileSync('src/orchestrator/agent.ts', 'utf8'), /call\.name === 'stage_shots' && result\.ok && \/All \\d\+ shots are staged\//);
+    assert.match(fs.readFileSync('src/orchestrator/agent.ts', 'utf8'), /call\.name === 'stage_shots' && deps\.reviewProvider\)/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -4028,4 +4069,103 @@ test('worn things and animal heads: a library that follows the head, unknown nam
   assert.match(guide, /wear: \['eye-mask'/);
   assert.match(guide, /animal: 'lion'/);
   assert.match(guide, /A four-legged animal does not exist in the engine/);
+});
+
+test('after the custom run: a coded shot keeps its card, render asked again closes the review, things stay level and leave the hand, a photo on the phone', async () => {
+  const { stageShots, missingCards, shotCoded, stagingProblems, handledObjects } = await import('../dist/tools/staging.js');
+  const { giveUpReview } = await import('../dist/orchestrator/reviewer.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-frozen-'));
+  try {
+    const dir = path.join(root, 'src', 'episodes', 'e');
+    const out = path.join(root, 'out', 'e');
+    fs.mkdirSync(path.join(dir, 'shots'), { recursive: true });
+    fs.mkdirSync(out, { recursive: true });
+    const card = (id, over = {}) => ({ id, see: `Plan ${id} : Sloane lance la bouteille contre le mur de la cantine devant Alix`, subject: 'the bottle', people: [{ who: 'SLOANE', where: 'near the table', does: `throws the bottle at the wall ${id}` }, { who: 'ALIX', where: 'behind her', does: `steps back with both hands up ${id}` }], objects: ['bouteille'], change: 'Sloane has stood up from the bench', ...over });
+    const ids = ['S1', 'S2', 'S3'];
+    fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify({ shots: ids.map((id) => ({ id, size: 'medium', note: 'n', stage: null })) }));
+    const ctx = { projectRoot: root, log: () => {} };
+    const stage = (cards, extra = {}) => stageShots.run({ episode: 'e', cards, ...extra }, ctx);
+    const saved = (id) => JSON.parse(fs.readFileSync(path.join(dir, 'episode.json'), 'utf8')).shots.find((s) => s.id === id).stage;
+    assert.equal((await stage(ids.map((id) => card(id)))).ok, true);
+    assert.equal(shotCoded(dir, 'S1'), false);
+    fs.writeFileSync(path.join(dir, 'shots', 'S1.tsx'), '// PLACEHOLDER.\nexport const S1 = () => null;');
+    assert.equal(shotCoded(dir, 'S1'), false, 'the scaffold shot is not code');
+    for (const id of ['S1', 'S2']) fs.writeFileSync(path.join(dir, 'shots', `${id}.tsx`), `export const ${id} = shot({ place: R, people: [{ who: SLOANE }] });`);
+    assert.equal(shotCoded(dir, 'S1'), true);
+    // before the board, the plan can still change
+    assert.equal((await stage([card('S1', { subject: 'the wall' })])).ok, true);
+    assert.equal(saved('S1').subject, 'the wall');
+    // the board exists: a coded shot keeps its card, an uncoded one does not
+    fs.writeFileSync(path.join(out, 'storyboard.jpg'), 'x');
+    const weak = { see: 'Plan S2 : en insert la bouteille heurte le mur, le geste appartient au plan précédent', people: [], objects: [] };
+    const r1 = await stage([card('S2', weak), card('S3', { subject: 'Alix' })]);
+    assert.equal(r1.ok, false);
+    assert.match(r1.summary, /^1 card\(s\) saved/);
+    assert.match(r1.summary, /S2: NOT changed\. These shots are coded and on the board.*fix the CODE with edit_shot, not the card/);
+    assert.equal(saved('S2').people.length, 2, 'the card that the code must match is still there');
+    assert.equal(saved('S3').subject, 'Alix', 'S3 is not coded yet');
+    assert.equal((await stage([card('S2')])).ok, true, 'sending the same card again is not a change');
+    // the Reviewer refused S2: its card may be rewritten, not emptied
+    fs.writeFileSync(path.join(out, 'review.json'), JSON.stringify({ ok: true, pass: false, blocking: true, model: 'm', round: 1, summary: 's', createdAt: new Date().toISOString(), issues: [{ shot: 'S2', severity: 'error', problem: 'la bouteille est absente', fix: 'ajoute-la' }, { shot: 'S1', severity: 'warning', problem: 'w', fix: 'f' }] }));
+    const r2 = await stage([card('S2', weak)]);
+    assert.equal(r2.ok, false);
+    assert.match(r2.summary, /S2: NOT changed\. The Reviewer refused these shots.*may not lose a person or a handled object/);
+    assert.equal(saved('S2').people.length, 2);
+    assert.equal((await stage([card('S2', { subject: 'the bottle in the air' })])).ok, true);
+    assert.equal(saved('S2').subject, 'the bottle in the air');
+    assert.equal((await stage([card('S1', { subject: 'again' })])).ok, false, 'a warning is not a refusal: S1 stays frozen');
+    // the user asked for the change
+    assert.equal((await stage([card('S1', { subject: 'what the user wants' })], { userAsked: true })).ok, true);
+    assert.equal(saved('S1').subject, 'what the user wants');
+
+    // --- the wording of the cards is checked by stage_shots, not replayed at stills and render
+    const short = [{ id: 'S1', stage: { see: 'court' } }, { id: 'S2', stage: null }];
+    assert.deepEqual(missingCards([{ id: 'S1', stage: { see: 'court' } }]), []);
+    assert.match(missingCards(short).join(), /1\/2 shots have no staging card \(S2\)/);
+    assert.match(stagingProblems([{ id: 'S1', size: 'medium', stage: { see: 'court' } }]).join(), /see is too short/);
+    const whatif = fs.readFileSync('src/tools/whatif.ts', 'utf8');
+    assert.match(whatif, /\.\.\.\(staged \? missingCards\(epShotList\) : \[\]\)/);
+    assert.doesNotMatch(whatif, /stagingProblems\(/);
+    assert.deepEqual(handledObjects(["plateau d'Alix", 'assiette', 'tray', 'banc']), ["plateau d'Alix", 'assiette', 'tray']);
+
+    // --- render asked three times with nothing fixed: the review is closed, the video ships with its defects
+    assert.equal(giveUpReview(root, 'e'), 'out/e/DEFAUTS-NON-CORRIGES.md');
+    const closed = JSON.parse(fs.readFileSync(path.join(out, 'review.json'), 'utf8'));
+    assert.equal(closed.blocking, false);
+    assert.deepEqual(closed.gaveUpOn, ['S2']);
+    assert.match(fs.readFileSync(path.join(out, 'DEFAUTS-NON-CORRIGES.md'), 'utf8'), /\*\*S2\*\* — la bouteille est absente/);
+    assert.equal(giveUpReview(root, 'e'), null, 'nothing to close twice');
+    assert.equal(giveUpReview(root, 'nope'), null);
+    const agent = fs.readFileSync('src/orchestrator/agent.ts', 'utf8');
+    assert.match(agent, /if \(renderAsksRefused === 2\)/);
+    assert.match(agent, /renderAsksRefused >= 3 && renderSlug\) \{\s+const defects = giveUpReview\(project\.root, renderSlug\);/);
+    assert.match(agent, /\['edit_shot', 'write_file', 'edit_file'\]\.includes\(call\.name\)\) renderAsksRefused = 0;/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // --- the engine: level things, a thing that leaves the hand, a photo on the phone
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const objects = fs.readFileSync(path.join(eng, 'objects.tsx'), 'utf8');
+  for (const name of ['tray', 'plate', 'bottle']) {
+    assert.match(objects, new RegExp(`HELD_NAMES: HeldName\\[\\] = \\[[^\\]]*'${name}'`));
+    assert.match(objects, new RegExp(`\\n  ${name}: \\(c\\) => \\(`), `${name} is drawn`);
+  }
+  assert.match(objects, /HELD_LEVEL: readonly string\[\] = \['tray', 'plate', 'bottle'\]/);
+  const stageSrc = fs.readFileSync(path.join(eng, 'stage.tsx'), 'utf8');
+  assert.match(stageSrc, /carry\.level \? <g transform=\{`rotate\(\$\{armAngle\(full\)\} 0 10\)`\}>/, 'a level thing is turned back about the palm');
+  assert.match(stageSrc, /if \(!rel \|\| now < rel\.at\) \{/, 'in the hand until the release frame');
+  assert.match(stageSrc, /const then = poseAtFrame\(rel\.at, rel\.spot \?\? spot\);\s+const start = handOf\(then\.full, side, b\);/, 'it starts from where the hand was at that frame');
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  assert.match(shotSrc, /const handRProp = p\.handRProp \?\? \(!carry && holdSpec && holdSpec\.side !== 'L' \? heldNode : undefined\);/, 'no second copy in the hand');
+  assert.match(shotSrc, /else if \(typeof rel\.to === 'string'\) to = pl\.pointOf\(rel\.to\);/);
+  assert.match(shotSrc, /hold\.release needs the frame the thing leaves the hand/);
+  assert.match(shotSrc, /if \(holdSpec && \(level \|\| rel\)\) \{/, 'a plain hold goes the way it always did');
+  assert.match(shotSrc, /if \(spec\.screen === 'photo'\) \{/);
+  assert.match(shotSrc, /screen\?: 'chat' \| 'lock' \| 'photo';/);
+  const { SHOT_GUIDE: directorGuide } = await import('../dist/orchestrator/director-guide.js');
+  assert.match(directorGuide, /release: \{ at: 52, to: 'table' \}/);
+  assert.match(directorGuide, /level: true/);
+  assert.match(directorGuide, /screen: 'photo', photo: \{ people: \[ALIX, SLOANE\]/);
+  assert.match(directorGuide, /card of a coded shot is frozen/);
 });

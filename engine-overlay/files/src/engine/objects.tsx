@@ -7,14 +7,21 @@ import React from 'react';
 const INK = '#1F1B2E';
 const SW = 4;
 
-export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box';
-export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box'];
+export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle';
+export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box', 'tray', 'plate', 'bottle'];
 export type HeldOpts = { color?: string; scale?: number };
 
 const DEFAULTS: Record<HeldName, string> = {
   phone: '#2B2F3A', handset: '#E7DCC2', bag: '#2F4A78', paper: '#F6F1E4', crumpled: '#F1ECDD', cup: '#F3EEE2',
   keys: '#C9A546', book: '#A8443B', pen: '#2D5FA8', folder: '#D8B45A', box: '#B98A56',
+  tray: '#A9AFB8', plate: '#F3EEE2', bottle: '#4E8F6A',
 };
+
+/** Things that stay level whatever the arm does: a tray held like a phone stood on its edge (custom run, 2026-11-13). */
+export const HELD_LEVEL: readonly string[] = ['tray', 'plate', 'bottle'];
+/** How far below the palm line each drawing ends: where it rests once put down. */
+const BOTTOM: Record<HeldName, number> = { phone: 34, handset: 52, bag: 94, paper: 50, crumpled: 34, cup: 40, keys: 60, book: 48, pen: 26, folder: 50, box: 52, tray: 16, plate: 14, bottle: 30 };
+export const heldBottom = (name?: string): number => BOTTOM[name as HeldName] ?? 24;
 
 const draw: Record<HeldName, (c: string) => React.ReactNode> = {
   phone: (c) => (
@@ -85,6 +92,28 @@ const draw: Record<HeldName, (c: string) => React.ReactNode> = {
     <g>
       <rect x={-36} y={-6} width={72} height={58} rx={3} fill={c} stroke={INK} strokeWidth={SW} />
       <path d="M -36 10 L 36 10 M 0 -6 L 0 10" stroke={INK} strokeWidth={3} opacity={0.5} />
+    </g>
+  ),
+  // seen from the side, lying flat on the palm: a canteen tray with a bowl and a glass on it
+  tray: (c) => (
+    <g>
+      <path d="M -30 -2 Q -30 -14 -18 -14 L -6 -14 Q 6 -14 6 -2 Z" fill="#ECE4D3" stroke={INK} strokeWidth={3} strokeLinejoin="round" />
+      <rect x={18} y={-22} width={14} height={20} rx={2} fill="#CFE3EE" stroke={INK} strokeWidth={3} />
+      <rect x={-62} y={-2} width={124} height={14} rx={6} fill={c} stroke={INK} strokeWidth={SW} />
+    </g>
+  ),
+  plate: (c) => (
+    <g>
+      <path d="M -20 0 Q -20 -12 0 -12 Q 20 -12 20 0 Z" fill="#D9A45B" stroke={INK} strokeWidth={3} strokeLinejoin="round" />
+      <path d="M -38 0 L 38 0 Q 30 12 14 12 L -14 12 Q -30 12 -38 0 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+    </g>
+  ),
+  // upright, held by its body: the neck goes up
+  bottle: (c) => (
+    <g>
+      <rect x={-5} y={-52} width={10} height={10} rx={2} fill="#D8D2C4" stroke={INK} strokeWidth={3} />
+      <path d="M -5 -42 L 5 -42 L 6 -30 Q 14 -24 14 -12 L 14 24 Q 14 30 8 30 L -8 30 Q -14 30 -14 24 L -14 -12 Q -14 -24 -6 -30 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+      <rect x={-14} y={-6} width={28} height={18} fill="#F6F1E4" opacity={0.85} />
     </g>
   ),
 };

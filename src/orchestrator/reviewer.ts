@@ -11,7 +11,7 @@ import {
 } from '../tools/episode-source.js';
 import { directorSizeMismatches, timedChanges } from '../tools/whatif.js';
 import { shotWordFrames } from './context.js';
-import { formatStageCards } from '../tools/staging.js';
+import { formatStageCards, shotCoded } from '../tools/staging.js';
 
 export { extractShotIds as extractReviewShotIds };
 
@@ -45,6 +45,8 @@ export type ReviewReport = {
   strikes?: Record<string, number>;
   /** shots refused three times in a row: the review stops there instead of asking again */
   gaveUpOn?: string[];
+  /** a closed review the user came back to: the next board is looked at again, on the shots that changed */
+  reopened?: boolean;
 };
 
 const MAX_REVIEW_IMAGES = 6;
@@ -582,7 +584,7 @@ export async function reviewEpisodeBoard(
       Boolean(
         prevReview?.ok &&
           deltaTargetShots.length > 0 &&
-          ((!prevReview.pass && prevReview.blocking && prevErrors.length > 0) || prevReview.pass),
+          ((!prevReview.pass && (prevReview.blocking || prevReview.reopened) && prevErrors.length > 0) || prevReview.pass),
       ));
 
   const sizeDrift = directorSizeMismatches(directorRaw, ep);
@@ -775,11 +777,10 @@ export async function reviewStageCards(provider: Provider, projectRoot: string, 
   const cards = formatStageCards(shots);
   const sig = String(cards.length) + ':' + [...cards].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36);
   const marker = path.join(projectRoot, 'out', slug, 'cards-review.json');
-  try {
-    if (JSON.parse(fs.readFileSync(marker, 'utf8')).sig === sig) return null;
-  } catch {
-    /* never reviewed */
-  }
+  // Once per episode, and only while nothing is coded. Read again at every change, it ran 26 times AFTER the code and
+  // each answer had the agent rewrite cards instead of shots: 26 minutes for nothing (custom, 2026-11-13).
+  if (fs.existsSync(marker)) return null;
+  if (shots.some((s) => shotCoded(epDir, String(s.id)))) return null;
   const script = (Array.isArray(ep.script) ? ep.script : []).map((b: any) => String(b?.text ?? '')).join(' ').slice(0, 9_000);
   const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
   const user = `## Script\n${script}\n\n## Fiches (format ${ep.aspect ?? '16:9'}, ${shots.length} plans)\n${cards.slice(0, 20_000)}`;
@@ -826,7 +827,7 @@ export function nextStrikes(prev: Record<string, number> | undefined, report: { 
  */
 export function refusedUnchanged(projectRoot: string, slug: string): string[] | null {
   const prev = loadPreviousReview(path.join(projectRoot, 'out', slug));
-  if (!prev?.ok || prev.pass || !prev.blocking || !prev.createdAt) return null;
+  if (!prev?.ok || prev.pass || !(prev.blocking || prev.reopened) || !prev.createdAt) return null;
   const since = (Date.parse(prev.createdAt) || 0) + 500;
   const refused = sortShotIds(prev.issues.filter((i) => i.severity === 'error').flatMap((i) => extractShotIds(i.shot)));
   const epDir = path.join(projectRoot, 'src', 'episodes', slug);
@@ -886,6 +887,45 @@ export function writeUnresolvedDefects(projectRoot: string, slug: string, report
     fs.mkdirSync(path.join(projectRoot, 'out', slug), { recursive: true });
     fs.writeFileSync(path.join(projectRoot, rel), body);
     return rel;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A review closed with defects (three refusals of a shot, or no round left) stays closed for the run that made it.
+ * When the user writes again on that project ("fix S5 and S38, then render"), the fixes deserve a look: the counts
+ * start again and the next board is reviewed, on the changed shots only. The render is not held back meanwhile.
+ * Returns the shots that were left refused, or null when there is nothing to reopen.
+ */
+export function reopenReview(projectRoot: string, slug: string): string[] | null {
+  const file = path.join(projectRoot, 'out', slug, 'review.json');
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8')) as ReviewReport;
+    if (!report?.ok || report.pass || report.blocking || report.reopened) return null;
+    const refused = sortShotIds(report.issues.filter((i) => i.severity === 'error').flatMap((i) => extractShotIds(i.shot)));
+    if (!refused.length) return null;
+    const { gaveUpOn: _g, strikes: _s, ...rest } = report;
+    fs.writeFileSync(file, JSON.stringify({ ...rest, reopened: true }, null, 2) + '\n');
+    return refused;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The agent asked for the render again and again without touching a refused shot: it will not fix them. The review is
+ * closed as after three refusals of a shot: the video ships with the list of its defects. Returns the defects file.
+ */
+export function giveUpReview(projectRoot: string, slug: string): string | null {
+  const file = path.join(projectRoot, 'out', slug, 'review.json');
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8')) as ReviewReport;
+    if (!report?.ok || report.pass || !report.blocking) return null;
+    const refused = sortShotIds(report.issues.filter((i) => i.severity === 'error').flatMap((i) => extractShotIds(i.shot)));
+    const defectsFile = writeUnresolvedDefects(projectRoot, slug, report) ?? undefined;
+    fs.writeFileSync(file, JSON.stringify({ ...report, blocking: false, gaveUpOn: refused, defectsFile }, null, 2) + '\n');
+    return defectsFile ?? `out/${slug}/review.json`;
   } catch {
     return null;
   }

@@ -128,6 +128,14 @@ const Shadow: React.FC<{ x: number; y: number; scale: number; lift?: number }> =
 type Pt = { x: number; y: number };
 /** A change at frame `at`: what the person does from then on. Unset fields keep their value. */
 export type StageBeat = { at: number; act?: ActName; yaw?: number; reach?: { to: Pt; side?: 'L' | 'R' } | null };
+/** Something carried in a hand. `release` makes it leave the hand at a frame and land on a world point. */
+export type Carry = {
+  node: React.ReactNode;
+  side?: 'L' | 'R';
+  /** stays level whatever the forearm does (a tray, a plate, a bottle) */ level?: boolean;
+  /** how far below the palm line the drawing ends, so it rests on what it lands on */ bottom?: number;
+  release?: { at: number; to: Pt; how?: 'put' | 'throw' | 'drop'; dur?: number; /** where the person stood at that frame */ spot?: { x: number; y: number; scale: number } };
+};
 type Moment = { at: number; act?: ActName; from?: number; yaw: number; reach?: { to: Pt; side?: 'L' | 'R' } | null; reachAt: number };
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -174,14 +182,15 @@ export const Staged: React.FC<{
   reach?: { to: Pt; side?: 'L' | 'R' };
   /** changes of action, turn or reach at given frames, in order: the shot plays several moments */
   beats?: StageBeat[];
+  /** a thing carried in a hand that may stay level and leave the hand at a frame (put down, thrown, dropped) */
+  carry?: Carry;
   children?: React.ReactNode;
-}> = ({ at, look = LOOKS.pipHood as PersonLook, pose = {}, yaw, body, height = 1, seated = false, stance, act, from, dur, reach, beats, children, ...rest }) => {
+}> = ({ at, look = LOOKS.pipHood as PersonLook, pose = {}, yaw, body, height = 1, seated = false, stance, act, from, dur, reach, beats, carry, children, ...rest }) => {
   const { ground, t } = React.useContext(StageCtx);
   const spot = spotOf(at, ground);
   const b = bodyOf(body ?? (look as { cast?: { body?: Body | BodyId } }).cast?.body);
   const yawStart = yaw ?? (pose as { yaw?: number }).yaw ?? 0;
   if ((act || beats?.length) && t === undefined) throw new Error(`act and beats need the clock: write <Stage t={t} ...>`);
-  const now = t ?? 0;
   // the moments of the shot: the start, then each beat (later beats win), each one keeping what it does not change
   const moments: Moment[] = [{ at: 0, act, from, yaw: yawStart, reach: reach ?? null, reachAt: -1e9 }];
   for (const beat of [...(beats ?? [])].sort((x, y) => x.at - y.at)) {
@@ -195,6 +204,8 @@ export const Staged: React.FC<{
       reachAt: beat.reach !== undefined ? beat.at : prev.reachAt,
     });
   }
+  // the whole pose at a frame, standing on a spot: now, and the frame a carried thing leaves the hand
+  const poseAtFrame = (now: number, spot: { x: number; y: number; scale: number }): { full: PersonPose; lift: number; scale: number } => {
   let idx = 0;
   while (idx + 1 < moments.length && moments[idx + 1]!.at <= now) idx++;
   const cur = moments[idx]!;
@@ -219,12 +230,49 @@ export const Staged: React.FC<{
     if (side === 'L') full.armL = limb as never;
     else full.armR = limb as never;
   }
+  return { full, lift, scale };
+  };
+  const now = t ?? 0;
+  const { full, lift, scale } = poseAtFrame(now, spot);
+  // the carried thing: in the hand until it is released, then on its way to where it lands, then resting there
+  const handProps: { handLProp?: React.ReactNode; handRProp?: React.ReactNode } = {};
+  let released: React.ReactNode = null;
+  if (carry) {
+    const side = carry.side ?? 'R';
+    const armAngle = (p: PersonPose): number => {
+      const j = jointsOf(p, b);
+      const o = side === 'L' ? j.armL : j.armR;
+      return (Math.atan2(o.end.x - o.mid.x, o.end.y - o.mid.y) * 180) / Math.PI;
+    };
+    const rel = carry.release;
+    if (!rel || now < rel.at) {
+      // the hand's drawing turns with the forearm; a level thing is turned back about the palm
+      const node = carry.level ? <g transform={`rotate(${armAngle(full)} 0 10)`}>{carry.node}</g> : carry.node;
+      if (side === 'L') handProps.handLProp = node;
+      else handProps.handRProp = node;
+    } else {
+      const then = poseAtFrame(rel.at, rel.spot ?? spot);
+      const start = handOf(then.full, side, b);
+      const ang = armAngle(then.full);
+      const how = rel.how ?? 'put';
+      const k = clamp01((now - rel.at) / Math.max(1, rel.dur ?? (how === 'throw' ? 14 : how === 'drop' ? 9 : 8)));
+      const e = how === 'drop' ? k * k : how === 'throw' ? k : ease(k);
+      const end = { x: rel.to.x, y: rel.to.y - (carry.bottom ?? 24) * then.scale };
+      const arc = how === 'throw' ? 130 * then.scale : how === 'put' ? 12 * then.scale : 0;
+      const x = start.x + (end.x - start.x) * e;
+      const y = start.y + (end.y - start.y) * e - Math.sin(Math.PI * k) * arc;
+      // thrown, it spins and ends lying; put down or dropped, a level thing stays level and the others straighten
+      const turn = how === 'throw' ? (k < 1 ? (carry.level ? 0 : -ang) + 540 * k * (end.x < start.x ? -1 : 1) : 90) : carry.level ? 0 : -ang * (1 - e);
+      released = <g transform={`translate(${x} ${y}) scale(${then.scale}) rotate(${turn})`}>{carry.node}</g>;
+    }
+  }
   return (
     <AtDepth w={at.w ?? 0.5}>
       <Shadow x={spot.x} y={spot.y} scale={scale} lift={lift} />
-      <Person look={look} body={b} shadow={0} {...rest} pose={full}>
+      <Person look={look} body={b} shadow={0} {...rest} {...handProps} pose={full}>
         {children}
       </Person>
+      {released}
     </AtDepth>
   );
 };
