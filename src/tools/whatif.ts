@@ -10,7 +10,7 @@ import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
 import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 import { readEpisodeShots, syncShotsBarrel } from './episode-source.js';
-import { stagingCodeProblems, stagingProblems, usesStaging } from './staging.js';
+import { applyCardAngles, stagingCodeProblems, stagingProblems, usesStaging } from './staging.js';
 
 /** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
 function hexLuminance(hex: string): number | null {
@@ -561,6 +561,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const wanted = [...new Set(tlShots.map((s) => String(s.id ?? '')).filter(Boolean))];
   if (!wanted.length) return `timeline.json has no shots: run whatif_run { step: "plan" } first`;
 
+  // an angle decided on the card is written into the shot before anything is read
+  applyCardAngles(src, Array.isArray(episode?.shots) ? episode.shots : []);
   const epSrc = readEpisodeShots(src);
   if (!epSrc.exists) {
     return `src/episodes/${slug}/shots.tsx is missing: write shared.tsx + one component per shot (${wanted.join(', ')}) via edit_shot`;
@@ -951,7 +953,7 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const staged = usesStaging(epShotList);
   const stagingErrs = [
     ...(staged ? stagingProblems(epShotList) : []),
-    ...(fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx')) ? stagingCodeProblems(epShotList, bodies, staged) : []),
+    ...(fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx')) ? stagingCodeProblems(epShotList, bodies, staged, projectAspect(projectRoot, episode)) : []),
   ];
   errors.unshift(...stagingErrs.slice(0, 8));
 

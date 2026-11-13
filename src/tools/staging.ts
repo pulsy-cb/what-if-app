@@ -48,7 +48,8 @@ export function stageCardProblems(card: any, shot: { id: string; size?: string; 
   const people = Array.isArray(card.people) ? card.people : null;
   if (!people) out.push(`${id}.people must be an array (empty for an insert or an empty room)`);
   for (const [i, p] of (people ?? []).entries()) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(String(p?.who ?? ''))) out.push(`${id}.people[${i}].who must be the cast constant used in shared.tsx (PROF, MAYA…), got "${p?.who ?? ''}"`);
+    if (NARRATOR.test(String(p?.who ?? '').toUpperCase())) out.push(`${id}.people[${i}]: the narrator is a voice, not someone in the picture: remove "${p.who}" from people (a first-person narrator is on screen under their own character name)`);
+    else if (!/^[A-Z][A-Z0-9_]*$/.test(String(p?.who ?? ''))) out.push(`${id}.people[${i}].who must be the cast constant used in shared.tsx (PROF, MAYA…), got "${p?.who ?? ''}"`);
     if (String(p?.where ?? '').trim().length < 3) out.push(`${id}.people[${i}].where is missing: where in the room (a piece id such as d2, or "left, near the board")`);
     if (vagueAction(String(p?.does ?? ''))) out.push(`${id}.people[${i}].does "${p.does}" says nothing to draw: say HOW (which hand, toward what, holding what, leaning on what)`);
     else if (String(p?.does ?? '').trim().length < 8) out.push(`${id}.people[${i}].does is too vague: a concrete action ("turns the bag upside down over the desk"), not "idle" or "talks"`);
@@ -101,13 +102,59 @@ export function stagingProblems(shots: any[]): string[] {
   return out;
 }
 
+// Only a thing someone holds or handles has to be drawn by the shot. The first runs put the furniture and the set in
+// `objects` (barreaux, escaliers, chaise, télé: 150 refusals in 8 projects, 2026-11-13); those belong to the place.
+const HANDLED = /\b(phone|telephone|portable|smartphone|handset|combine|bag|sac|cartable|paper|papier|feuille|lettre|letter|note|copie|crumpled|cup|tasse|mug|verre|glass|keys?|cles?|book|livre|cahier|pen|stylo|crayon|pencil|craie|chalk|folder|dossier|box|boite|carton|wallet|portefeuille|manette|controller|remote|telecommande|camera|billet|ticket|badge|card|carte|bottle|bouteille|knife|couteau|ring|bague|gift|cadeau|photo)s?\b/;
+/** The objects of a card that a person holds or handles (the rest is set dressing). */
+export const handledObjects = (objects: unknown): string[] => (Array.isArray(objects) ? objects.filter((o): o is string => typeof o === 'string' && HANDLED.test(norm(o))) : []);
+const NARRATOR = /^(NARR|NARRATOR|NARRATEUR|NARRATRICE|VOIX|VOICE|VOIX_OFF)$/;
+
+/**
+ * An angle decided on the card and forgotten in the code (53 refusals, 2026-11-13) is written into the shot instead of
+ * refused: `shot({` becomes `shot({ angle: 'high',`. Only modular shots made of one shot() call; returns the ids changed.
+ */
+export function applyCardAngles(episodeDir: string, shots: any[]): string[] {
+  const done: string[] = [];
+  for (const s of Array.isArray(shots) ? shots : []) {
+    const angle = s?.stage?.angle;
+    if (angle !== 'low' && angle !== 'high') continue;
+    const file = path.join(episodeDir, 'shots', `${String(s.id)}.tsx`);
+    let src = '';
+    try {
+      src = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (/\bangle\s*:/.test(src) || (src.match(/\bshot\(\{/g) ?? []).length !== 1) continue;
+    fs.writeFileSync(file, src.replace(/\bshot\(\{/, `shot({ angle: '${angle}',`));
+    done.push(String(s.id));
+  }
+  return done;
+}
+
 const DRAWS_OBJECT = /\bhold\s*:|\bprops\s*:|hand[LR]Prop|\bextra\s*:|\bbehind\s*:|tabletopShot\s*\(|phoneShot\s*\(|\breach\s*:/;
 const WALK_ACT = /\bact\s*[:=]\s*\{?\s*['"](walk|run|sneak)['"]/;
 const REAL_MOVE = /\bwalkTo\s*:|\bat\s*[:=]\s*\{?\s*\(|walkPose\s*\(|\bkf\s*\(/;
 
 /** Does the code of each shot do what its card says? Also catches a walk that goes nowhere. */
-export function stagingCodeProblems(shots: any[], bodies: Record<string, string>, withCards: boolean): string[] {
+export function stagingCodeProblems(shots: any[], bodies: Record<string, string>, withCards: boolean, aspect: string = '16:9'): string[] {
   const out: string[] = [];
+  // 9:16: two people side by side at the same depth leave the lower third empty (2 shots in 106 used depth, 2026-11-13)
+  if (aspect === '9:16') {
+    const two: string[] = [];
+    const flat: string[] = [];
+    for (const s of shots) {
+      const body = bodies[String(s.id)] ?? '';
+      if ((body.match(/\bwho\s*:/g) ?? []).length < 2 || !/\bshot\(\{/.test(body)) continue;
+      two.push(String(s.id));
+      const ws = [...body.matchAll(/\bw\s*:\s*(\d*\.?\d+)/g)].map((m) => Number(m[1]));
+      const spread = ws.length >= 2 ? Math.max(...ws) - Math.min(...ws) : 0;
+      if (!/cam\s*:\s*['"]deep['"]/.test(body) && spread < 0.3) flat.push(String(s.id));
+    }
+    if (two.length >= 4 && two.length - flat.length < Math.ceil(two.length / 3)) {
+      out.push(`${two.length - flat.length}/${two.length} shots with two people or more use depth (need ${Math.ceil(two.length / 3)}): in 9:16 people side by side leave the lower third empty. On some of ${flat.slice(0, 8).join(', ')} use cam: 'deep' with one person near (w 0.85-0.95) and the other behind, about 0.2 in u apart`);
+    }
+  }
   for (const s of shots) {
     const id = String(s.id);
     const body = bodies[id] ?? '';
@@ -120,11 +167,18 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     for (const p of card.people ?? []) {
       if (!new RegExp(`\\b${p.who}\\b`).test(body)) out.push(`${id}: the card puts ${p.who} in the shot ("${p.does}") but the code never uses ${p.who}`);
     }
-    if ((card.objects ?? []).length && !DRAWS_OBJECT.test(body)) {
-      out.push(`${id}: the card shows ${card.objects.join(', ')} but the code draws no object: use hold: '<object>' on the person, props: [{ on: '<piece>', node: held('<object>') }], or tabletopShot / phoneShot`);
+    const handled = handledObjects(card.objects);
+    if (handled.length && !DRAWS_OBJECT.test(body)) {
+      out.push(`${id}: the card shows ${handled.join(', ')} but the code draws no object: use hold: '<object>' on the person (or hold: { node: <g>…</g> } for your own drawing), props: [{ on: '<piece>', node: held('<object>') }], or tabletopShot / phoneShot`);
     }
     if ((card.angle === 'low' || card.angle === 'high') && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
       out.push(`${id}: the card asks for a ${card.angle} angle but the code has no angle: '${card.angle}'`);
+    }
+    const acts = [...body.matchAll(/\bact\s*[:=]\s*\{?\s*['"]([\w-]+)['"]/g)].map((m) => m[1]);
+    const inert = /\bshot\(\{/.test(body) && (card.people ?? []).length > 0 && acts.every((a) => a === 'idle') && !/\bact\s*:\s*(\{|[A-Z_]+\b)|\bhold\s*:|\breach\s*:|\bwalkTo\s*:|\bpose\s*:|\bduo\s*:/.test(body);
+    if (inert) {
+      const p0 = card.people[0]!;
+      out.push(`${id}: the card says ${p0.who} "${p0.does}" but nobody does anything (idle): choose the action that shows it — lean, rummage, slam, give, read, point, shrug, facepalm, shout, push, pick-up, phone, type… — or make it: act: { dur: 16, armR: { a: [[0, 14], [1, 90]], b: 10 } }`);
     }
     if (card.moves && !REAL_MOVE.test(body)) out.push(`${id}: the card says someone moves across the room but nobody has walkTo: { u, w }`);
   }
@@ -169,7 +223,7 @@ export const stageShots: Tool = {
                 required: ['who', 'where', 'does'],
               },
             },
-            objects: { type: 'array', items: { type: 'string' } },
+            objects: { type: 'array', items: { type: 'string' }, description: 'ONLY what a person holds or handles in this shot (phone, bag, letter). Furniture and set (chair, stairs, TV) go in `see`, not here' },
             angle: { type: 'string', enum: ['level', 'low', 'high'] },
             moves: { type: 'boolean', description: 'true when someone walks across the room in this shot' },
             change: { type: 'string', description: 'what differs from the previous shot' },

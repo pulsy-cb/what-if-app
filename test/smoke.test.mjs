@@ -3673,7 +3673,7 @@ test('staging cards: the code must do what the card says, and a walk must go som
   assert.equal(one(card({ objects: ['bag'] }), ok), '');
   // an object on the card that nobody draws
   assert.match(one(card({ objects: ['bag'] }), "shot({ place: ROOM, people: [{ who: PROF, act: 'point' }] })"), /S1: the card shows bag but the code draws no object/);
-  assert.equal(one(card({ objects: ['pencils'] }), "shot({ place: ROOM, people: [{ who: PROF }], props: [{ on: 'd2', node: held('pen') }] })"), '');
+  assert.equal(one(card({ objects: ['pencils'] }), "shot({ place: ROOM, people: [{ who: PROF, act: 'point' }], props: [{ on: 'd2', node: held('pen') }] })"), '');
   // a person on the card who is not in the code
   assert.match(one(card({ people: [{ who: 'MAYA', where: 'd2', does: 'crosses her arms' }] }), ok), /the card puts MAYA in the shot .* but the code never uses MAYA/);
   // the angle
@@ -3766,4 +3766,229 @@ test('open actions: a story defines its own gesture, a wrong shape is explained,
   assert.match(guide, /cam: 'deep'/);
   assert.match(guide, /behind: \(t\) =>/);
   assert.match(guide, /`subject`: the ONE thing/);
+});
+
+test('staging cards after the first real runs: set dressing is not an object to draw, the narrator is not in the picture, a card angle is applied, hold takes other spellings and a drawing', async () => {
+  const { handledObjects, stagingCodeProblems, stagingProblems, applyCardAngles } = await import('../dist/tools/staging.js');
+  // furniture and set named on a card are never a reason to refuse the code
+  assert.deepEqual(handledObjects(['barreaux', 'escaliers', 'chaise', 'télé allumée', 'canapé', 'tableau', 'door frame']), []);
+  assert.deepEqual(handledObjects(['Téléphone rose', 'sac à dos', 'wallet', 'manette', 'folded paper', 'craie', 'lit']), ['Téléphone rose', 'sac à dos', 'wallet', 'manette', 'folded paper', 'craie']);
+  const card = (objects) => ({ see: 'x', people: [{ who: 'PROF', where: 'left', does: 'stands by the bars' }], objects });
+  const plain = "shot({ place: ROOM, people: [{ who: PROF, act: 'lean' }] })";
+  assert.equal(stagingCodeProblems([{ id: 'S1', stage: card(['barreaux', 'escaliers']) }], { S1: plain }, true).join('\n'), '');
+  assert.match(stagingCodeProblems([{ id: 'S1', stage: card(['barreaux', 'wallet']) }], { S1: plain }, true).join('\n'), /S1: the card shows wallet but the code draws no object: use hold: '<object>' on the person \(or hold: \{ node/);
+  // the narrator is a voice
+  for (const who of ['NARRATOR', 'NARR', 'NARRATEUR']) {
+    const p = stagingProblems([{ id: 'S1', size: 'medium', stage: { see: 'La prof retourne le sac de Maya au-dessus du pupitre de devant', subject: 'the bag', people: [{ who, where: 'off', does: 'raconte la scène en voix off' }], objects: [] } }]).join('\n');
+    assert.match(p, /S1\.people\[0\]: the narrator is a voice, not someone in the picture/, who);
+  }
+  // an angle on the card is written into the shot, once, and only into a single shot() call
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-angle-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'shots'));
+    const w = (id, src) => fs.writeFileSync(path.join(dir, 'shots', `${id}.tsx`), src);
+    const r = (id) => fs.readFileSync(path.join(dir, 'shots', `${id}.tsx`), 'utf8');
+    w('S1', "export const S1 = shot({ place: ROOM, people: [{ who: PROF }] });");
+    w('S2', "export const S2 = shot({ place: ROOM, angle: 'low', people: [] });");
+    w('S3', "export const S3 = shot({ place: ROOM });");
+    w('S4', "const A = shot({ place: ROOM }); export const S4 = shot({ place: ROOM });");
+    const shots = [{ id: 'S1', stage: { angle: 'high' } }, { id: 'S2', stage: { angle: 'high' } }, { id: 'S3', stage: { angle: 'level' } }, { id: 'S4', stage: { angle: 'low' } }, { id: 'S5', stage: { angle: 'low' } }, { id: 'S6', stage: null }];
+    assert.deepEqual(applyCardAngles(dir, shots), ['S1']);
+    assert.equal(r('S1'), "export const S1 = shot({ angle: 'high', place: ROOM, people: [{ who: PROF }] });");
+    assert.equal(r('S2'), "export const S2 = shot({ place: ROOM, angle: 'low', people: [] });", 'an angle already written wins');
+    assert.equal(r('S3'), "export const S3 = shot({ place: ROOM });");
+    assert.match(r('S4'), /^const A = shot\(\{ place: ROOM \}\);/, 'two shot() calls: left alone');
+    assert.deepEqual(applyCardAngles(dir, shots), [], 'applied once');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // the engine: hold under other names, a drawing, and an error that says what to write
+  const shotSrc = fs.readFileSync('engine-overlay/files/src/engine/shot.tsx', 'utf8');
+  assert.match(shotSrc, /const what = o\.what \?\? o\.kind \?\? o\.name \?\? o\.object \?\? o\.item \?\? o\.type;/);
+  assert.match(shotSrc, /if \(React\.isValidElement\(h\)\) return \{ node: h \};/);
+  assert.match(shotSrc, /hold needs the object's name: hold: 'phone'/);
+  assert.match(shotSrc, /holdSpec\.node \?\? held\(holdSpec\.what as string, holdSpec\)/);
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+  if (!process.env.WHATIF_REVIEW_MAX_ROUNDS) assert.equal(loadConfig().reviewMaxRounds, 3);
+});
+
+test('contact and depth: a reach steps the person to arm\'s length, a vertical episode needs depth in a third of its two-person shots, a card with an action refuses idle', async () => {
+  const { stagingCodeProblems } = await import('../dist/tools/staging.js');
+  const shotSrc = fs.readFileSync('engine-overlay/files/src/engine/shot.tsx', 'utf8');
+  assert.match(shotSrc, /const ARM_REACH = 135;/);
+  assert.match(shotSrc, /if \(Math\.abs\(dx\) <= ARM_REACH \* g\.scale\) return null;/, 'close enough: nobody is moved');
+  assert.match(shotSrc, /return \{ x: to\.x - Math\.sign\(dx\) \* ARM_REACH \* 0\.85 \* g\.scale, y: g\.y, scale: g\.scale, w: here\.w \} as Place;/);
+  assert.match(shotSrc, /const near = stepIn\(p, at\);\n\s+if \(near\) return near;/);
+  assert.match(shotSrc, /if \(p\.walkTo \|\| !\('u' in at\)\) return null;/, 'someone walking is not pulled');
+
+  // 9:16: depth in at least a third of the shots with two people
+  const flat = (id) => [id, `shot({ place: R, cam: 'medium', people: [{ who: A, at: { u: 0.3, w: 0.45 } }, { who: B, at: { u: 0.6, w: 0.5 } }] })`];
+  const deep = (id) => [id, `shot({ place: R, cam: 'deep', people: [{ who: A, at: { u: 0.3, w: 0.9 } }, { who: B, on: 'd4' }] })`];
+  const spread = (id) => [id, `shot({ place: R, cam: 'wide', people: [{ who: A, at: { u: 0.3, w: 0.85 } }, { who: B, at: { u: 0.6, w: 0.3 } }] })`];
+  const solo = (id) => [id, `shot({ place: R, cam: 'close', people: [{ who: A, at: { u: 0.3, w: 0.45 }, act: 'talk' }] })`];
+  const run = (pairs, aspect) => stagingCodeProblems(pairs.map(([id]) => ({ id })), Object.fromEntries(pairs), false, aspect).join('\n');
+  const six = [flat('S1'), flat('S2'), flat('S3'), flat('S4'), flat('S5'), flat('S6'), solo('S7')];
+  assert.match(run(six, '9:16'), /0\/6 shots with two people or more use depth \(need 2\).*S1, S2, S3, S4, S5, S6 use cam: 'deep'/);
+  assert.equal(run(six, '16:9'), '', 'only the tall frame');
+  assert.match(run([deep('S1'), flat('S2'), flat('S3'), flat('S4'), flat('S5'), flat('S6')], '9:16'), /1\/6 shots .* \(need 2\)/);
+  assert.equal(run([deep('S1'), spread('S2'), flat('S3'), flat('S4'), flat('S5'), flat('S6')], '9:16'), '', 'deep or people at clearly different depths both count');
+  assert.equal(run([flat('S1'), flat('S2'), flat('S3'), solo('S4')], '9:16'), '', 'fewer than four such shots: no rule');
+
+  // a card that describes an action, a shot where nobody does anything
+  const card = { see: 'x', people: [{ who: 'PROF', where: 'left', does: 'turns the bag upside down' }], objects: [] };
+  const one = (body) => stagingCodeProblems([{ id: 'S1', stage: card }], { S1: body }, true).join('\n');
+  assert.match(one("shot({ place: R, people: [{ who: PROF, act: 'idle' }] })"), /S1: the card says PROF "turns the bag upside down" but nobody does anything \(idle\).*rummage/);
+  assert.match(one('shot({ place: R, people: [{ who: PROF }] })'), /nobody does anything/);
+  for (const ok of ["act: 'rummage'", "act: 'idle', beats: [{ at: 12, act: 'slam' }]", "hold: 'bag'", "reach: { to: 'd4' }", 'act: DIG', 'act: { dur: 10, tilt: 12 }', 'walkTo: { u: 0.4, w: 0.5 }']) {
+    assert.equal(one(`shot({ place: R, people: [{ who: PROF, ${ok} }] })`), '', ok);
+  }
+  const guide = Object.values(await import('../dist/orchestrator/director-guide.js')).filter((v) => typeof v === 'string').join('\n');
+  assert.match(guide, /shot\(\) steps the person to arm's length/);
+  assert.match(guide, /at least one shot in three with two people or more must use depth/);
+});
+
+test('character drawing: the far hand behind a turned body is not drawn, a lean seen from the front sinks the body', async () => {
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const person = fs.readFileSync(path.join(eng, 'person.tsx'), 'utf8');
+  assert.match(person, /const farHandHidden = \(o: \{ end: P \}, prop\?: React\.ReactNode\): boolean => !prop && Math\.abs\(pose\.yaw\) > 0\.2 && Math\.abs\(o\.end\.x\) < b\.shoulder\.x \* 0\.8;/);
+  // only the far arm (drawn before the torso) loses its hand; the near arm keeps it
+  const far = person.indexOf('farHandHidden(j.armR, handRProp) ? null : hand(j.armR');
+  const torso = person.indexOf('{torso}', far);
+  assert.ok(far > 0 && torso > far, 'the far arm is the one drawn before the torso');
+  assert.equal((person.match(/farHandHidden\(j\.arm[LR], hand[LR]Prop\) \? null/g) ?? []).length, 2);
+  assert.ok(person.indexOf('{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>}', torso) > torso, 'the near hand is always drawn');
+
+  const ts = (await import('typescript')).default;
+  const js = ts.transpileModule(fs.readFileSync(path.join(eng, 'actions.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-lean-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'actions.mjs'), js);
+    const A = await import(path.join(dir, 'actions.mjs'));
+    const front = A.act('lean', 12, { yaw: 0 });
+    const side = A.act('lean', 12, { yaw: 0.85 });
+    assert.equal(front.tilt, 0, 'no side to lean to');
+    assert.ok(front.squash > 0.07 && front.squash < 0.09, `the body sinks from the front (${front.squash})`);
+    assert.ok(side.tilt > 15 && side.squash < 0.02, 'in profile the torso leans and barely sinks');
+    assert.equal(A.act('give', 14, { yaw: 0.85 }).armR.a, 82);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('review: a shot refused three reviews in a row ends the review, and the cards are read before the code', async () => {
+  const { nextStrikes, MAX_STRIKES, reviewEpisodeBoard, reviewStageCards, formatReviewFeedback } = await import('../dist/orchestrator/reviewer.js');
+  assert.equal(MAX_STRIKES, 3);
+  const rep = (...shots) => ({ ok: true, pass: false, issues: shots.map((shot) => ({ shot, severity: 'error' })) });
+  // refusals in a row: a fixed shot leaves the count, a new one starts at 1, several ids in one remark all count
+  assert.deepEqual(nextStrikes(undefined, rep('S3', 'S9')), { S3: 1, S9: 1 });
+  assert.deepEqual(nextStrikes({ S3: 1, S9: 1 }, rep('S3')), { S3: 2 });
+  assert.deepEqual(nextStrikes({ S3: 2 }, rep('S3, S4')), { S3: 3, S4: 1 });
+  assert.deepEqual(nextStrikes({ S3: 2 }, { ok: true, pass: true, issues: [] }), {});
+  assert.deepEqual(nextStrikes({ S3: 2 }, { ok: true, pass: false, issues: [{ shot: 'S3', severity: 'warning' }] }), {}, 'a warning is not a refusal');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-strikes-'));
+  try {
+    const dir = path.join(root, 'src', 'episodes', 'e');
+    fs.mkdirSync(path.join(dir, 'shots'), { recursive: true });
+    const card = (id, see) => ({ see, subject: 'the bag', people: [{ who: 'PROF', where: 'left of d2', does: `turns the bag upside down ${id}` }], objects: ['bag'], change: 'the teacher has come closer' });
+    const shots = ['S1', 'S2', 'S3'].map((id) => ({ id, size: 'medium', note: 'n', stage: card(id, `Plan ${id} : la prof retourne le sac de Maya au-dessus du pupitre`) }));
+    const writeEp = (list) => fs.writeFileSync(path.join(dir, 'episode.json'), JSON.stringify({ aspect: '9:16', script: [{ text: 'La prof fouille le sac.' }], shots: list }));
+    writeEp(shots);
+    fs.writeFileSync(path.join(dir, 'shared.tsx'), 'export const PROF = 1;');
+    for (const s of shots) fs.writeFileSync(path.join(dir, 'shots', `${s.id}.tsx`), `export const ${s.id} = shot({ place: R, people: [{ who: PROF, hold: 'bag' }] });`);
+    fs.writeFileSync(path.join(dir, 'shots.tsx'), "export * from './shared';\n" + shots.map((s) => `export { ${s.id} } from './shots/${s.id}';`).join('\n'));
+    fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify({ fps: 30, shots: shots.map((s) => ({ id: s.id, len: 60 })), segments: [] }));
+
+    // --- the same shot refused again and again: the third time is the last
+    const refuse = { model: 'm', chat: async () => ({ text: JSON.stringify({ pass: false, summary: 's', issues: [{ shot: 'S2', severity: 'error', problem: 'la main est dans le vide', fix: 'rapproche PROF' }] }) }) };
+    const r1 = await reviewEpisodeBoard(refuse, root, 'e', undefined, { round: 1 });
+    assert.deepEqual(r1.strikes, { S2: 1 });
+    assert.equal(r1.blocking, true);
+    const r2 = await reviewEpisodeBoard(refuse, root, 'e', undefined, { round: 2 });
+    assert.deepEqual(r2.strikes, { S2: 2 });
+    assert.equal(r2.blocking, true, 'twice: still another chance');
+    const r3 = await reviewEpisodeBoard(refuse, root, 'e', undefined, { round: 3 });
+    assert.deepEqual(r3.strikes, { S2: 3 });
+    assert.deepEqual(r3.gaveUpOn, ['S2']);
+    assert.equal(r3.blocking, false, 'the render is not held back any longer');
+    assert.equal(r3.defectsFile, 'out/e/DEFAUTS-NON-CORRIGES.md');
+    assert.match(formatReviewFeedback(r3, 'e'), /ARRÊT DE LA REVUE : S2 refusé\(s\) 3 fois de suite/);
+    assert.match(fs.readFileSync('src/orchestrator/agent.ts', 'utf8'), /prevRev\.gaveUpOn\.length\) reviewRounds = config\.reviewMaxRounds;/);
+
+    // --- the cards, read before any code
+    let calls = 0;
+    let seen = '';
+    const reader = (text) => ({ model: 'm', chat: async ({ messages }) => { calls++; seen = messages.map((m) => m.content).join('\n'); return { text }; } });
+    const note = await reviewStageCards(reader('ok {"issues":[{"shot":"S2","problem":"aucun sujet clair","fix":"cadre sur le sac"},{"shot":"S3","problem":""}]}'), root, 'e');
+    assert.match(note, /LECTURE DES FICHES, avant le code\] 1 fiche\(s\)/);
+    assert.match(note, /- \[S2\] aucun sujet clair\n {2}→ cadre sur le sac/);
+    assert.match(note, /rien n'est bloqué/);
+    assert.match(seen, /La prof fouille le sac\./, 'the script is given');
+    assert.match(seen, /S2 \[medium\] Plan S2 .* — sujet : the bag/, 'and every card');
+    assert.match(seen, /format 9:16, 3 plans/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'out', 'e', 'cards-review.json'), 'utf8')).issues.length, 1);
+    // the same cards are not read twice; changed cards are
+    assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null);
+    assert.equal(calls, 1);
+    writeEp(shots.map((s, i) => (i === 0 ? { ...s, stage: card('S1', 'Plan S1 : gros plan sur le sac retourné, trois crayons tombent sur le pupitre') } : s)));
+    assert.equal(await reviewStageCards(reader('{"issues":[]}'), root, 'e'), null, 'nothing to say is silence');
+    assert.equal(calls, 2);
+    // an unreadable answer is not a verdict, and incomplete cards are not read at all
+    writeEp(shots.map((s, i) => (i === 0 ? { ...s, stage: card('S1', 'Plan S1 : la prof pose le sac vide sur le pupitre et recule d un pas') } : s)));
+    assert.equal(await reviewStageCards(reader('je ne sais pas'), root, 'e'), null);
+    assert.equal(await reviewStageCards({ model: 'm', chat: async () => { throw new Error('down'); } }, root, 'e'), null);
+    writeEp(shots.map((s, i) => (i === 1 ? { ...s, stage: null } : s)));
+    const before = calls;
+    assert.equal(await reviewStageCards(reader('{"issues":[{"shot":"S1","problem":"x"}]}'), root, 'e'), null);
+    assert.equal(calls, before, 'no call while a card is missing');
+    assert.match(fs.readFileSync('src/orchestrator/agent.ts', 'utf8'), /call\.name === 'stage_shots' && result\.ok && \/All \\d\+ shots are staged\//);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('worn things and animal heads: a library that follows the head, unknown names say what exists', async () => {
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const ts = (await import('typescript')).default;
+  const src = fs.readFileSync(path.join(eng, 'worn.tsx'), 'utf8').replace("import React from 'react';", 'const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }) };');
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-worn-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'worn.mjs'), js);
+    const W = await import(path.join(dir, 'worn.mjs'));
+    assert.equal(W.WORN_NAMES.length, 23);
+    assert.equal(W.ANIMAL_KINDS.length, 9);
+    for (const n of W.WORN_NAMES) assert.ok(W.worn(n), n);
+    for (const k of W.ANIMAL_KINDS) assert.ok(W.animalHead(k), k);
+    // what hangs on the body goes to the torso slot, the rest to the head
+    assert.deepEqual(W.WORN_NAMES.filter(W.wornOnTorso), ['collar', 'tie', 'bow-tie', 'scarf', 'badge', 'medal', 'necklace']);
+    assert.equal(W.wornOnTorso('crown'), false);
+    // a thing on the face slides with the turn of the head, a hat does not
+    const tx = (node) => JSON.stringify(node).match(/translate\(([-\d.]+) 0\)/)?.[1];
+    assert.equal(tx(W.worn('eye-mask', { yaw: 0 })), '0');
+    assert.equal(tx(W.worn('eye-mask', { yaw: 0.5 })), '10');
+    assert.equal(tx(W.worn('eye-mask', { yaw: -3 })), '-20', 'clamped');
+    assert.equal(tx(W.worn('crown', { yaw: 0.5 })), undefined);
+    assert.equal(tx(W.animalHead('cat', 0.5)), '10');
+    // colours: the default, then the one given
+    assert.match(JSON.stringify(W.worn('collar')), /#C0392B/);
+    assert.match(JSON.stringify(W.worn('collar', { color: '#8A8A8A' })), /#8A8A8A/);
+    assert.match(JSON.stringify(W.animalHead({ kind: 'cat', fur: '#D98A3A' })), /#D98A3A/);
+    // only the lion has a mane, drawn as a ring that leaves the face free
+    assert.equal((JSON.stringify(W.animalHead('lion')).match(/"type":"circle"/g) ?? []).length - (JSON.stringify(W.animalHead('bear')).match(/"type":"circle"/g) ?? []).length, 14);
+    assert.throws(() => W.worn('monocle'), /wear: nothing called "monocle"\. On the head: crown, .*On the torso: collar, .*Animal heads: animal: 'cat' \| 'dog'/s);
+    assert.throws(() => W.animalHead('dragon'), /animal: no "dragon"\. Animals: cat, dog, lion/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  assert.match(shotSrc, /wear\?: WornSpec\[\];/);
+  assert.match(shotSrc, /animal\?: AnimalSpec;/);
+  assert.match(shotSrc, /\{p\.animal \? animalHead\(p\.animal, yawNow\) : null\}/);
+  assert.match(shotSrc, /const torsoWorn = wornList\.filter\(\(x\) => wornOnTorso\(x\.what\)\);/);
+  assert.match(shotSrc, /export \{ worn, animalHead, WORN_NAMES, ANIMAL_KINDS \} from '\.\/worn';/);
+  const guide = Object.values(await import('../dist/orchestrator/director-guide.js')).filter((v) => typeof v === 'string').join('\n');
+  assert.match(guide, /wear: \['eye-mask'/);
+  assert.match(guide, /animal: 'lion'/);
+  assert.match(guide, /A four-legged animal does not exist in the engine/);
 });

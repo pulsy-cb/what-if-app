@@ -8,7 +8,7 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
-import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, refusedUnchanged, reviewEpisodeBoard } from './reviewer.js';
+import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, refusedUnchanged, reviewEpisodeBoard, reviewStageCards } from './reviewer.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -361,6 +361,20 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
           }
 
+          // The cards are read by the reviewer as soon as they are complete, before any shot is coded (text only, advisory)
+          if (call.name === 'stage_shots' && result.ok && /All \d+ shots are staged/.test(String(result.summary ?? '')) && deps.reviewProvider) {
+            const cardsSlug = String(call.args?.episode ?? '').trim();
+            const cardsReviewer = cardsSlug ? deps.reviewProvider() : null;
+            if (cardsReviewer) {
+              try {
+                const note = await reviewStageCards(cardsReviewer, project.root, cardsSlug, signal);
+                if (note) heldNotes.push(note);
+              } catch {
+                /* advisory: a failed reading changes nothing */
+              }
+            }
+          }
+
           // Independent Reviewer gate after storyboard generation (`whatif_run { step: "board" }`)
           if (
             call.name === 'whatif_run' &&
@@ -371,7 +385,9 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (epSlug) {
               try {
                 const prevRev = JSON.parse(fs.readFileSync(path.join(project.root, 'out', epSlug, 'review.json'), 'utf8'));
-                if (prevRev?.ok && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
+                // a shot refused three times in a row ended the review: no further round
+                if (prevRev?.ok && Array.isArray(prevRev.gaveUpOn) && prevRev.gaveUpOn.length) reviewRounds = config.reviewMaxRounds;
+                else if (prevRev?.ok && typeof prevRev.round === 'number' && prevRev.round > reviewRounds) {
                   reviewRounds = prevRev.blocking
                     ? prevRev.round
                     : Math.min(prevRev.round, Math.max(1, config.reviewMaxRounds - 1));

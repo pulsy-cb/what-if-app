@@ -255,6 +255,8 @@ const own = (spec: OwnActionSpec, t: number, opts: Ctx & { from?: number; dur?: 
   const out: ActBits = { armL: { a: 14, b: 12 }, armR: { a: 14, b: 12 } };
   for (const l of LIMBS) { const v = spec[l]; if (v) out[l] = { a: keyed(v.a, p), b: keyed(v.b, p) }; }
   for (const n of NUMS) { const v = spec[n]; if (v !== undefined) out[n] = keyed(v, p) * (n === 'tilt' ? leanDir(yaw) : 1); }
+  // Seen from the front a lean has no side to go to: the body sinks a little instead, so lean, rummage and slam still read.
+  if (spec.tilt !== undefined) out.squash = (out.squash ?? 0) + Math.abs(keyed(spec.tilt, p)) * (1 - foldYaw(yaw)) * 0.0035;
   if (spec.talk) out.talk = mouth(t);
   if (spec.expr) out.expr = spec.expr;
   if (spec.handL) out.handL = spec.handL;

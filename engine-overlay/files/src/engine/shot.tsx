@@ -14,6 +14,9 @@ import { faceAt } from './rig';
 import type { Expr } from './rig';
 import { HeadVfx, HookTitle, ShockBurst, StampCard, ValueTag } from './accents';
 import { held } from './objects';
+import { animalHead, worn, wornOnTorso } from './worn';
+import type { AnimalSpec, WornSpec } from './worn';
+export { worn, animalHead, WORN_NAMES, ANIMAL_KINDS } from './worn';
 import type { HeldName, HeldOpts } from './objects';
 export { held, HELD_NAMES } from './objects';
 import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
@@ -50,7 +53,11 @@ export type PersonSpec = {
   walkTo?: { u: number; w: number };
   /** a thing in the hand: 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box',
    * or { what, color, scale, side }. Sets act 'hold' when no act is given. */
-  hold?: HeldName | ({ what: HeldName; side?: 'L' | 'R' } & HeldOpts);
+  hold?: HeldName | ({ what?: HeldName; /** your own drawing, carried by the hand, around (0, 10) in hand units */ node?: React.ReactNode; side?: 'L' | 'R' } & HeldOpts);
+  /** worn things: 'crown' | 'eye-mask' | 'face-mask' | 'sunglasses' | 'cat-ears' | 'headphones' | 'collar' | 'tie' | 'scarf' | 'medal'… or { what, color } */
+  wear?: WornSpec[];
+  /** an animal that stands and talks: ears, muzzle, whiskers, mane on this person's head. 'cat' | 'dog' | 'lion' | 'bear' | 'rabbit' | 'wolf' | 'fox' | 'pig' | 'mouse', or { kind, fur, inner } */
+  animal?: AnimalSpec;
   /** or on a piece of furniture: seats the person there */ on?: string;
   seat?: number;
   yaw?: number;
@@ -108,6 +115,8 @@ const FRAME = PORTRAIT ? { w: 900, h: 1600 } : { w: 1920, h: 1080 };
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const ease01 = (v: number) => { const k = clamp(v, 0, 1); return k * k * (3 - 2 * k); };
 const BODY = 378;
+/** how far to the side a hand goes from the middle of the body, at scale 1 (shoulder 42 + arm 120, less the bend) */
+const ARM_REACH = 135;
 
 /** The camera for a person: zoom from how much of them shows, off-centre so they look into the frame. */
 export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number }, yaw = 0): { x: number; y: number; zoom: number } => {
@@ -160,6 +169,18 @@ const poseOf = (p: { face?: FaceSpecT; pose?: Timed<Record<string, unknown>> }, 
   return { ...face, ...timed(p.pose, t, len) };
 };
 
+/** `hold` as written by many hands: a name, { what }, the same under kind / name / object / item, a drawing, or { node }. */
+const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L' | 'R' } & HeldOpts) | undefined => {
+  if (h === undefined || h === null || h === false) return undefined;
+  if (typeof h === 'string') return { what: h };
+  if (React.isValidElement(h)) return { node: h };
+  const o = h as Record<string, unknown>;
+  const what = o.what ?? o.kind ?? o.name ?? o.object ?? o.item ?? o.type;
+  if (o.node !== undefined) return { ...(o as object), node: o.node as React.ReactNode };
+  if (typeof what !== 'string') throw new Error(`hold needs the object's name: hold: 'phone', hold: { what: 'phone', color, side }, or your own drawing hold: { node: <g>…</g> }. Got ${JSON.stringify(Object.keys(o))}`);
+  return { ...(o as object), what };
+};
+
 const sortBeats = <T extends { at: number },>(b: T[] | undefined): T[] => [...(b ?? [])].sort((x, y) => x.at - y.at);
 
 /** Turn a description into a shot. */
@@ -179,9 +200,24 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const f0 = p.from ?? 0;
       return clamp((t - f0) / Math.max(1, p.dur ?? len - f0), 0, 1);
     };
+    // A hand that reaches for a piece from too far stops in mid-air: half of the defects left by the reviewer were a
+    // hand that touches nothing (8 projects, 2026-11-13). The person stands within arm's length of what they reach for.
+    const stepIn = (p: PersonSpec, at: Place): Place | null => {
+      if (p.walkTo || !('u' in at)) return null;
+      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach;
+      if (!r || typeof r.to === 'number') return null;
+      const here = flipAt(at) as { u: number; w: number };
+      const g = pl.ground.project(here.u, here.w);
+      const to = typeof r.to === 'string' ? pl.pointOf(r.to) : (() => { const s = flipAt({ u: r.to.u, w: r.to.w }) as { u: number; w: number }; return pl.ground.project(s.u, s.w); })();
+      const dx = to.x - g.x;
+      if (Math.abs(dx) <= ARM_REACH * g.scale) return null;
+      return { x: to.x - Math.sign(dx) * ARM_REACH * 0.85 * g.scale, y: g.y, scale: g.scale, w: here.w } as Place;
+    };
     const whereOf = (p: PersonSpec, idx = 0): Place => {
       if (p.on) return flipAt(pl.seat(p.on, p.seat ?? 0));
       const at = timed(p.at, t, len) ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
+      const near = stepIn(p, at);
+      if (near) return near;
       if (p.walkTo && 'u' in at) {
         const k = walkK(p);
         return flipAt({ u: at.u + (p.walkTo.u - at.u) * k, w: at.w + (p.walkTo.w - at.w) * k });
@@ -220,6 +256,12 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         const du = p.walkTo.u - (a && 'u' in a ? a.u : 0.5);
         // across the room: a profile; toward or away from the camera: nearly front or back
         return Math.abs(du) > 0.04 ? Math.sign(du) * 0.85 : 0;
+      }
+      // reaching for a piece with no yaw given: face it
+      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach;
+      if (!p.on && r && typeof r.to === 'string') {
+        const a = timed(p.at, t, len);
+        if (a && 'u' in a) { const here = flipAt(a) as { u: number; w: number }; return Math.sign(pl.pointOf(r.to).x - pl.ground.project(here.u, here.w).x || 1) * 0.85; }
       }
       return p.on ? pl.seatYaw?.(p.on) : undefined;
     };
@@ -355,9 +397,18 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
           })}
           {people.map((p, i) => {
-            const { who, on, from, dur, stance, rimId, vfx, headGear, torsoGear } = p;
-            const holdSpec = typeof p.hold === 'string' ? { what: p.hold } : p.hold;
-            const heldNode = holdSpec ? held(holdSpec.what, holdSpec) : undefined;
+            const { who, on, from, dur, stance, rimId, vfx } = p;
+            // worn things and an animal's head join whatever the shot drew itself in headGear / torsoGear
+            const yawNow = yawAt(i);
+            const wornList = (p.wear ?? []).map((x) => (typeof x === 'string' ? { what: x } : x));
+            const headWorn = wornList.filter((x) => !wornOnTorso(x.what));
+            const torsoWorn = wornList.filter((x) => wornOnTorso(x.what));
+            const headGear = p.headGear || p.animal || headWorn.length ? (
+              <g>{p.animal ? animalHead(p.animal, yawNow) : null}{headWorn.map((x, k) => <g key={k}>{worn(x.what, { ...x, yaw: yawNow })}</g>)}{p.headGear}</g>
+            ) : undefined;
+            const torsoGear = p.torsoGear || torsoWorn.length ? <g>{torsoWorn.map((x, k) => <g key={k}>{worn(x.what, x)}</g>)}{p.torsoGear}</g> : undefined;
+            const holdSpec = holdOf(p.hold);
+            const heldNode = holdSpec ? (holdSpec.node ?? held(holdSpec.what as string, holdSpec)) : undefined;
             const handLProp = p.handLProp ?? (holdSpec?.side === 'L' ? heldNode : undefined);
             const handRProp = p.handRProp ?? (holdSpec && holdSpec.side !== 'L' ? heldNode : undefined);
             const moving = !!p.walkTo && !on && walkK(p) < 1;

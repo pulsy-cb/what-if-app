@@ -65,6 +65,6 @@ export function loadConfig(): Config {
     })(),
     nouveauUrl: (process.env.WHATIF_NOUVEAU_URL ?? 'http://127.0.0.1:8005').replace(/\/$/, ''),
     renderMode: process.env.WHATIF_RENDER === 'local' ? 'local' : 'modal',
-    reviewMaxRounds: Math.max(0, Number(process.env.WHATIF_REVIEW_MAX_ROUNDS ?? 2)),
+    reviewMaxRounds: Math.max(0, Number(process.env.WHATIF_REVIEW_MAX_ROUNDS ?? 3)),
   };
 }

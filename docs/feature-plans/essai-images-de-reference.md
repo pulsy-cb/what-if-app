@@ -239,7 +239,97 @@ Donc deux limites qui se cumulent : une direction globale et vague, et un vocabu
 - Un contrôle qui refuse une direction que le moteur ne sait pas faire, au lieu de la laisser tomber.
 - Élargir le moteur là où les images demandent toujours la même chose : interaction avec un objet tenu, personne penchée, premier plan fort.
 
+## 11. Troisième essai : Qwen-Image-2.1-Turbo sur Modal (2026-11-13)
+
+API de Pulsy sur Modal (A100 40 Go), asynchrone : `POST /v1/jobs`, suivi, téléchargement. 1 à 4 images de référence, graine (`seed`), prompt négatif, taille libre. Réglages de l'essai : 864×1536, 8 étapes, graine 4242, prompt négatif « extra people, duplicate character, clones, character sheet, text… ». La clé est passée par variable d'environnement.
+
+**Temps :** 66 s pour la première image (conteneur froid, 25 s de chargement), puis 18 à 49 s par image quand trois partent ensemble ; 15 s de calcul par image.
+
+| Image | Références | Résultat |
+|---|---|---|
+| A, l'accusation (3 personnages) | salle, prof, Maya, Camille | **juste** : 3 personnages, main de la prof posée sur le pupitre, texte du tableau conservé |
+| B, Maya se défend (1) | salle, Maya | **juste** : seule, mains ouvertes, visage inquiet |
+| C, la fouille (2) | salle, prof, Maya | **juste** : sac en main, crayons, gomme, feuille, bras croisés |
+| D, l'appel (2) | salle, prof, Maya | **juste** : combiné à cordon, bras tendu, Maya petite au fond |
+| E, la principale entre (3) | salle vue de la porte, principale, prof, Maya | compte juste, mais **aucune action** : trois personnes debout, porte fermée |
+| F, le téléphone brandi (3) | salle, principale, prof, Maya | compte juste, téléphone rose présent, mais **identités mélangées** : lunettes et chignon passés sur le personnage en bleu |
+| G, quatre personnages | salle, planche de groupe | **5 personnages** au lieu de 4, alignés comme sur la planche |
+| H, quatre personnages par retouche | une seule image : mise en place rendue par le moteur | **4 personnages, les 4 actions demandées sont là**, mais le style dérive (visages plus détaillés, doigts) et le texte du tableau est abîmé |
+
+**Ce qu'on apprend :**
+1. **Jusqu'à 2 personnages, c'est le meilleur résultat des trois services.** Style du moteur, décor identique d'une image à l'autre, aucun personnage en trop, objets justes. Les images A à D pourraient servir de cibles telles quelles.
+2. **À 3 personnages, le compte tient mais les identités se mélangent** quand deux personnages se ressemblent (deux femmes adultes en blazer).
+3. **À 4 personnages avec une planche de groupe, ça échoue** : le modèle recopie l'alignement et ajoute quelqu'un.
+4. **La retouche d'une mise en place du moteur (H) est la piste pour les scènes chargées** : une seule référence, le bon nombre de personnages, les bonnes actions. Le style dérive, donc la consigne et la mise en place sont à travailler. Réserve : ma mise en place de départ était mal cadrée (un personnage hors champ), l'essai n'est donc pas propre.
+5. Le tiers bas de l'image reste du sol vide, comme dans la salle de référence.
+6. La limite de 4 références oblige à choisir : salle + 3 personnages au plus.
+
+**Comparaison des trois services**
+
+| | gflow `nano2-lite` | Agnes 2.5 Flash | Qwen 2.1 Turbo (Modal) |
+|---|---|---|---|
+| Nos planches acceptées | non (bloqué) | oui | oui, 4 au plus |
+| Fidélité à notre style | non | oui | oui |
+| Personnage en trop | — | dans 5 images sur 5 | 1 image sur 8 (G) |
+| Objets et actions | bons | bons | bons, sauf E |
+| Graine, prompt négatif | non | non | oui |
+| Temps par image | 36 à 77 s | 15 s | 15 s de calcul |
+| Maîtrise | compte tiers | compte gratuit limité | ton propre déploiement |
+
+**Recommandation :** garder Qwen sur Modal pour la suite des essais.
+
+**Pistes suivantes (non exécutées) :**
+- Refaire H avec une mise en place bien cadrée, et la consigne « garde le style du dessin à l'identique ».
+- Scène à 6 personnages ou plus par la même méthode.
+- Même scène avec trois graines, pour mesurer la stabilité.
+- Pour F : nommer ce qui distingue chaque personnage (lunettes, chignon) et ce que l'autre n'a pas.
+- Coût par image sur Modal : non mesuré ici.
+
+Images locales : `docs/screenshots/essai-images-prof/qwen/` (`planche-A-G.jpg`, `H-avant-apres.jpg`, `A.png` … `H.png`, `Block4.png`), scripts `qwen_gen.py`, `qwen_run.sh`.
+
+## 12. Qwen, scènes chargées par retouche d'une mise en place du moteur (2026-11-13)
+
+Méthode : le moteur rend une mise en place neutre (tous les personnages à leur place, debout ou assis, sans action). Cette image est la **seule** référence. La consigne demande de garder le style, le décor, les personnages et leurs places, et de ne changer que les poses.
+
+| Essai | Référence | Résultat |
+|---|---|---|
+| `H2`, 4 personnages, graine 4242 | `Block4b.png` | 4 personnages, places gardées, décor gardé. Le téléphone est bien levé par le personnage en bleu, mais **il a pris les lunettes et le chignon de la prof** |
+| `H2`, graine 7 | idem | 4 personnages. **Rôles inversés** : c'est la prof qui tient le téléphone, et le personnage en bleu qui est choqué |
+| `H2`, graine 99 | idem | 4 personnages. Le personnage en bleu tient le téléphone **et** fait le choc ; la prof ne bouge pas |
+| `K7`, 7 personnages, graine 4242 | `Block7.png` | 7 personnages, mais Camille est en double et un élève a disparu derrière |
+| `K7`, graine 7 | idem | 7 personnages environ, identités brassées |
+
+**Ce qu'on apprend :**
+1. **Le nombre de personnages tient** (4 sur 4, 7 sur 7), ce que ni Agnes ni la planche de groupe n'obtenaient. Le décor et les places tiennent aussi.
+2. **« Qui fait quoi » ne tient pas.** Sur trois graines, l'action principale est attribuée trois fois différemment. Avec plusieurs personnages, le modèle ne relie pas de façon fiable une description (« la femme en blazer bordeaux ») à la bonne personne.
+3. **Les identités se dégradent** : lunettes et coiffures passent d'un personnage à l'autre, la peau de la prof change de teinte, Maya rapetisse. Le style reste proche du nôtre mais n'est plus celui du moteur.
+4. **D'une graine à l'autre, le résultat change beaucoup.** On ne peut pas compter sur une image du premier coup.
+5. Le texte du tableau est conservé en partie seulement.
+6. Ma mise en place à 7 avait déjà des personnages qui se chevauchent : une partie du brassage vient de là.
+
+**Bilan des essais d'image, à ce stade**
+
+| Nombre de personnages | Ce qui marche | Fiabilité |
+|---|---|---|
+| 1 ou 2 | Qwen avec la salle et les planches en référence | bonne : A, B, C, D justes du premier coup |
+| 3 | idem | moyenne : bon compte, traits échangés entre personnages qui se ressemblent |
+| 4 et plus | retouche d'une mise en place du moteur | faible : bon compte et bonnes places, mais rôles et traits brassés |
+
+**Conséquence pour le studio :** une image générée peut servir de **cible de mise en scène** (cadre, poses, objets, ambiance) pour les plans à un ou deux personnages, qui sont la majorité d'un short. Pour les plans de groupe, elle ne peut pas faire foi sur qui est qui : c'est le moteur qui reste la source des identités, et la fiche du plan qui dit qui fait quoi.
+
+**Pistes non essayées :**
+- Retoucher **un personnage à la fois** (plusieurs passes, une action par passe), en masquant ou en nommant la zone.
+- Donner la mise en place **et** la planche du personnage qui agit.
+- Monter les étapes à 16 et `true_cfg_scale` au-dessus de 1, pour que le prompt négatif pèse vraiment (à 1.0, il est probablement ignoré : à vérifier dans la doc du modèle).
+- Mise en place à 7 sans chevauchement.
+
+Images locales : `docs/screenshots/essai-images-prof/qwen2/` (`H2-planche.jpg` : mise en place puis trois graines ; `K7-planche.jpg`).
+
 ## Validation
+
+- 5 appels à Qwen le 2026-11-13 pour les scènes chargées (§12) : 5 réussis. Total Qwen : 13 images.
+
+- 8 appels à Qwen sur Modal le 2026-11-13 : 8 réussis (§11). Images regardées une par une.
 
 - 7 appels à Agnes au deuxième tour : 5 réussis, 2 refusés par la limite du compte gratuit (§9).
 - 4 appels à Agnes Image 2.5 Flash le 2026-11-12 : 4 réussis (voir §8). Images regardées une par une.

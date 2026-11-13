@@ -41,6 +41,10 @@ export type ReviewReport = {
   blocking?: boolean;
   /** last round, still refused: the video ships and the unresolved defects are listed in this file */
   defectsFile?: string;
+  /** how many reviews in a row refused each shot */
+  strikes?: Record<string, number>;
+  /** shots refused three times in a row: the review stops there instead of asking again */
+  gaveUpOn?: string[];
 };
 
 const MAX_REVIEW_IMAGES = 6;
@@ -730,8 +734,15 @@ export async function reviewEpisodeBoard(
   finalReport.round = round;
   finalReport.batches = batchCount;
   finalReport.sawImages = sawImagesOverall;
-  finalReport.blocking = finalReport.ok && !finalReport.pass && !opts.final;
-  if (opts.final && finalReport.ok && !finalReport.pass) {
+  // The same shot refused three reviews in a row will not be fixed by a fourth: on 2026-11-13 three projects went to
+  // round 8 ("5e signalement, correctif toujours non appliqué") and ended refused anyway. Stop, ship, list the defects.
+  const strikes = nextStrikes(prevReview?.ok && !prevReview.pass ? prevReview.strikes : undefined, finalReport);
+  finalReport.strikes = strikes;
+  const gaveUpOn = finalReport.ok && !finalReport.pass ? Object.keys(strikes).filter((id) => strikes[id]! >= MAX_STRIKES) : [];
+  if (gaveUpOn.length) finalReport.gaveUpOn = gaveUpOn;
+  const final = Boolean(opts.final) || gaveUpOn.length > 0;
+  finalReport.blocking = finalReport.ok && !finalReport.pass && !final;
+  if (final && finalReport.ok && !finalReport.pass) {
     const file = writeUnresolvedDefects(projectRoot, slug, finalReport);
     if (file) finalReport.defectsFile = file;
   }
@@ -744,6 +755,68 @@ export async function reviewEpisodeBoard(
   }
 
   return finalReport;
+}
+
+/**
+ * The cards read before any shot is coded: text only, one short call. A weak picture is cheaper to fix as a sentence
+ * than as code, stills and a review round. Advisory: it never blocks, it runs once per set of cards, and an unreadable
+ * answer is silence, not a verdict. Returns the note for the agent, or null when there is nothing to say.
+ */
+export async function reviewStageCards(provider: Provider, projectRoot: string, slug: string, signal?: AbortSignal): Promise<string | null> {
+  const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+  let ep: any;
+  try {
+    ep = JSON.parse(readText(epDir, 'episode.json', 3_000_000) ?? 'null');
+  } catch {
+    return null;
+  }
+  const shots: any[] = Array.isArray(ep?.shots) ? ep.shots : [];
+  if (!shots.length || shots.some((s) => !s?.stage)) return null;
+  const cards = formatStageCards(shots);
+  const sig = String(cards.length) + ':' + [...cards].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36);
+  const marker = path.join(projectRoot, 'out', slug, 'cards-review.json');
+  try {
+    if (JSON.parse(fs.readFileSync(marker, 'utf8')).sig === sig) return null;
+  } catch {
+    /* never reviewed */
+  }
+  const script = (Array.isArray(ep.script) ? ep.script : []).map((b: any) => String(b?.text ?? '')).join(' ').slice(0, 9_000);
+  const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
+  const user = `## Script\n${script}\n\n## Fiches (format ${ep.aspect ?? '16:9'}, ${shots.length} plans)\n${cards.slice(0, 20_000)}`;
+  let issues: { shot: string; problem: string; fix: string }[] = [];
+  try {
+    const text = (await provider.chat({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], tools: [], signal })).text;
+    const m = text.match(/\{[\s\S]*\}/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    if (!parsed || !Array.isArray(parsed.issues)) return null;
+    issues = parsed.issues.filter((i: any) => i && typeof i.problem === 'string' && i.problem.trim()).slice(0, 8).map((i: any) => ({ shot: String(i.shot ?? '?'), problem: String(i.problem), fix: String(i.fix ?? '') }));
+  } catch {
+    return null;
+  }
+  try {
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, JSON.stringify({ sig, model: provider.model, createdAt: new Date().toISOString(), issues }, null, 2) + '\n');
+  } catch {
+    /* the note still goes to the agent */
+  }
+  if (!issues.length) return null;
+  return [
+    `[REVIEWER — LECTURE DES FICHES, avant le code] ${issues.length} fiche(s) donneraient une image faible. Corrige-les avec stage_shots (seulement ces plans) AVANT de coder ; c'est un conseil, rien n'est bloqué :`,
+    ...issues.map((i) => `- [${i.shot}] ${i.problem}${i.fix ? `\n  → ${i.fix}` : ''}`),
+  ].join('\n');
+}
+
+export const MAX_STRIKES = 3;
+const shotIdsOf = (shot: unknown): string[] => [...new Set((String(shot ?? '').toUpperCase().match(/\bS\d+\b/g) ?? []))];
+/** Refusals in a row per shot: +1 for each shot with an error in this review, back to nothing for the others. */
+export function nextStrikes(prev: Record<string, number> | undefined, report: { ok: boolean; pass: boolean; issues: { shot?: unknown; severity?: string }[] }): Record<string, number> {
+  if (!report.ok || report.pass) return {};
+  const out: Record<string, number> = {};
+  for (const i of report.issues) {
+    if (i.severity !== 'error') continue;
+    for (const id of shotIdsOf(i.shot)) out[id] = Math.max(out[id] ?? 0, (prev?.[id] ?? 0) + 1);
+  }
+  return out;
 }
 
 /**
@@ -854,7 +927,7 @@ export function formatReviewFeedback(report: ReviewReport, slug: string, wordFra
     if (wordFrames.length) lines.push(`\nMoment de chaque mot dans ces plans (mot@image, horloge du plan) pour placer les beats :\n${wordFrames.join('\n')}`);
     if (report.defectsFile) {
       lines.push(
-        `\n⚠ DERNIER TOUR : il n'y a plus de contre-visite. Le rendu n'est plus bloqué, mais ces défauts restent. Corrige ce que tu peux d'abord ; puis, quoi que tu fasses, termine ton message final par « Vidéo livrée avec ${affectedShots.length || errors.length} défaut(s) non corrigé(s) » et cite-les. La liste est dans ${report.defectsFile}.`,
+        `\n⚠ ${report.gaveUpOn?.length ? `ARRÊT DE LA REVUE : ${report.gaveUpOn.join(', ')} refusé(s) ${MAX_STRIKES} fois de suite, une revue de plus ne changerait rien.` : 'DERNIER TOUR :'} il n'y a plus de contre-visite. Le rendu n'est plus bloqué, mais ces défauts restent. Corrige ce que tu peux d'abord ; puis, quoi que tu fasses, termine ton message final par « Vidéo livrée avec ${affectedShots.length || errors.length} défaut(s) non corrigé(s) » et cite-les. La liste est dans ${report.defectsFile}.`,
       );
     }
     const rerunArgs = affectedShots.length ? `, args: ${JSON.stringify(affectedShots)}` : '';

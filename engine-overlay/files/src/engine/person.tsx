@@ -641,6 +641,9 @@ export const Person: React.FC<{
   const headY = HEAD.y + (b.shoulder.y + 108);
   const headShift = `translate(0 ${headY - HEAD.y})`;
   const headSize = b.head === 1 ? '' : ` translate(0 ${HEAD.y}) scale(${b.head}) translate(0 ${-HEAD.y})`;
+  // The far arm of a turned body hangs behind the torso: its hand used to stick out under the jacket, a pale blob between
+  // the legs (seen on every three-quarter adult, 2026-11-12). Behind the body and empty, it is not drawn.
+  const farHandHidden = (o: { end: P }, prop?: React.ReactNode): boolean => !prop && Math.abs(pose.yaw) > 0.2 && Math.abs(o.end.x) < b.shoulder.x * 0.8;
   return (
     <g>
       {shadow > 0 ? <ellipse cx={pose.x} cy={pose.y + legLen * pose.scale + 10} rx={70 * pose.scale} ry={12 * pose.scale} fill="#000" opacity={0.25 * shadow} /> : null}
@@ -651,7 +654,7 @@ export const Person: React.FC<{
           {c?.legs.id === 'skirt' ? <Skirt knees={[j.legL.mid, j.legR.mid]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
           {/* a long dress falls to just above the ankles, and still follows the legs when the person sits */}
           {c?.legs.id === 'dress' ? <Skirt knees={[{ x: lerp(j.legL.mid.x, j.legL.end.x, 0.82) - 8, y: lerp(j.legL.mid.y, j.legL.end.y, 0.82) }, { x: lerp(j.legR.mid.x, j.legR.end.x, 0.82) + 8, y: lerp(j.legR.mid.y, j.legR.end.y, 0.82) }]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
-          {pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
+          {pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{farHandHidden(j.armR, handRProp) ? null : hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{farHandHidden(j.armL, handLProp) ? null : hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
           {torso}
           {(() => {
             // thighs pointing at the camera are seen end-on: a short lap from knee to knee, over the top of the shins
