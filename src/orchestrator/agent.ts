@@ -300,7 +300,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             !isLocalPrecheck &&
             !isLayoutCheck &&
             call.name === 'whatif_run' &&
-            ['render', 'master', 'stills'].includes(String(call.args?.step ?? ''))
+            // source: a :8005 failure (video without audio, server down) is not something the agent can fix
+            ['render', 'master', 'stills', 'source'].includes(String(call.args?.step ?? ''))
           ) {
             const stage = String(call.args.step);
             const errLines = result.summary.split('\n').filter((l) => l.trim());

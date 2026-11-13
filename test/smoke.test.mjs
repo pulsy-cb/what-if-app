@@ -3199,13 +3199,29 @@ print(json.dumps(out))
 
     let checkVoiceTag = 'elevenlabs:3Tp5mYhT9wrfnry9pzvV'; // Stale Hugo on :8005
     const generatedCalls = [];
+    let transcriptExists = true;
+    let noProposal = false;
+    let deepgramCalls = 0;
 
     srv = http.createServer((req, res) => {
       const u = req.url || '';
+      if (req.method === 'POST' && u.includes('/deepgram')) {
+        // a video whose audio track cannot be read
+        deepgramCalls++;
+        req.resume();
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Failed to extract audio from video.' }));
+        return;
+      }
       if (req.method === 'GET' && u.startsWith('/api/videos/vid-fem')) {
         if (u.includes('/transcript/check')) {
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ exists: true, file_exists: true }));
+          res.end(JSON.stringify({ exists: transcriptExists, file_exists: transcriptExists }));
+          return;
+        }
+        if (u.endsWith('/translations') && noProposal) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ proposals: [] }));
           return;
         }
         if (u.includes('/transcript')) {
@@ -3223,6 +3239,8 @@ print(json.dumps(out))
           res.end(
             JSON.stringify({
               proposals: [
+                // custom videos list a shorter variant first: the selected one must still win
+                ...(transcriptExists ? [] : [{ id: 8, is_selected: 0, prompt_type: 'short_fiction_alternative', model_name: 'test', title: 'Variante', translation: 'Une autre histoire, plus courte.' }]),
                 {
                   id: 7,
                   is_selected: true,
@@ -3308,6 +3326,25 @@ print(json.dumps(out))
     assert.equal(generatedCalls.length, 1, 'uploaded user audio on :8005 is reused without calling ElevenLabs');
     const meta2 = JSON.parse(fs.readFileSync(path.join(dir, 'out', slug, 'voice_meta.json'), 'utf8'));
     assert.equal(meta2.audioPath, '/downloads/tts/old.mp3');
+
+    // 2d. No English transcript and an audio track :8005 cannot read, but the French text is already there:
+    //     the import takes it and never asks for a transcription
+    transcriptExists = false;
+    const ok = await execFileAsync('python3', [path.resolve('pipeline/source_import.py'), slug, '--video', 'vid-fem'], { cwd: dir, env });
+    assert.match(ok.stdout, /"ok": ?true/);
+    assert.equal(deepgramCalls, 0, 'a French proposal on :8005 makes the English transcription useless');
+    assert.match(
+      JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8')).script[0].text,
+      /allongée/,
+      'no "hook" proposal: the one selected on :8005 is taken, not the first of the list',
+    );
+
+    // 2e. Neither transcript nor French text: the import fails once, and says it is not worth retrying
+    noProposal = true;
+    const ko = await execFileAsync('python3', [path.resolve('pipeline/source_import.py'), slug, '--video', 'vid-fem'], { cwd: dir, env }).catch((e) => e);
+    assert.equal(ko.code, 4);
+    assert.match(ko.stdout, /Failed to extract audio/);
+    assert.match(ko.stdout, /do NOT retry/);
   } finally {
     if (srv) {
       srv.closeAllConnections?.();

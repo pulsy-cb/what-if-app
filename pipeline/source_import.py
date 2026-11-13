@@ -139,6 +139,15 @@ def main(argv: List[str]) -> int:
     title = str(info.get("title") or info.get("name") or video_id)
     duration = info.get("duration_seconds") or info.get("duration")
 
+    # 0. What nouveau already has. A French proposal makes the English transcript useless: the transcript
+    # only feeds translate/generate, and a video whose audio cannot be extracted would block here for nothing.
+    proposals: List[Dict[str, Any]] = []
+    try:
+        proposals = list(nv.translations(str(video_id)).get("proposals") or [])
+    except NouveauError as e:
+        print(f"[source] could not list proposals ({e})", file=sys.stderr)
+    have_french = bool(usable(proposals)) and not want_generate
+
     # 1. English transcript (deepgram) — only run when the video has none yet.
     check: Dict[str, Any] = {}
     try:
@@ -146,21 +155,23 @@ def main(argv: List[str]) -> int:
     except NouveauError as e:
         print(f"[source] transcript check failed ({e}); continuing", file=sys.stderr)
     transcript_state = "exists" if check.get("exists") else "missing"
-    if transcript_state == "missing" or "--transcribe" in argv:
+    if (transcript_state == "missing" and not have_french) or "--transcribe" in argv:
         try:
             nv.transcribe_video(str(video_id), lang="en", poll_sec=900)
             nv.save_transcript(str(video_id), lang="en")
             transcript_state = "transcribed"
         except NouveauError as e:
-            proj.result(ok=False, error=f"transcription failed: {e}")
+            proj.result(
+                ok=False,
+                error=(
+                    f"transcription failed: {e}. This video has no French proposal on :8005 either, so there is "
+                    "no text to import. This is a :8005 problem (video without a readable audio track?): do NOT "
+                    "retry, tell the user to fix the video on :8005 or add its French text there."
+                ),
+            )
             return 4
 
     # 2. French narration proposals — reuse what nouveau already has unless asked to regenerate.
-    proposals: List[Dict[str, Any]] = []
-    try:
-        proposals = list(nv.translations(str(video_id)).get("proposals") or [])
-    except NouveauError as e:
-        print(f"[source] could not list proposals ({e})", file=sys.stderr)
     if not usable(proposals):
         want_generate = True
     if want_generate or not proposals:
@@ -209,7 +220,8 @@ def main(argv: List[str]) -> int:
     if chosen is None and want:
         # nouveau may only have a plain translation for this video: a wanted *kind* is a preference,
         # not a requirement — an episode without a source is worse than a non-hooky one.
-        chosen = (pool or proposals)[0] if (pool or proposals) else None
+        # The one the user selected on :8005 comes first: it is the text they edited and voiced.
+        chosen = pick(pool or proposals, None) or ((pool or proposals)[0] if (pool or proposals) else None)
         fell_back = chosen is not None
     if chosen is None:
         proj.result(ok=False, error="no French proposal available", videoId=video_id,
