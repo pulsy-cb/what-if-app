@@ -35,6 +35,7 @@ from nouveau_client import (
     Nouveau,
     NouveauError,
     detect_narrator_voice,
+    detect_text_language,
     words_of,
 )
 
@@ -292,12 +293,23 @@ def main(argv: List[str]) -> int:
         proj.result(ok=False, error="episode.json has no script text")
         return 2
 
-    # Auto-detect narrator gender & voice from script phrasing (and source.fr.md fallback)
+    # Auto-detect language, narrator gender & voice from script phrasing (and source.fr.md fallback)
     # unless --voice was passed explicitly or episode.json voice.locked is true.
+    title_str = " ".join(ep.get("title") or []) if isinstance(ep.get("title"), list) else str(ep.get("topic") or "")
+    detected_lang = str(proj.arg(argv, "--lang") or "").strip().lower()
+    if detected_lang not in ("fr", "en"):
+        detected_lang = detect_text_language(f"{title_str}\n{text}")
+    ep_lang = str(ep.get("lang") or source.get("lang") or detected_lang or "fr").strip().lower()
+    if ep_lang not in ("fr", "en") or (not ep_voice.get("locked") and not proj.arg(argv, "--lang") and ep.get("lang") != detected_lang):
+        ep_lang = detected_lang
+    ep_dirty = False
+    if ep.get("lang") != ep_lang:
+        ep["lang"] = ep_lang
+        ep_dirty = True
+
     voice_det: Optional[Dict[str, Any]] = None
     explicit_voice = bool(proj.arg(argv, "--voice"))
     if provider == "elevenlabs" and not explicit_voice and not ep_voice.get("locked"):
-        title_str = " ".join(ep.get("title") or []) if isinstance(ep.get("title"), list) else str(ep.get("topic") or "")
         voice_det = detect_narrator_voice(text, title_str)
         if voice_det["femaleScore"] == 0 and voice_det["maleScore"] == 0:
             src_md = proj.out_dir(slug) / "source.fr.md"
@@ -315,18 +327,22 @@ def main(argv: List[str]) -> int:
                 ep_voice.get("voiceId") != voice_det["voiceId"]
                 or ep_voice.get("narratorGender") != voice_det["gender"]
                 or ep_voice.get("narratorPov") != detected_pov
+                or ep_voice.get("lang") != ep_lang
             ):
                 ep_voice["voiceId"] = voice_det["voiceId"]
                 ep_voice["voiceName"] = voice_det["voiceName"]
                 ep_voice["narratorGender"] = voice_det["gender"]
                 ep_voice["narratorPov"] = detected_pov
+                ep_voice["lang"] = ep_lang
                 ep["voice"] = ep_voice
-                proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
+                ep_dirty = True
                 print(
-                    f"[voice] auto-selected {voice_det['voiceName']} ({voice_det['gender']}/{detected_pov}, {voice_det['voiceId']}) "
+                    f"[voice] auto-selected {voice_det['voiceName']} (lang={ep_lang}, {voice_det['gender']}/{detected_pov}, {voice_det['voiceId']}) "
                     f"[F={voice_det['femaleScore']} M={voice_det['maleScore']}]",
                     flush=True,
                 )
+    if ep_dirty:
+        proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
 
     script = proj.split_words(text)
     norm_text = re.sub(r"\s+", " ", proj.strip_tts_tags(text)).strip()
@@ -336,8 +352,9 @@ def main(argv: List[str]) -> int:
     if src_md_file.is_file():
         src_norm = re.sub(r"\s+", " ", proj.strip_tts_tags(src_md_file.read_text(encoding="utf-8", errors="ignore"))).strip()
         src_text_sig = hashlib.sha1(src_norm.encode("utf-8")).hexdigest()[:12]
+    sig_payload = [text, V, video_id] + ([ep_lang] if ep_lang != "fr" else [])
     sig = hashlib.sha1(
-        (proj.STUDIO.name + json_dumps([text, V, video_id])).encode("utf-8")
+        (proj.STUDIO.name + json_dumps(sig_payload)).encode("utf-8")
     ).hexdigest()[:12]
 
     raw_mp3 = proj.pub_dir(slug) / "voice_raw.mp3"
@@ -441,7 +458,7 @@ def main(argv: List[str]) -> int:
         asr: List[Dict[str, Any]] = []
         asr_source = "deepgram"
         try:
-            tr = nv.tts_transcribe(str(video_id), audio, lang=str(ep.get("lang") or "fr"))
+            tr = nv.tts_transcribe(str(video_id), audio, lang=ep_lang)
             asr = words_of(tr.get("transcript") or tr.get("segments") or [])
         except NouveauError as e:
             print(f"[voice] TTS transcription unavailable ({e}); falling back to a proportional timeline", file=sys.stderr)
@@ -457,6 +474,7 @@ def main(argv: List[str]) -> int:
             {
                 "sig": sig,
                 "text_sig": text_sig,
+                "lang": ep_lang,
                 "chars": len(text),
                 "provider": provider,
                 "modelId": V["modelId"],
@@ -499,6 +517,7 @@ def main(argv: List[str]) -> int:
     proj.result(
         ok=True,
         slug=slug,
+        lang=ep_lang,
         videoId=video_id,
         provider=provider,
         modelId=V["modelId"],

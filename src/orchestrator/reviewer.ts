@@ -9,7 +9,7 @@ import {
   sliceMonolithicShots,
   sortShotIds,
 } from '../tools/episode-source.js';
-import { directorSizeMismatches, timedChanges } from '../tools/whatif.js';
+import { detectEpisodeLanguage, directorSizeMismatches, timedChanges } from '../tools/whatif.js';
 import { shotWordFrames } from './context.js';
 import { formatStageCards, shotCoded } from '../tools/staging.js';
 
@@ -51,8 +51,21 @@ export type ReviewReport = {
 
 const MAX_REVIEW_IMAGES = 6;
 
-const REVIEWER_SYSTEM_PROMPT = `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
-Tu n'as PAS écrit le code : ton rôle est d'auditer en toute indépendance la cohérence entre le récit (script FR), la note de mise en scène (DIRECTOR.md), le code des plans (shared.tsx + shots/S*.tsx ou shots.tsx) et les planches de contact du storyboard (images jointes, 8 à 9 plans chacune).
+export function reviewerSystemPrompt(lang: 'fr' | 'en' = 'fr'): string {
+  const isEn = lang === 'en';
+  const scriptLabel = isEn ? 'script EN (en anglais)' : 'script FR';
+  const point4 = isEn
+    ? `4. **Cartes-titres (<TitleCard>), accents graphiques & cohérence de langue anglaise (EN)** :
+   - Pas de <TitleCard> plein écran en plein milieu de l'histoire qui coupe l'image, ni de sous-titres recopiant la voix.
+   - En revanche, les accents graphiques/diégétiques courts **en anglais** intégrés au moteur — \`title\` d'accroche sur \`S1\`, \`stamp\` lieu/heure (\`StampCard\`), \`tag\` chiffre/montant (\`ValueTag\`), rayons \`burst\` (\`ShockBurst\`), messages \`phoneShot\`, étiquettes \`tabletopShot\` et micro-effets \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`, etc.) — sont **encouragés** et ne constituent JAMAIS un défaut !
+   - L'épisode étant narré en **anglais**, tous les textes à l'écran DOIVENT être en anglais : ne signale JAMAIS l'anglais comme un défaut (signale uniquement du français résiduel laissé par erreur).`
+    : `4. **Cartes-titres (<TitleCard>), accents graphiques & langue française** :
+   - Pas de <TitleCard> plein écran en plein milieu de l'histoire qui coupe l'image, ni de sous-titres recopiant la voix.
+   - En revanche, les accents graphiques/diégétiques courts en français intégrés au moteur — \`title\` d'accroche sur \`S1\`, \`stamp\` lieu/heure (\`StampCard\`), \`tag\` chiffre/montant (\`ValueTag\`), rayons \`burst\` (\`ShockBurst\`), et micro-effets \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`, etc.) — sont **encouragés** et ne constituent JAMAIS un défaut !
+   - Aucun texte en anglais ("YOU PUT ITCHING...", "WHAT IF...") laissé dans un épisode en français.`;
+
+  return `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
+Tu n'as PAS écrit le code : ton rôle est d'auditer en toute indépendance la cohérence entre le récit (${scriptLabel}), la note de mise en scène (DIRECTOR.md), le code des plans (shared.tsx + shots/S*.tsx ou shots.tsx) et les planches de contact du storyboard (images jointes, 8 à 9 plans chacune).
 
 IMPORTANT — Vignette fixe vs animation réelle du plan :
 Chaque vignette sur une planche de contact est capturée à UN SEUL instant \`t = key\` (indiqué pour chaque plan, souvent \`t = 18f\`, soit 0,6 s après la coupe). Un plan de 2 à 4 s comporte souvent plusieurs phases ou beats (\`beats: [{ at: ... }]\`, \`t < ...\`, \`poseAt\`, \`faceAt\`, \`grabAt\`). Avant d'affirmer qu'un geste de milieu ou de fin de phrase manque sur la vignette, VÉRIFIE LE CODE DU PLAN : si l'action est programmée aux frames suivantes sur l'horloge \`0..len\`, elle se joue bien en vidéo et CE N'EST PAS UN DÉFAUT !
@@ -63,7 +76,7 @@ Vérifie particulièrement ces 9 points critiques :
    - Le décor codé et visible correspond-il au lieu de l'histoire et à DIRECTOR.md (murs, ambiance jour/nuit, mobilier comme canapé, table, bol, miroir, fenêtre) ?
    - Si le récit dit qu'un personnage bondit d'un canapé ou pose un objet sur une table, ces éléments existent-ils vraiment dans la scène ?
 2. **Casting des personnages, cohérence physique/familiale, costume & chronologie** :
-   - Le genre, l'âge apparent (\`body: 'adult'\` pour adultes/parents/mariés/métiers vs \`'teen'\` réservé aux enfants/ados/élèves) et la tenue correspondent-ils au récit et à \`voice.narratorGender\` (sans inventer de personnage narrateur supplémentaire dans un récit à la 3e personne, ni coller la mascotte \`as: 'heroine'\` au t-shirt anglais \`"her"\` hors propos) ?
+   - Le genre, l'âge apparent (\`body: 'adult'\` pour adultes/parents/mariés/métiers vs \`'teen'\` réservé aux enfants/ados/élèves) et la tenue correspondent-ils au récit et à \`voice.narratorGender\` (sans inventer de personnage narrateur supplémentaire dans un récit à la 3e personne, ni coller la mascotte \`as: 'heroine'\` hors propos) ?
    - Les carnations (\`skin\`) sont-elles cohérentes au sein d'une même famille biologique (parents, frère/sœur, jumeaux) ainsi qu'entre un personnage et ses mains en insert (\`phoneShot\` / \`tabletopShot\`) ?
    - **Présence chronologique** : un personnage décédé ou absent au moment de la scène ne doit jamais apparaître debout vivant dans la pièce présente (uniquement sur une photo/écran ou dans un plan flashback \`look: "memory"\`).
    - Si l'histoire tourne autour d'un objet ou vêtement spécifique (ex. un nouveau haut acheté, une fiole, un téléphone, une bague), est-il visuellement distinct et n'est-il porté/tenu qu'au moment où le récit l'indique ?
@@ -71,10 +84,7 @@ Vérifie particulièrement ces 9 points critiques :
    - Aucun plan de dialogue ou de réaction émotionnelle ne doit être remplacé par un panneau de texte abstrait (<Schematic>) sans personnage.
    - En revanche, les inserts macro concrets (\`phoneShot\`, \`tabletopShot\` sur dossier/facture/clés/bague/tasse/mains) sont des plans \`insert\` légitimes et encouragés sans \`<Person>\`.
    - Aucun libellé <SchLabel> inventé ou hors sujet.
-4. **Cartes-titres (<TitleCard>), accents graphiques & langue française** :
-   - Pas de <TitleCard> plein écran en plein milieu de l'histoire qui coupe l'image, ni de sous-titres recopiant la voix.
-   - En revanche, les accents graphiques/diégétiques courts en français intégrés au moteur — \`title\` d'accroche sur \`S1\`, \`stamp\` lieu/heure (\`StampCard\`), \`tag\` chiffre/montant (\`ValueTag\`), rayons \`burst\` (\`ShockBurst\`), et micro-effets \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`, etc.) — sont **encouragés** et ne constituent JAMAIS un défaut !
-   - Aucun texte en anglais ("YOU PUT ITCHING...", "WHAT IF...") laissé dans un épisode en français.
+${point4}
 5. **Cadrage & placement (16:9 ou 9:16)** :
    - Les personnages et objets tenus (handRProp / grabAt / handWorld) sont-ils bien cadrés, sans objet flottant loin des mains ni moitié d'écran vide ?
    - En 9:16 : un tiers ou plus du cadre vide (plafond ou sol sombre), un personnage coupé par le bord sans raison, trois personnages qui ne tiennent pas dans 900/zoom unités de large.
@@ -109,8 +119,12 @@ Règles de décision :
 - Mets un seul identifiant de plan par entrée ("S3", pas une liste vague) chaque fois que possible.
 - Mets "pass": false UNIQUEMENT s'il y a au moins une issue avec "severity": "error" qui nuit vraiment à la cohérence du récit ou du cadrage.
 - Limite-toi aux problèmes réels et vérifiables (maximum 8 issues ciblées, les plus graves d'abord). Les défauts globaux de mise en scène (point 6) et de lisibilité du lieu (point 7) sont "error" quand ils touchent plus de la moitié des plans, sinon "warn". S'il n'y a rien de bloquant, retourne "pass": true et "issues": [].`;
+}
 
-const DELTA_REVIEWER_SYSTEM_PROMPT = `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
+export function deltaReviewerSystemPrompt(lang: 'fr' | 'en' = 'fr'): string {
+  const wrongLangNote = lang === 'en' ? 'texte français résiduel dans un épisode en anglais' : 'texte anglais dans un épisode en français';
+  const accentsLang = lang === 'en' ? 'anglais' : 'français';
+  return `Tu es un Directeur de Réalisation & Reviewer Indépendant pour le studio d'animation 2D "What If" (SVG + Remotion).
 Ceci est une **CONTRE-VISITE CIBLÉE (Delta Review)** après correction des plans signalés au tour précédent.
 
 Tu reçois :
@@ -119,8 +133,8 @@ Tu reçois :
 3. Le **code complet non tronqué** de chacun de ces plans ciblés (ainsi que \`shared.tsx\`, \`DIRECTOR.md\` et le script pour le contexte).
 
 Règles STRICTES de contre-visite (anti-boucle infinie) :
-1. **Périmètre verrouillé** : vérifie UNIQUEMENT (a) si les problèmes bloquants signalés au tour précédent sur ces plans ciblés ont été résolus de façon cohérente, et (b) qu'aucune casse visuelle franche (cadre vide, personnage disparu, texte anglais, objet flottant aberrant) n'a été introduite sur ces plans modifiés.
-2. **Interdiction de déplacer les poteaux de but** : N'INVENTE PAS de nouvelles exigences sur d'autres plans non signalés, et ne demande pas un réalisme anatomique impossible pour un rig vectoriel 2D (\`shot()\`, \`<Person>\`, \`phoneShot()\`, \`tabletopShot()\`). Les accents graphiques français (\`stamp\`, \`tag\`, \`vfx\`, \`burst\`, \`title\` sur S1) sont intentionnels.
+1. **Périmètre verrouillé** : vérifie UNIQUEMENT (a) si les problèmes bloquants signalés au tour précédent sur ces plans ciblés ont été résolus de façon cohérente, et (b) qu'aucune casse visuelle franche (cadre vide, personnage disparu, ${wrongLangNote}, objet flottant aberrant) n'a été introduite sur ces plans modifiés.
+2. **Interdiction de déplacer les poteaux de but** : N'INVENTE PAS de nouvelles exigences sur d'autres plans non signalés, et ne demande pas un réalisme anatomique impossible pour un rig vectoriel 2D (\`shot()\`, \`<Person>\`, \`phoneShot()\`, \`tabletopShot()\`). Les accents graphiques ${accentsLang} (\`stamp\`, \`tag\`, \`vfx\`, \`burst\`, \`title\` sur S1) sont intentionnels.
 3. **Attention au keyframe fixe** : l'image jointe \`S<N>.png\` montre l'instant unique \`t = key\` (indiqué pour chaque plan). Si une action en plusieurs temps (\`beats\`, \`t < ...\`, \`poseAt\`, \`grabAt\`) est correctement codée aux frames correspondantes dans le code complet du plan, elle fonctionne en vidéo !
 4. **Validation immédiate** : dès que les défauts bloquants précédents sont corrigés de manière satisfaisante, renvoie \`"pass": true\` et \`"issues": []\`.
 
@@ -137,6 +151,7 @@ Réponds UNIQUEMENT avec un objet JSON valide respectant ce schéma :
     }
   ]
 }`;
+}
 
 /** Names bound to cast(...) or makeLook(...) in shared/shots code: the characters a shot can show. */
 function castNames(src: string): string[] {
@@ -511,6 +526,8 @@ export async function reviewEpisodeBoard(
   } catch {
     ep = {};
   }
+  const epLang = detectEpisodeLanguage(ep);
+  const langUpper = epLang.toUpperCase();
 
   const shotTimings = new Map<string, { len: number; key: number }>();
   for (const s of Array.isArray(timeline?.shots) ? timeline.shots : []) {
@@ -637,10 +654,10 @@ export async function reviewEpisodeBoard(
       const wordMarks = shotWordFrames(projectRoot, slug, chunkIds);
 
       const deltaUserPrompt = [
-        `# Contre-visite ciblée (Tour ${round}) de l'épisode "${slug}" (orientation: ${aspect})`,
+        `# Contre-visite ciblée (Tour ${round}) de l'épisode "${slug}" (orientation: ${aspect}, langue: ${langUpper})`,
         targetChunks.length > 1 ? `Lot ciblé ${cIdx + 1}/${targetChunks.length} — plans vérifiés : ${chunkIds.join(', ')}` : `Plans ciblés vérifiés : ${chunkIds.join(', ')}`,
         `## 1. Problèmes bloquants signalés au tour précédent (à vérifier point par point)\n${prevIssuesList}`,
-        `## 2. Script complet (narration FR — contexte)\n${scriptLines.slice(0, 25_000)}`,
+        `## 2. Script complet (narration ${langUpper} — contexte)\n${scriptLines.slice(0, 25_000)}`,
         `## 3. Découpage des plans ciblés (episode.json.shots)\n${formatShotBreakdown(chunkSet) || '(aucune entrée)'}`,
         wordMarks.length ? `## 4. Repères mot@frame sur l'horloge propre de chaque plan ciblé\n${wordMarks.join('\n')}` : '',
         bibleRaw ? `## 5. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 3_000)}` : '',
@@ -655,7 +672,7 @@ export async function reviewEpisodeBoard(
 
       const { report, sawImages } = await askReviewerWithFallback(
         provider,
-        DELTA_REVIEWER_SYSTEM_PROMPT,
+        deltaReviewerSystemPrompt(epLang),
         deltaUserPrompt,
         images,
         slug,
@@ -703,8 +720,8 @@ export async function reviewEpisodeBoard(
           : '';
 
       const userPrompt = [
-        `# Audit indépendant de l'épisode "${slug}" (orientation: ${aspect}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})${sheetRangeNote}`,
-        `## 1. Script complet (narration FR)\n${scriptLines.slice(0, 25_000)}`,
+        `# Audit indépendant de l'épisode "${slug}" (orientation: ${aspect}, langue: ${langUpper}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})${sheetRangeNote}`,
+        `## 1. Script complet (narration ${langUpper})\n${scriptLines.slice(0, 25_000)}`,
         `## 2. Découpage des plans (episode.json.shots)\n${formatShotBreakdown().slice(0, 25_000)}`,
         bibleRaw ? `## 3. Bible de continuité (bible.json)\n${bibleRaw.slice(0, 3_000)}` : '',
         `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 15_000)}${cardsBlock(batchShots)}`,
@@ -719,7 +736,7 @@ export async function reviewEpisodeBoard(
 
       const { report, sawImages } = await askReviewerWithFallback(
         provider,
-        REVIEWER_SYSTEM_PROMPT,
+        reviewerSystemPrompt(epLang),
         userPrompt,
         images,
         slug,

@@ -27,6 +27,7 @@ from nouveau_client import (
     Nouveau,
     NouveauError,
     detect_narrator_voice,
+    detect_text_language,
 )
 
 MAX_BLOCK_WORDS = 22
@@ -44,17 +45,17 @@ def clean_french_spacing(text: str) -> str:
     return s
 
 
-def sentences(text: str) -> List[str]:
-    cleaned = clean_french_spacing(text)
+def sentences(text: str, lang: str = "fr") -> List[str]:
+    cleaned = clean_french_spacing(text) if lang == "fr" else text
     parts = re.split(r"(?<=[.!?…])\s+", cleaned.replace("\n", " ").strip())
     return [p.strip() for p in parts if p.strip()]
 
 
-def blocks(text: str, limit: int = MAX_BLOCK_WORDS) -> List[Dict[str, Any]]:
+def blocks(text: str, limit: int = MAX_BLOCK_WORDS, lang: str = "fr") -> List[Dict[str, Any]]:
     """Pack sentences into script blocks of at most `limit` words (mechanical first pass)."""
     out: List[Dict[str, Any]] = []
     cur: List[str] = []
-    for s in sentences(text):
+    for s in sentences(text, lang=lang):
         if cur and len(" ".join(cur + [s]).split()) > limit:
             out.append({"text": " ".join(cur)})
             cur = []
@@ -64,12 +65,12 @@ def blocks(text: str, limit: int = MAX_BLOCK_WORDS) -> List[Dict[str, Any]]:
     return out
 
 
-def make_title_lines(raw_title: str) -> List[str]:
-    """Turn a French proposal title into two short uppercase title-card lines."""
+def make_title_lines(raw_title: str, lang: str = "fr") -> List[str]:
+    """Turn a French or English proposal title into two short uppercase title-card lines."""
     clean = re.sub(r"\s+", " ", (raw_title or "").strip()).upper()
     words = clean.split()
     if not words:
-        return ["HISTOIRE VRAIE", "…"]
+        return ["TRUE STORY", "…"] if lang == "en" else ["HISTOIRE VRAIE", "…"]
     if len(words) <= 4:
         mid = max(1, len(words) // 2)
         return [" ".join(words[:mid]), " ".join(words[mid:]) or "…"]
@@ -238,10 +239,13 @@ def main(argv: List[str]) -> int:
                 nv.select_proposal(str(video_id), chosen.get("id"))
             except NouveauError as e:
                 print(f"[source] select failed ({e}); keeping text anyway", file=sys.stderr)
-        text = clean_french_spacing(str(chosen.get("translation") or "").strip())
+        raw_translation = str(chosen.get("translation") or "").strip()
+        detected_lang = detect_text_language(f"{chosen.get('title') or title}\n{raw_translation}")
+        text = clean_french_spacing(raw_translation) if detected_lang == "fr" else raw_translation
         out = proj.out_dir(slug)
         (out / "source.fr.md").write_text(text + "\n", encoding="utf-8")
         voice_det = detect_narrator_voice(text, str(chosen.get("title") or title))
+        detected_lang = str(voice_det.get("lang") or detected_lang or "fr")
         existing_tts: Dict[str, Any] = {}
         try:
             tts_chk = nv.tts_check(str(video_id))
@@ -270,7 +274,7 @@ def main(argv: List[str]) -> int:
         except NouveauError:
             pass
         print(
-            f"[source] narrator gender analysis -> {voice_det['gender']} / pov={voice_det.get('pov', 'first')} "
+            f"[source] narrator analysis -> lang={detected_lang}, {voice_det['gender']} / pov={voice_det.get('pov', 'first')} "
             f"({voice_det['voiceName']} {voice_det['voiceId']}, F={voice_det['femaleScore']} M={voice_det['maleScore']})",
             flush=True,
         )
@@ -279,6 +283,7 @@ def main(argv: List[str]) -> int:
                 "provider": "nouveau",
                 "videoId": video_id,
                 "title": title,
+                "lang": detected_lang,
                 "url": info.get("url"),
                 "durationSeconds": duration,
                 "proposalId": chosen.get("id"),
@@ -295,6 +300,7 @@ def main(argv: List[str]) -> int:
             }
         )
         ep["source"] = source
+        ep["lang"] = detected_lang
         voice_cfg = dict(ep.get("voice") or {})
         if not voice_cfg.get("locked") and voice_cfg.get("provider", "elevenlabs") != "fish":
             ep["voice"] = {
@@ -304,6 +310,7 @@ def main(argv: List[str]) -> int:
                 "voiceName": voice_det["voiceName"],
                 "narratorGender": voice_det["gender"],
                 "narratorPov": voice_det.get("pov", "first"),
+                "lang": detected_lang,
                 "modelId": voice_cfg.get("modelId") or ELEVENLABS_MODEL,
                 "speakingRate": voice_cfg.get("speakingRate") or ELEVENLABS_SPEED,
             }
@@ -314,24 +321,26 @@ def main(argv: List[str]) -> int:
                 "voiceName": voice_det["voiceName"],
                 "narratorGender": voice_det["gender"],
                 "narratorPov": voice_det.get("pov", "first"),
+                "lang": detected_lang,
                 "modelId": ELEVENLABS_MODEL,
                 "speakingRate": ELEVENLABS_SPEED,
             }
         if apply_script:
-            ep["script"] = blocks(text)
+            ep["script"] = blocks(text, lang=detected_lang)
             source["appliedBlocks"] = len(ep["script"])
             chosen_title = str(chosen.get("title") or title).strip()
             if chosen_title:
                 ep["topic"] = chosen_title
                 cur_title = ep.get("title")
-                if not cur_title or cur_title == ["ET SI TU POUVAIS", "… ?"]:
-                    ep["title"] = make_title_lines(chosen_title)
+                if not cur_title or cur_title in (["ET SI TU POUVAIS", "… ?"], ["WHAT IF YOU COULD", "… ?"]):
+                    ep["title"] = make_title_lines(chosen_title, lang=detected_lang)
             # Clear placeholder TODO science entries on imported narrative videos
             sci = ep.get("science")
             if isinstance(sci, list) and any("TODO" in str(s) for s in sci):
                 ep["science"] = []
         proj.save_json(proj.ep_dir(slug) / "episode.json", ep)
-        proj.save_json(out / "source.json", {**payload, "selected": source, "text": text, "narratorVoice": voice_det})
+        proj.save_json(out / "source.json", {**payload, "selected": source, "text": text, "lang": detected_lang, "narratorVoice": voice_det})
+        payload["lang"] = detected_lang
         payload["scriptWords"] = source["words"]
         payload["applied"] = bool(apply_script)
         payload["blocks"] = len(ep.get("script") or [])

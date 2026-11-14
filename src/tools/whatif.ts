@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { layoutReport } from '../orchestrator/layout.js';
-import { countScriptWords } from '../orchestrator/context.js';
+import { countScriptWords, detectEpisodeLanguage } from '../orchestrator/context.js';
+export { detectEpisodeLanguage };
 import { fileURLToPath } from 'node:url';
 import { exec } from './exec.js';
 import { applyEngineOverlay, overlaySummary } from './engine-overlay.js';
@@ -257,6 +258,8 @@ function diffArtifacts(root: string, before: Map<string, number>): Artifact[] {
  * Validate the script, source translation fidelity (when imported from :8005), science backing (when standalone),
  * and language consistency in episode.json.
  */
+const FR_LANG_RE = /\b(je|tu|il|elle|nous|vous|le|la|les|un|une|des|du|dans|sur|pour|avec|est|sont|mais|plus|pas|que|qui|était|avait|suis|ma|mes|sa|ses)\b/gi;
+
 export function episodeAudit(episode: any, slug: string): string | null {
   const script = Array.isArray(episode?.script) ? episode.script : [];
   const hasSourceVideo = Boolean(episode?.source?.videoId);
@@ -274,7 +277,7 @@ export function episodeAudit(episode: any, slug: string): string | null {
   if (hasSourceVideo && sourceWords >= 40 && scriptWords < Math.floor(sourceWords * 0.75)) {
     return (
       `episode.json.script (${scriptWords} words) shortened or rewrote the :8005 translation proposal (${sourceWords} words). ` +
-      `Do NOT shorten or rewrite the server's translation proposal (projects can last several minutes): keep the full French narration from out/${slug}/source.fr.md ` +
+      `Do NOT shorten or rewrite the server's translation proposal (projects can last several minutes): keep the full narration from out/${slug}/source.fr.md ` +
       `by running whatif_run { episode: "${slug}", step: "source", args: ["--pick", "hook", "--apply"] }.`
     );
   }
@@ -296,15 +299,19 @@ export function episodeAudit(episode: any, slug: string): string | null {
     }
   }
 
-  // Language consistency: if the narration is in French, the title and beat 2 must not keep "WHAT IF YOU COULD" in English
-  const frHits = (fullText.match(/\b(tu|le|la|les|un|une|des|dans|sur|pour|avec|est|sont|mais|plus)\b/gi) ?? []).length;
-  const isFrench = frHits >= 4;
+  // Language consistency: match title and narration language (French in FR episodes, English in EN episodes)
+  const epLang = detectEpisodeLanguage(episode);
+  const frHits = (fullText.match(FR_LANG_RE) ?? []).length;
+  const isFrench = epLang === 'fr' && frHits >= 4;
   const titleStr = Array.isArray(episode?.title) ? episode.title.join(' ') : String(episode?.title ?? '');
   if (isFrench && /\bwhat\s+if\s+you\s+could\b/i.test(titleStr)) {
     return `episode.json.title mixes English ("WHAT IF YOU COULD") with a French episode ("${titleStr}"). Use a French title such as ["ET SI TU POUVAIS", "… ?"].`;
   }
   if (isFrench && /\bwhat\s+if\s+you\s+could\b/i.test(fullText)) {
     return `episode.json.script contains the English phrase "What if you could" inside a French narration (${slug}): write beat 2 in French ("Et si tu pouvais … ?") so the French TTS voice does not pronounce English with a broken accent.`;
+  }
+  if (epLang === 'en' && /\bet\s+si\s+tu\s+pouvais\b/i.test(titleStr)) {
+    return `episode.json.title still has the French placeholder ("${titleStr}") on an English episode (${slug}). Set an English title in episode.json.title matching the story.`;
   }
   return null;
 }

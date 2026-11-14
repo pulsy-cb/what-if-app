@@ -187,8 +187,8 @@
           </label>
         </div>
         <p class="info-callout small">
-          Un ID vidéo récupère la transcription et la traduction française dans
-          <code>out/&lt;slug&gt;/source.fr.md</code>, et réutilise l'audio ElevenLabs existant sur <code>:8005</code> s'il est déjà généré.
+          Un ID vidéo récupère la proposition de narration (FR ou EN) dans
+          <code>out/&lt;slug&gt;/source.fr.md</code>, choisit la voix selon le contenu du texte, et réutilise l'audio existant sur <code>:8005</code> lorsqu'il correspond.
         </p>
         <label class="row-inline">
           <input id="np-kick" type="checkbox" checked />

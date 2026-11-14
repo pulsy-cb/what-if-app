@@ -42,105 +42,140 @@ KEYWORDS = {
     "living": [
         "salon", "canape", "fauteuil", "tele", "television", "sejour", "appartement", "maison",
         "tapis", "coussin", "table-basse", "entree", "porte-d-entree",
+        "living-room", "couch", "sofa", "armchair", "tv", "apartment", "house", "home", "rug", "carpet",
     ],
     "classroom": [
         "prof", "professeur", "classe", "eleve", "eleves", "tableau", "ecole", "college", "lycee",
         "cours", "interro", "examen", "scolaire", "maitre", "craie",
+        "teacher", "professor", "class", "classroom", "student", "students", "school", "high-school",
+        "chalkboard", "blackboard", "whiteboard", "exam", "lesson", "principal",
     ],
     "kitchen": [
         "cuisine", "cuisiner", "tasse", "cafe", "manger", "couteau", "assiette", "four", "frigo",
         "cookie", "biscuit", "pizza", "repas", "petit-dejeuner", "recette", "evier", "poele",
+        "kitchen", "cook", "cooking", "mug", "coffee", "eat", "eating", "dinner", "breakfast",
+        "lunch", "knife", "plate", "oven", "fridge", "refrigerator", "sink", "stove",
     ],
     "restaurant": [
         "restaurant", "resto", "serveur", "serveuse", "menu", "addition", "ravioli", "raviolis",
         "tupperware", "soda", "plat", "date", "patron", "cheque", "pourboire", "commande",
         "commander", "boisson", "entree", "dessert", "bistrot", "brasserie", "diner",
+        "waiter", "waitress", "server", "tip", "booth", "bartender",
     ],
     "hospital": [
         "hopital", "urgences", "urgence", "medecin", "docteur", "infirmier", "infirmiere",
         "patient", "patiente", "clinique", "chirurgien", "chirurgie", "ambulance", "civiere",
         "brancard", "perfusion", "moniteur", "blouse", "diagnostic", "ordonnance", "medical", "medicale",
+        "hospital", "emergency", "doctor", "nurse", "clinic", "surgeon", "surgery", "stretcher",
+        "gurney", "iv", "monitor", "gown", "diagnosis", "prescription", "icu", "ward", "wheelchair",
     ],
     "police-office": [
         "police", "policier", "policiere", "commissariat", "inspecteur", "agent", "interrogatoire",
         "plainte", "menottes", "garde-a-vue", "enquete", "brigade", "gendarme",
+        "cop", "cops", "officer", "officers", "precinct", "detective", "interrogation",
+        "handcuffs", "arrest", "arrested", "sheriff",
     ],
     "cell": [
         "cellule", "prison", "barreaux", "detenu", "gardien", "cachot", "penitencier",
+        "cell", "jail", "bars", "inmate", "prisoner",
     ],
     "office": [
         "entreprise", "collegue", "patronne", "reunion", "open-space", "contrat", "licenciement",
         "salaire", "entretien", "rh", "manager", "directeur", "directrice", "imprimante",
+        "office", "company", "coworker", "colleague", "boss", "meeting", "cubicle", "contract",
+        "fired", "salary", "interview", "hr", "director", "printer",
     ],
     "shop": [
         "magasin", "supermarche", "boutique", "caisse", "caissier", "caissiere", "rayon",
         "client", "cliente", "panier", "caddie", "vendeur", "vendeuse", "vitrine", "achat",
+        "store", "shop", "supermarket", "grocery", "mall", "cashier", "register", "aisle",
+        "customer", "cart", "basket", "clerk",
     ],
     "salon": [
         "coiffeur", "coiffeuse", "coiffure", "manucure", "ongles", "estheticienne", "miroir", "ciseaux",
+        "hairdresser", "stylist", "haircut", "manicure", "pedicure", "nails", "mirror", "scissors", "barbershop",
     ],
     "cafeteria": [
         "cantine", "cafeteria", "plateau", "self", "refectoire",
+        "lunchroom", "tray", "canteen",
     ],
     "auditorium": [
         "amphi", "amphitheatre", "scene", "estrade", "public", "spectateurs", "discours", "conference", "tribunal", "juge", "avocat",
+        "auditorium", "assembly", "gym", "bleachers", "stage", "spotlight", "microphone", "banner",
+        "audience", "crowd", "speech", "court", "courtroom", "judge", "lawyer", "musical",
     ],
     "corridor": [
         "couloir", "hall", "palier", "ascenseur", "vestiaire", "casier", "casiers",
+        "corridor", "hallway", "lobby", "elevator", "locker", "lockers", "bathroom", "restroom", "stall", "toilet",
     ],
     "vehicle": [
         "voiture", "auto", "volant", "conduire", "conduit", "conducteur", "passager", "parking",
         "siege", "bus", "train", "metro", "trajet", "embouteillage", "phare", "autoroute", "frein",
         "vitesse", "camion", "taxi", "habitacle", "pare-brise", "ceinture",
+        "car", "drive", "drove", "driving", "driver", "passenger", "seatbelt", "steering",
+        "highway", "freeway", "brake", "brakes", "truck", "cab", "uber", "windshield", "dashboard", "van",
     ],
     "street": [
         "rue", "trottoir", "carrefour", "passage", "passant", "passants", "lampadaire", "immeubles",
         "facade", "quartier", "ruelle", "avenue", "boulevard",
+        "street", "sidewalk", "crosswalk", "alley", "neighborhood", "curb", "streetlight",
     ],
     "park": [
         "parc", "arbre", "foret", "jardin", "herbe", "banc", "nature", "sentier", "pelouse", "square",
+        "park", "tree", "trees", "woods", "forest", "garden", "grass", "bench", "trail", "lawn", "yard", "backyard",
     ],
     "outdoor": [
         "dehors", "plage", "montagne", "chemin", "route", "ville", "sortir",
+        "outside", "outdoors", "beach", "mountain", "road", "town", "city",
     ],
     "bedroom": [
         "chambre", "lit", "dormir", "dors", "reve", "nuit", "oreiller", "reveil", "matin",
         "casque", "micro", "muet", "mute", "jeu", "jouer", "gamer", "vocal", "console", "manette",
         "stream", "discord", "pyjama", "couette",
+        "bedroom", "bed", "sleep", "sleeping", "slept", "dream", "pillow", "alarm",
+        "headset", "headphones", "muted", "gaming", "controller", "pajamas", "blanket", "closet",
     ],
-    "rooftop": ["toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "etoile", "lune", "terrasse", "balcon"],
-    "stairwell": ["escalier", "escaliers", "rampe", "etage"],
+    "rooftop": [
+        "toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "etoile", "lune", "terrasse", "balcon",
+        "roof", "rooftop", "sky", "sun", "clouds", "stars", "moon", "balcony", "terrace",
+    ],
+    "stairwell": [
+        "escalier", "escaliers", "rampe", "etage",
+        "stairs", "staircase", "stairwell", "railing", "upstairs", "downstairs",
+    ],
     "study": [
         "bureau", "feuille", "fiche", "crayon", "cahier", "stylo", "papier", "dessin", "bande",
         "bandes", "colle", "decoupe", "ordinateur", "ecran", "clavier", "dossier", "travail",
+        "desk", "notebook", "pencil", "pen", "paper", "drawing", "computer", "laptop", "keyboard", "folder", "homework",
     ],
     "schematic": [
         "geometrie", "theoreme", "nombre", "equation", "surface", "courbe", "angle",
         "orientable", "energie", "joules", "physique", "formule", "calcul", "pourcent", "statistique",
+        "geometry", "theorem", "physics", "formula", "calculation", "percent", "statistics", "energy",
     ],
 }
 
 # Unambiguous place nouns capable of switching `set` on a single cutaway clause even when `defaultSet` is set
 CLAUSE_LOCATION_WORDS = {
-    "living": {"salon", "canape", "sejour"},
-    "kitchen": {"cuisine", "frigo", "evier"},
-    "bedroom": {"chambre", "lit", "oreiller", "couette"},
-    "corridor": {"couloir", "ascenseur", "palier", "hall", "vestiaire"},
-    "stairwell": {"escalier", "escaliers"},
-    "hospital": {"hopital", "urgences", "clinique", "ambulance", "civiere", "brancard"},
-    "police-office": {"commissariat", "interrogatoire", "garde-a-vue"},
-    "cell": {"cellule", "prison", "barreaux"},
-    "restaurant": {"restaurant", "resto", "bistrot", "brasserie"},
-    "cafeteria": {"cantine", "cafeteria", "refectoire"},
-    "shop": {"magasin", "supermarche", "boutique", "caisse"},
-    "salon": {"coiffeur", "coiffeuse", "manucure"},
-    "office": {"open-space", "reunion", "entreprise"},
-    "auditorium": {"amphi", "amphitheatre", "tribunal"},
-    "classroom": {"classe", "ecole", "lycee", "college"},
-    "vehicle": {"voiture", "volant", "habitacle", "autoroute", "bus", "train", "metro", "taxi", "parking"},
-    "street": {"rue", "trottoir", "ruelle", "avenue", "boulevard", "carrefour"},
-    "park": {"parc", "jardin", "foret", "banc", "pelouse"},
-    "rooftop": {"toit", "terrasse", "balcon"},
+    "living": {"salon", "canape", "sejour", "living-room", "couch", "sofa"},
+    "kitchen": {"cuisine", "frigo", "evier", "kitchen", "fridge", "refrigerator", "sink", "stove"},
+    "bedroom": {"chambre", "lit", "oreiller", "couette", "bedroom", "bed", "pillow", "blanket"},
+    "corridor": {"couloir", "ascenseur", "palier", "hall", "vestiaire", "corridor", "hallway", "elevator", "lockers", "bathroom", "restroom", "stall"},
+    "stairwell": {"escalier", "escaliers", "stairs", "staircase", "stairwell"},
+    "hospital": {"hopital", "urgences", "clinique", "ambulance", "civiere", "brancard", "hospital", "clinic", "stretcher", "gurney", "icu"},
+    "police-office": {"commissariat", "interrogatoire", "garde-a-vue", "precinct", "interrogation"},
+    "cell": {"cellule", "prison", "barreaux", "jail", "inmate"},
+    "restaurant": {"restaurant", "resto", "bistrot", "brasserie", "diner"},
+    "cafeteria": {"cantine", "cafeteria", "refectoire", "lunchroom", "canteen"},
+    "shop": {"magasin", "supermarche", "boutique", "caisse", "supermarket", "grocery", "mall", "cashier"},
+    "salon": {"coiffeur", "coiffeuse", "manucure", "hairdresser", "barbershop", "manicure"},
+    "office": {"open-space", "reunion", "entreprise", "office", "cubicle"},
+    "auditorium": {"amphi", "amphitheatre", "tribunal", "auditorium", "assembly", "bleachers", "gym", "stage", "courtroom"},
+    "classroom": {"classe", "ecole", "lycee", "college", "classroom", "school", "high-school"},
+    "vehicle": {"voiture", "volant", "habitacle", "autoroute", "bus", "train", "metro", "taxi", "parking", "car", "highway", "freeway", "windshield"},
+    "street": {"rue", "trottoir", "ruelle", "avenue", "boulevard", "carrefour", "street", "sidewalk", "alley", "crosswalk"},
+    "park": {"parc", "jardin", "foret", "banc", "pelouse", "park", "garden", "woods", "forest", "bench"},
+    "rooftop": {"toit", "terrasse", "balcon", "rooftop", "balcony"},
 }
 
 # Words after which a cut is forbidden (determiners, prepositions, clitics, auxiliaries that bind to the next word)
@@ -155,14 +190,30 @@ NO_CUT_AFTER = {
     "ai", "as", "ont", "avais", "avait", "avaient", "suis", "es", "est", "sommes", "etes", "sont",
     "etais", "etait", "etaient", "vais", "vas", "va", "allais", "allait", "allaient", "peux", "peut",
     "pouvais", "pouvait", "voulais", "voulait", "dois", "doit", "devait", "commence", "essayait", "essaye",
+    # English determiners, subject pronouns, prepositions & auxiliaries
+    "the", "an", "this", "that", "these", "those", "my", "your", "his", "her", "its", "our", "their",
+    "every", "each", "any", "some", "no", "another",
+    "i", "he", "she", "we", "they", "who", "which", "whose",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from", "into", "onto", "upon", "under", "over",
+    "through", "between", "among", "without", "within", "during", "before", "after", "until", "till",
+    "toward", "towards", "against", "about", "around", "and", "but", "if", "when", "while", "because", "although", "though",
+    "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must", "not", "very", "too", "so",
+    "didn't", "don't", "doesn't", "wasn't", "weren't", "couldn't", "wouldn't", "shouldn't",
+    "haven't", "hasn't", "hadn't", "won't", "can't", "isn't", "aren't", "i'm", "i've", "i'd", "i'll",
+    "she's", "he's", "they're", "we're", "you're", "it's", "that's", "there's",
 }
 
-# Multi-word conjunctions that must never be split across two shots ("même | si", "pendant | que", "parce | que")
+# Multi-word conjunctions that must never be split across two shots ("même | si", "even | though", "in | front")
 COMPOUND_CONNECTORS = {
     ("meme", "si"), ("parce", "que"), ("parce", "qu"), ("pendant", "que"), ("pendant", "qu"),
     ("alors", "que"), ("alors", "qu"), ("tandis", "que"), ("avant", "que"), ("avant", "de"),
     ("apres", "que"), ("apres", "avoir"), ("sans", "que"), ("bien", "que"), ("pour", "que"),
     ("afin", "que"), ("afin", "de"), ("des", "que"), ("jusqu", "a"), ("au", "lieu"),
+    ("even", "though"), ("even", "if"), ("as", "if"), ("as", "though"), ("as", "soon"),
+    ("so", "that"), ("in", "order"), ("in", "front"), ("next", "to"), ("out", "of"),
+    ("instead", "of"), ("because", "of"), ("on", "the"), ("in", "the"), ("at", "the"),
+    ("to", "the"), ("of", "the"), ("from", "the"), ("into", "the"), ("all", "of"),
 }
 
 # Semantic vocabulary for shot framing (replaces blind % len(SIZES) cycling)
@@ -171,6 +222,9 @@ SPEECH_REACTION_WORDS = {
     "hurlait", "hurler", "hurle", "crie", "crier", "appele", "visage", "yeux", "regard", "regarde",
     "bouche", "larmes", "pardon", "desolee", "desole", "merci", "aide", "attends", "voyons", "pourquoi",
     "quoi", "comment", "chuchote", "soupire", "ri", "rire", "rougi", "blanchi", "grimace", "silence",
+    "said", "asked", "replied", "answered", "told", "whispered", "shouted", "screamed", "yelled",
+    "smiled", "smile", "cried", "crying", "tears", "laughed", "laughing", "stared", "looked",
+    "eyes", "face", "mouth", "sorry", "please", "begged", "sighed", "gasped",
 }
 
 OBJECT_PROP_WORDS = {
@@ -184,12 +238,20 @@ OBJECT_PROP_WORDS = {
     "verrou", "tiroir", "valise", "cadeau", "carnet", "journal", "contrat", "signature", "sms",
     "notification", "clavier", "souris", "manette", "casque", "micro", "cafe", "sang", "cicatrice",
     "mains", "doigts", "poche",
+    "phone", "screen", "messages", "text", "texting", "typed", "ringing", "key", "keys", "lock",
+    "bill", "card", "letter", "receipt", "invoice", "check", "plate", "bowl", "glass", "cup", "mug",
+    "bag", "box", "boxes", "bucket", "ring", "watch", "knife", "scissors", "pen", "paper", "wallet",
+    "cash", "envelope", "pill", "pills", "folder", "file", "prescription", "syringe", "microphone",
+    "clock", "handle", "drawer", "suitcase", "gift", "notebook", "diary", "contract", "keyboard",
+    "blood", "scar", "hands", "fingers", "pocket",
 }
 
 WIDE_ACTION_WORDS = {
     "approchee", "approche", "bondi", "saute", "leve", "levee", "assis", "assise", "entre", "entree",
     "sorti", "sortie", "couru", "marche", "tire", "pousse", "arrache", "ensemble", "toutes", "canape",
     "salon", "piece", "rue", "porte", "couloir", "escalier", "tous", "devant", "autour",
+    "walked", "ran", "running", "stood", "climbed", "entered", "left", "followed", "chasing",
+    "poured", "pushed", "pulled", "gathered", "together", "everyone", "entire", "around", "stage",
 }
 
 DRAMATIC_LOW_HIGH_WORDS = {
@@ -197,17 +259,23 @@ DRAMATIC_LOW_HIGH_WORDS = {
     "etire", "dechire", "comprimait", "ecrase", "soudain", "explose", "effondre", "domine",
     "choc", "fige", "figee", "glace", "glacee", "tremble", "tremblait", "mensonge", "trahi",
     "urgence", "urgences", "critique", "danger", "alarme", "arrestation", " hurle", "crie",
+    "screamed", "shouted", "trapped", "terror", "panic", "crushed", "suddenly", "exploded",
+    "collapsed", "shock", "froze", "frozen", "shaking", "trembling", "betrayed", "revenge",
+    "destroy", "destroyed", "humiliate", "humiliated", "spotlight", "chanting", "dead", "cancer",
 }
 
 MEMORY_LOOK_WORDS = {
     "souviens", "souvenir", "souvenirs", "epoque", "enfance", "autrefois", "jadis", "rappelle",
     "rappelais", "annees", "auparavant",
+    "remember", "remembered", "memory", "memories", "childhood", "years", "earlier", "previously",
 }
 
 TIME_PLACE_STAMP_PHRASES = (
     "plus tard", "plus tot", "lendemain", "la veille", "heures du matin", "heures du soir",
     "ans plus", "mois plus", "semaines plus", "jours plus", "salle d", "aux urgences",
     "a l hopital", "au commissariat", "au tribunal",
+    "later", "the next day", "that evening", "that night", "next morning", "weeks later",
+    "months later", "years later", "days later", "in two weeks", "start monday",
 )
 
 # Pre-cached clips in studio/library/sfx/ (exact prompt + duration so wi.py clip_path resolves offline)
@@ -439,14 +507,22 @@ def boundary_score(words: list[dict], idx: int, beat_map: dict[int, str]) -> flo
     elif "," in prev_p:
         score += 16.0
 
-    # Never cut right after a determiner, preposition, auxiliary, or inside "bout à bout" / "même si" / "pendant que"
-    if prev_w in NO_CUT_AFTER or prev_p.endswith("-"):
+    # Never cut right after a determiner, preposition, auxiliary, or inside "bout à bout" / "même si" / "even though"
+    has_terminal_punct = any(c in prev_p for c in ".?!…:;—")
+    if not has_terminal_punct and (prev_w in NO_CUT_AFTER or prev_p.endswith("-")):
         score -= 48.0
-    if (prev_w, curr_w) in COMPOUND_CONNECTORS:
+    if not has_terminal_punct and (prev_w, curr_w) in COMPOUND_CONNECTORS:
         score -= 60.0
     if idx + 1 < len(words) and curr_w == "a" and bare_ascii(str(words[idx + 1].get("w", ""))) == prev_w:
         score -= 45.0  # e.g. "bout | à bout"
-    if curr_w in {"et", "mais", "puis", "alors", "quand", "un", "une", "le", "la", "les", "tu", "il", "elle", "on"} and prev_w not in NO_CUT_AFTER:
+    if (
+        curr_w
+        in {
+            "et", "mais", "puis", "alors", "quand", "un", "une", "le", "la", "les", "tu", "il", "elle", "on",
+            "and", "but", "then", "when", "so", "she", "he", "they", "we", "you", "the",
+        }
+        and (has_terminal_punct or prev_w not in NO_CUT_AFTER)
+    ):
         score += 5.0
     return score
 
@@ -701,13 +777,13 @@ def build_default_sound(
             events.append([f"{sid}+2", "counter_tick", 0.18])
             events.append([f"{sid}+6", "power_hum", 0.12, "onset", shots[min(idx + 1, len(shots) - 1)]["id"]])
         elif "insert" in size:
-            if note_tokens & {"telephone", "portable", "message", "texto", "sms", "notification", "ecran"}:
+            if note_tokens & {"telephone", "portable", "message", "texto", "sms", "notification", "ecran", "phone", "messages", "text", "texting", "typed", "screen", "ringing"}:
                 used_clips.add("pop")
                 events.append([f"{sid}+4", "pop", 0.22])
-            elif note_tokens & {"facture", "dossier", "lettre", "enveloppe", "billet", "carte", "feuille", "contrat", "ordonnance"}:
+            elif note_tokens & {"facture", "dossier", "lettre", "enveloppe", "billet", "carte", "feuille", "contrat", "ordonnance", "bill", "folder", "file", "letter", "envelope", "card", "paper", "contract", "receipt", "prescription"}:
                 used_clips.add("paper_land")
                 events.append([f"{sid}+3", "paper_land", 0.24])
-            elif note_tokens & {"verre", "tasse", "cafe", "bouteille", "cle", "cles", "bague", "alliance", "pilule"}:
+            elif note_tokens & {"verre", "tasse", "cafe", "bouteille", "cle", "cles", "bague", "alliance", "pilule", "glass", "cup", "mug", "coffee", "bottle", "key", "keys", "ring", "pill", "pills"}:
                 used_clips.add("clink")
                 events.append([f"{sid}+4", "clink", 0.24])
             else:
@@ -725,7 +801,7 @@ def build_default_sound(
         elif accent == "vfx:focus":
             used_clips.add("sparkle")
             events.append([f"{sid}+5", "sparkle", 0.18])
-        elif note_tokens & {"marche", "entre", "sorti", "escalier", "couloir", "approche", "couru"}:
+        elif note_tokens & {"marche", "entre", "sorti", "escalier", "couloir", "approche", "couru", "walked", "entered", "left", "stairs", "hallway", "corridor", "ran", "running", "followed"}:
             used_clips.add("step")
             events.append([f"{sid}+4", "step", 0.2])
 
@@ -841,7 +917,8 @@ def main() -> int:
         text = [str(w["w"]).strip() for w in chunk]
         clause_tokens = [bare_ascii(t) for t in text if bare_ascii(t)]
         span = max(18, round(float(chunk[-1].get("e", 0)) * FPS) - round(float(chunk[0].get("s", 0)) * FPS))
-        label = clean_french_spacing(" ".join(text[:12]))
+        raw_label = " ".join(text[:12])
+        label = clean_french_spacing(raw_label) if str(ep.get("lang") or "fr").lower() != "en" else raw_label
         b_label = next((beat_map[idx] for idx in range(start, end) if idx in beat_map), "")
         explicit_beat_set = next((beat_sets[idx] for idx in range(start, end) if idx in beat_sets), "")
 
@@ -883,7 +960,7 @@ def main() -> int:
                     room = secondary_set
                 elif previous_set and previous_set != DIAGRAM and (
                     (not has_explicit_default and run < 3)
-                    or (has_explicit_default and (run < 8 or not (set(clause_tokens) & {"entre", "sorti", "sortie", "porte", "couloir", "dehors"})))
+                    or (has_explicit_default and (run < 8 or not (set(clause_tokens) & {"entre", "sorti", "sortie", "porte", "couloir", "dehors", "entered", "left", "door", "hallway", "corridor", "outside"})))
                 ):
                     room = previous_set
                 else:
@@ -913,7 +990,7 @@ def main() -> int:
         speech_or_react = bool(set(clause_tokens) & SPEECH_REACTION_WORDS) or any(
             c in "".join(str(w.get("p") or "") for w in chunk) for c in "?!"
         )
-        crossing_clause = bool(set(clause_tokens) & {"marche", "entre", "sorti", "sortie", "approche", "couloir", "escalier", "porte", "traverse", "avance", "couru"})
+        crossing_clause = bool(set(clause_tokens) & {"marche", "entre", "sorti", "sortie", "approche", "couloir", "escalier", "porte", "traverse", "avance", "couru", "walked", "entered", "left", "approached", "hallway", "corridor", "stairs", "door", "crossed", "ran", "running", "followed"})
         is_char_shot = room != DIAGRAM and not is_title and "insert" not in size and "establishing" not in size
         if not is_char_shot or not same_room:
             shot_view = "3/4-left" if (is_char_shot and i % 3 == 2) else "front"

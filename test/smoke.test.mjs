@@ -5327,3 +5327,233 @@ test('mid-turn compaction preserves recent assistant+tool steps and prepends use
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('bilingual FR/EN support: English proposals never block, detect_narrator_voice picks Léa/Hugo in EN, Deepgram uses lang=en, and shotlist/reviewer adapt', async () => {
+  const { execFile, execFileSync } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const http = await import('node:http');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-bilingual-en-'));
+  let srv = null;
+  try {
+    // 1. Python detect_text_language & detect_narrator_voice on English + French stories
+    const pyCheck = execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+import json, sys
+sys.path.insert(0, 'pipeline')
+from nouveau_client import detect_narrator_voice, detect_text_language
+
+the_promise = """[Low, steady voice]
+They stole my best friend's phone and read her messages to her dead mother in front of the entire school.
+I wanted revenge. And to get it, I decided to become friends with the girl who had destroyed her.
+I found her locked in a bathroom stall. She told me she wanted to disappear.
+Lena stopped folding. "Don't do anything, Harper."
+I told her my plan."""
+
+en_wife_selfid = "I'm a 28-year-old woman and last night my husband left his phone unlocked on the kitchen counter while I was doing my makeup."
+en_male = "I'm a 31-year-old guy and my wife asked me to pick up her sister at the airport while I was trimming my beard."
+en_third_fem = "She walked out of the hospital alone in the rain. Everyone thought she had forgotten what happened, but she kept the key in her coat pocket and she waited until midnight."
+fr_fem = "Je me suis assise dans le salon et mon mari m'a regardée en silence."
+
+print(json.dumps({
+  "lang_en": detect_text_language(the_promise),
+  "lang_fr": detect_text_language(fr_fem),
+  "promise": detect_narrator_voice(the_promise, "The Promise"),
+  "wife_selfid": detect_narrator_voice(en_wife_selfid, "The Phone"),
+  "en_male": detect_narrator_voice(en_male, "Airport"),
+  "en_third_fem": detect_narrator_voice(en_third_fem, "Midnight"),
+  "fr_fem": detect_narrator_voice(fr_fem, "Le Salon"),
+}))
+`,
+      ],
+      { encoding: 'utf8' },
+    );
+    const det = JSON.parse(pyCheck);
+    assert.equal(det.lang_en, 'en');
+    assert.equal(det.lang_fr, 'fr');
+    assert.equal(det.promise.lang, 'en');
+    assert.equal(det.promise.pov, 'first');
+    assert.equal(det.promise.gender, 'female');
+    assert.equal(det.promise.voiceName, 'Léa', `expected Léa on "The Promise", got ${JSON.stringify(det.promise)}`);
+    assert.equal(det.wife_selfid.voiceName, 'Léa');
+    assert.equal(det.en_male.lang, 'en');
+    assert.equal(det.en_male.gender, 'male');
+    assert.equal(det.en_male.voiceName, 'Hugo');
+    assert.equal(det.en_third_fem.pov, 'third');
+    assert.equal(det.en_third_fem.voiceName, 'Léa');
+    assert.equal(det.fr_fem.lang, 'fr');
+    assert.equal(det.fr_fem.voiceName, 'Léa');
+
+    // 2. End-to-end source_import.py -> voice_fish.py -> shotlist.py on an English :8005 proposal
+    const fakeMp3 = path.join(dir, 'en-sample.mp3');
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=9.0', '-ar', '44100', '-ac', '1', fakeMp3],
+      { stdio: 'pipe' },
+    );
+    const mp3Bytes = fs.readFileSync(fakeMp3);
+
+    const enProposal =
+      'They stole my best friend phone in the bathroom stall. ' +
+      'I found her locked in a bathroom stall crying over her messages. ' +
+      'Then Sloane walked onto the stage in the gym with a microphone and shouted at everyone. ' +
+      'Lena whispered, "Don\'t do anything, Harper." That evening I packed boxes in my bedroom.';
+
+    let transcribeLangSeen = '';
+    let generatedVoiceId = '';
+
+    srv = http.createServer((req, res) => {
+      const u = req.url || '';
+      if (req.method === 'GET' && u === '/api/videos/vid-en-promise') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: 'vid-en-promise', title: 'The Promise', duration: 9.0 }));
+        return;
+      }
+      if (req.method === 'GET' && u.startsWith('/api/videos/vid-en-promise/transcript/check')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ exists: true, file_exists: true }));
+        return;
+      }
+      if (req.method === 'GET' && u.startsWith('/api/videos/vid-en-promise/translations')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            proposals: [
+              {
+                id: 1363,
+                is_selected: true,
+                prompt_type: 'manual',
+                model_name: 'manual',
+                title: 'The Promise',
+                translation: enProposal,
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (req.method === 'POST' && u.includes('/translations/1363/select')) {
+        req.resume();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (req.method === 'GET' && u === '/api/videos/vid-en-promise/tts/check') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        // Simulate stale wrong-gender Hugo audio on :8005 so voice_fish.py regenerates with Léa
+        res.end(JSON.stringify({ exists: true, file_exists: true, id: 55, path: '/downloads/tts/hugo.mp3', voice: 'elevenlabs:3Tp5mYhT9wrfnry9pzvV', duration_seconds: 9.0 }));
+        return;
+      }
+      if (req.method === 'POST' && u === '/api/videos/vid-en-promise/tts/elevenlabs') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const parsed = JSON.parse(body || '{}');
+          generatedVoiceId = parsed.voiceId || '';
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ id: 56, audioPath: '/downloads/tts/lea-en.mp3' }));
+        });
+        return;
+      }
+      if (req.method === 'GET' && u === '/downloads/tts/lea-en.mp3') {
+        res.writeHead(200, { 'content-type': 'audio/mpeg' });
+        res.end(mp3Bytes);
+        return;
+      }
+      if (req.method === 'POST' && u.startsWith('/api/videos/vid-en-promise/tts/transcribe')) {
+        const q = new URL(u, 'http://127.0.0.1').searchParams;
+        transcribeLangSeen = q.get('lang') || '';
+        req.resume();
+        req.on('end', () => {
+          const toks = enProposal.split(/\s+/).filter(Boolean);
+          const step = 8.4 / toks.length;
+          const words = toks.map((w, idx) => ({
+            word: w,
+            start: Number((0.1 + idx * step).toFixed(3)),
+            end: Number((0.1 + (idx + 0.85) * step).toFixed(3)),
+          }));
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ transcript: [{ start: 0.1, end: 8.5, words }] }));
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end('{}');
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+
+    const proot = path.join(dir, 'studio');
+    const slug = 'the-promise';
+    fs.mkdirSync(path.join(proot, 'src', 'episodes', slug), { recursive: true });
+    fs.mkdirSync(path.join(proot, 'public', slug), { recursive: true });
+    fs.mkdirSync(path.join(proot, 'out', slug), { recursive: true });
+    fs.writeFileSync(path.join(proot, 'package.json'), JSON.stringify({ name: 'test-studio' }));
+    fs.writeFileSync(
+      path.join(proot, 'src', 'episodes', slug, 'episode.json'),
+      JSON.stringify({
+        slug,
+        aspect: '9:16',
+        title: ['ET SI TU POUVAIS', '… ?'],
+        source: { provider: 'nouveau', videoId: 'vid-en-promise' },
+        script: [],
+        shots: [],
+        edit: [],
+      }),
+    );
+
+    const env = { ...process.env, WHATIF_NOUVEAU_URL: `http://127.0.0.1:${port}` };
+    await execFileAsync('python3', [path.resolve('pipeline/source_import.py'), slug, '--video', 'vid-en-promise', '--pick', 'hook', '--apply'], {
+      cwd: proot,
+      env,
+    });
+
+    const epAfterSource = JSON.parse(fs.readFileSync(path.join(proot, 'src', 'episodes', slug, 'episode.json'), 'utf8'));
+    assert.equal(epAfterSource.lang, 'en');
+    assert.equal(epAfterSource.voice.voiceName, 'Léa');
+    assert.equal(epAfterSource.voice.narratorGender, 'female');
+    assert.deepEqual(epAfterSource.title, ['THE', 'PROMISE']);
+
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: proot, env });
+    assert.equal(generatedVoiceId, 'KSyQzmsYhFbuOhqj1Xxv', 'regenerated English TTS with Léa instead of keeping wrong-gender Hugo');
+    assert.equal(transcribeLangSeen, 'en', 'passed lang=en (not hardcoded fr) to Deepgram tts_transcribe');
+
+    await execFileAsync('python3', [path.resolve('pipeline/shotlist.py'), slug, '--project', proot], { cwd: proot, env });
+    const epAfterShotlist = JSON.parse(fs.readFileSync(path.join(proot, 'src', 'episodes', slug, 'episode.json'), 'utf8'));
+    const setsUsed = new Set(epAfterShotlist.shots.map((s) => s.set));
+    assert.ok(setsUsed.has('corridor') || setsUsed.has('auditorium'), `expected English school/bathroom/gym sets instead of pure study fallback, got ${[...setsUsed].join(', ')}`);
+    assert.ok(epAfterShotlist.shots.some((s) => String(s.size).includes('insert')), 'expected semantic insert on English phone/messages/microphone');
+
+    // 3. TypeScript episodeAudit, detectEpisodeLanguage, prompts & Reviewer language adaptation
+    const { detectEpisodeLanguage, episodeAudit } = await import('../dist/tools/whatif.js');
+    const { buildMessages, modernSystemPrompt } = await import('../dist/orchestrator/context.js');
+    const { modernDirectorGuide } = await import('../dist/orchestrator/director-guide.js');
+    const { reviewerSystemPrompt, deltaReviewerSystemPrompt } = await import('../dist/orchestrator/reviewer.js');
+
+    assert.equal(detectEpisodeLanguage(epAfterShotlist), 'en');
+    assert.equal(episodeAudit(epAfterShotlist, slug), null, 'English episode passes episodeAudit cleanly');
+    assert.match(
+      episodeAudit({ ...epAfterShotlist, title: ['ET SI TU POUVAIS', '… ?'] }, slug) ?? '',
+      /French placeholder.*English episode/,
+      'catches leftover French stub title on an English episode',
+    );
+
+    const pinMsgs = buildMessages({
+      projectRoot: proot,
+      history: [{ id: 1, thread_id: 't1', role: 'user', content: `Continue ${slug}`, payload: null, created_at: '' }],
+    });
+    const sysJoined = pinMsgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    assert.match(sysJoined, /Language: English \(en\) — continue the entire pipeline in English/);
+    assert.match(modernSystemPrompt(), /NEVER block, stop, translate, rewrite, or shorten/);
+    assert.match(modernDirectorGuide(), /### Choosing the place/);
+    assert.match(reviewerSystemPrompt('en'), /tous les textes à l'écran DOIVENT être en anglais/);
+    assert.match(reviewerSystemPrompt('fr'), /Aucun texte en anglais/);
+    assert.match(deltaReviewerSystemPrompt('en'), /texte français résiduel dans un épisode en anglais/);
+  } finally {
+    if (srv) await new Promise((r) => srv.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

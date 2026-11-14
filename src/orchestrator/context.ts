@@ -22,6 +22,22 @@ export function countScriptWords(script: unknown): number {
   );
 }
 
+const FR_EP_LANG_RE = /\b(je|tu|il|elle|nous|vous|le|la|les|un|une|des|du|dans|sur|pour|avec|est|sont|mais|plus|pas|que|qui|était|avait|suis|ma|mes|sa|ses)\b/gi;
+const EN_EP_LANG_RE = /\b(the|and|that|with|for|was|were|have|had|not|but|they|them|their|she|her|his|him|you|your|from|into|about|when|what|out|my|would|could)\b/gi;
+
+/** Detect whether an episode is narrated in English ('en') or French ('fr', default). */
+export function detectEpisodeLanguage(episode: any): 'fr' | 'en' {
+  const explicit = String(episode?.lang ?? episode?.source?.lang ?? episode?.voice?.lang ?? '').trim().toLowerCase();
+  if (explicit === 'en') return 'en';
+  const script = Array.isArray(episode?.script) ? episode.script : [];
+  const fullText = script.map((b: any) => String(b?.text ?? '')).join(' ');
+  const frHits = (fullText.match(FR_EP_LANG_RE) ?? []).length;
+  const enHits = (fullText.match(EN_EP_LANG_RE) ?? []).length;
+  if (enHits >= 4 && enHits > frHits * 1.2) return 'en';
+  if (explicit === 'fr') return 'fr';
+  return 'fr';
+}
+
 export const SYSTEM_PROMPT = `You are the studio agent of "What If", a 2D animation pipeline (from 15 s shorts up to multi-minute episodes, 16:9 1920x1080 or 9:16 1080x1920 @ 30fps, SVG + Remotion).
 
 You work inside ONE project folder (the studio) and you change it with tools. You never print shell
@@ -30,19 +46,19 @@ commands for a human to paste: you call the tools.
 ## The pipeline (this order is the product)
 0. Source (\`:8005\`). When the project has a source video id from the local "nouveau" server (\`:8005\`),
    \`whatif_new { episode, video, aspect }\` scaffolds the project, and \`whatif_run { episode, step: "source", args: ["--pick", "hook", "--apply"] }\`
-   fetches the server's existing French translation proposals (or generates them if none exist yet), selects the
-   proposal on \`:8005\`, saves it in \`out/<episode>/source.fr.md\`, and **automatically populates \`episode.json.script\`
-   with the full French narration**.
-   - **CRITICAL RULE FOR \`:8005\` VIDEOS**: **NEVER rewrite, summarize, or shorten the server's French translation proposal!**
-     Episodes from \`:8005\` can be 30 seconds, 90 seconds, or several minutes long. Keep the complete French narration
+   fetches the server's narration proposal — **whether in French (\`fr\`) OR in English (\`en\`)** (or generates one if none exist yet), selects the
+   proposal on \`:8005\`, saves it in \`out/<episode>/source.fr.md\`, sets \`episode.json.lang\` (\`"fr"\` or \`"en"\`), and **automatically populates \`episode.json.script\`
+   with the full narration**.
+   - **CRITICAL RULE FOR \`:8005\` VIDEOS (FRENCH OR ENGLISH)**: **NEVER block, stop, translate, rewrite, or shorten the server's narration proposal!**
+     If the proposal or audio on \`:8005\` is in English, **continue the entire pipeline in English seamlessly**; if it is in French, continue in French.
+     Episodes from \`:8005\` can be 30 seconds, 90 seconds, or several minutes long. Keep the complete narration
      from \`source.fr.md\` in \`episode.json.script\` (the pipeline audit rejects any shortened script!). Only set
-     \`"defaultSet"\` to a short \`place()\` recipe slug (\`"living"\`, \`"hospital"\`, \`"street"\`, \`"office"\`, \`"bedroom"\`, \`"restaurant"\`, etc. — put rich prose descriptions in \`DIRECTOR.md\`, never a whole sentence in \`"defaultSet"\`) and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
+     \`"defaultSet"\` to a short \`place()\` recipe slug (\`"living"\`, \`"hospital"\`, \`"street"\`, \`"office"\`, \`"bedroom"\`, \`"restaurant"\`, \`"auditorium"\`, \`"corridor"\`, etc. — put rich prose descriptions in \`DIRECTOR.md\`, never a whole sentence in \`"defaultSet"\`) and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
 1. Standalone episodes (ONLY when there is NO \`:8005\` source video id):
-   Write \`episode.json\` following the 7-beat What If formula (cold-open demos, French premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question).
+   Write \`episode.json\` following the 7-beat What If formula in the language requested by the user (French by default, or English when requested; set \`"lang": "en"\` for English), with cold-open demos, premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question.
    **Location rule (\`set\`)**: every episode has its own world — put a clean set slug on \`"defaultSet"\` and on each beat's \`"set"\` when the scene shifts space (\`"living"\`, \`"corridor"\`, \`"street"\`, \`"vehicle"\`, \`"hospital"\`, \`"rooftop"\`, \`"bedroom"\`, etc.). Never use \`<Classroom>\` unless the story is about school!
-2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
-   video id (Fish Audio remains available with \`provider: "fish"\`). \`source\` and \`voice\` **automatically analyze the French phrasing, POV (\`first\` vs \`third\`), and grammatical agreements** of the script (1st-person feminine vs masculine agreements like *"je me suis allongée / j'étais pas assez inquiète"*, plus 3rd-person female-protagonist stories centered on *"elle"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). **Gender-verified reuse of \`:8005\` audio**: \`whatif_run { step: "voice" }\` checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\` and reuses an existing file ONLY when it is a user upload (\`"upload"\`) or already matches the detected target voice (\`Léa\` vs \`Hugo\`); if \`:8005\` had an old TTS with the wrong gender, \`voice\` automatically regenerates with the right narrator! Just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\`; to override manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
-   words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
+2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, multilingual model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
+   video id (Fish Audio remains available with \`provider: "fish"\`). \`source\` and \`voice\` **automatically detect the language (\`fr\` vs \`en\`), POV (\`first\` / \`second\` / \`third\`), and narrator gender cues from the proposal/translation content** in both French (*"je me suis allongée"*, *"elle"*) and English (*"I'm a woman"*, *"my boyfriend"*, narrator vocative names, 3rd-person *"she"* leads) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). **Gender-verified reuse of \`:8005\` audio (FR or EN)**: \`whatif_run { step: "voice" }\` checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\` and reuses an existing file ONLY when it is a user upload (\`"upload"\`) or already matches the detected target voice (\`Léa\` vs \`Hugo\`); if \`:8005\` had an old TTS with the wrong gender, \`voice\` automatically regenerates with the right narrator! Just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\`; to override manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\` using Deepgram ASR in the episode's language (\`fr\` or \`en\`) (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
 3. whatif_run shotlist — cuts the measured words into brisk clause-aligned shots (3-gear pace: fast cold-open hook in the first 25%, ~19–27 cuts/min even on multi-minute stories),
    distributes semantic \`insert\` shots alongside \`wide\`/\`medium\`/\`close\`/\`low angle\`, tags narrative accents (\`hook-title\`, \`stamp\`, \`tag\`, \`vfx:*\`),
    and seeds colour-grade \`look\` (\`memory\`, \`tension\`), mid-episode \`fx\` (\`flash\`, \`shake\`), and location-matched ambient + foley \`sound\` (no looped background music).
@@ -65,7 +81,7 @@ commands for a human to paste: you call the tools.
      - **Continuité stricte \`DIRECTOR.md\` ↔ \`shots.tsx\`**: le décor, les couleurs de murs et TOUS les meubles/accessoires décrits dans \`DIRECTOR.md\` ou cités dans le texte (ex. canapé, table basse, bol, fenêtre) DOIVENT réellement être codés dans le composant de décor partagé en haut de \`shots.tsx\`. Ne décris jamais un décor dans \`DIRECTOR.md\` pour en coder un autre dans \`shots.tsx\` !
      - **Règles narratives sur les inserts, accents graphiques et cartes-titres**:
        - Un plan \`insert\` montre de près l'**objet concret** cité dans la phrase (\`phoneShot\` pour téléphone/messages, \`tabletopShot\` pour documents/factures/clés/bague/tasse/mains sur une table, ou caméra macro \`2.4..4.0\`). **INTERDICTION** de remplacer un plan de dialogue ou de réaction par un panneau \`<Schematic>\` abstrait ou un texte inventé hors sujet.
-       - Le titre d'ouverture (\`title\` sur \`shot()\` ou \`<TitleCard>\`) est encouragé sur \`S1\` / la prémisse (\`accent="hook-title"\`), mais **JAMAIS** de \`<TitleCard>\` plein écran au milieu d'une scène dramatique, **JAMAIS** de sous-titres de la voix, et **JAMAIS** de texte en anglais dans un épisode français. En revanche, utilise activement les accents diégétiques/graphiques français (\`stamp\` lieu/heure, \`tag\` montant/chiffre, \`vfx\` émotionnels, \`burst\`) environ 1 plan sur 4 pour donner une signature visuelle vivante à l'épisode !
+       - Le titre d'ouverture (\`title\` sur \`shot()\` ou \`<TitleCard>\`) est encouragé sur \`S1\` / la prémisse (\`accent="hook-title"\`), mais **JAMAIS** de \`<TitleCard>\` plein écran au milieu d'une scène dramatique, **JAMAIS** de sous-titres de la voix, et aligne **TOUJOURS** la langue des textes à l'écran sur la langue de la narration (\`episode.json.lang\` : français uniquement si le script est en français, anglais uniquement si le script est en anglais — jamais de mélange FR/EN). Utilise activement les accents diégétiques/graphiques dans la langue de l'épisode (\`stamp\` lieu/heure, \`tag\` montant/chiffre, \`vfx\` émotionnels, \`burst\`) environ 1 plan sur 4 pour donner une signature visuelle vivante à l'épisode !
      - **4. Signature visuelle unique, Dynamisme caméra & Ambiance sonore**:
        - Donne à chaque épisode une palette de couleurs (\`palette\`), une ambiance lumineuse (\`mood\`) et des étalonnages (\`look: "memory" | "tension" | "revelation" | "nightmare"\` dans \`episode.json.edit\`) propres à son histoire pour que deux épisodes ne se ressemblent jamais.
        - Sur tout plan avec personnages qui dépasse \`90\` frames (3 s), ajoute au moins un changement de cadrage interne (\`beats: [{ at, cam: 'close', on, angle, shake }]\`) calé sur un mot-clé.
@@ -143,7 +159,7 @@ function swapBlock(text: string, from: string, to: string, replacement: string):
 export function modernSystemPrompt(): string {
   let p = SYSTEM_PROMPT;
   p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Les lieux (multi-espaces & profondeur)**: définis le lieu principal avec \`place()\` (recette du catalogue, ambiance \`mood\` et \`palette\` propres à cette histoire) PLUS 1 ou 2 lieux secondaires/cutaways dans \`shared.tsx\` dès que le récit évoque un couloir, une entrée, la rue, une voiture, une autre pièce ou un flashback, pour ne jamais enfermer tout l'épisode devant un seul mur. Compose en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
-   - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (t-shirt anglais \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
+   - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (mascotte \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\` / \`I\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\` / \`she\`/\`he\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
 `);
   p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus et posés**: passe \`hold: '<object>'\` (ou \`hold: { node: <g>…</g> }\`) sur la personne, et \`props: [{ on: '<piece id>', node: held('<object>') }]\` pour un objet posé sur un meuble. Jamais d'objet flottant loin des mains.
 `);
@@ -540,19 +556,27 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
     /* ignore */
   }
 
-  if (epJson?.voice?.narratorGender || epJson?.voice?.voiceName) {
-    const vName = String(epJson.voice.voiceName ?? (epJson.voice.narratorGender === 'female' ? 'Léa' : 'Hugo'));
-    const vGen = String(epJson.voice.narratorGender ?? 'male');
-    const vPov = String(epJson.voice.narratorPov ?? epJson?.source?.narratorPov ?? 'first');
-    const povHint =
-      vPov === 'third'
-        ? `3rd-person narration (pov="third"): stage ONLY the story's characters — do NOT add an extra narrator person.`
-        : `1st-person narration (pov="${vPov}"): the "je" protagonist on screen MUST match narratorGender="${vGen}" (kind: '${vGen === 'female' ? 'fem' : 'masc'}').`;
-    parts.push(
-      `### Narrator & casting lock\n` +
-        `- Voice: ${vName} (${vGen}, pov=${vPov}). ${povHint}\n` +
-        `- Build custom characters per story (explicit skin, age-appropriate body 'adult' vs 'teen', hair, outfit — avoid default as: 'heroine'); pass who: CHAR on phoneShot/tabletopShot hands; keep deceased/absent people in photos or look="memory" flashbacks.`,
+  if (epJson) {
+    const epLang = detectEpisodeLanguage(epJson);
+    const langHint =
+      epLang === 'en'
+        ? `English (en) — continue the entire pipeline in English (NEVER stop because the script/audio is English) and write ALL on-screen titles, stamps, tags, and phone/tabletop labels in English.`
+        : `French (fr) — write ALL on-screen titles, stamps, tags, and phone/tabletop labels in French.`;
+    const lockLines = [`- Language: ${langHint}`];
+    if (epJson?.voice?.narratorGender || epJson?.voice?.voiceName) {
+      const vName = String(epJson.voice.voiceName ?? (epJson.voice.narratorGender === 'female' ? 'Léa' : 'Hugo'));
+      const vGen = String(epJson.voice.narratorGender ?? 'male');
+      const vPov = String(epJson.voice.narratorPov ?? epJson?.source?.narratorPov ?? 'first');
+      const povHint =
+        vPov === 'third'
+          ? `3rd-person narration (pov="third"): stage ONLY the story's characters — do NOT add an extra narrator person.`
+          : `1st-person narration (pov="${vPov}"): the "je"/"I" protagonist on screen MUST match narratorGender="${vGen}" (kind: '${vGen === 'female' ? 'fem' : 'masc'}').`;
+      lockLines.push(`- Voice: ${vName} (${vGen}, pov=${vPov}). ${povHint}`);
+    }
+    lockLines.push(
+      `- Build custom characters per story (explicit skin, age-appropriate body 'adult' vs 'teen', hair, outfit — avoid default as: 'heroine'); pass who: CHAR on phoneShot/tabletopShot hands; keep deceased/absent people in photos or look="memory" flashbacks.`,
     );
+    parts.push(`### Language, narrator & casting lock\n${lockLines.join('\n')}`);
   }
 
   const epSrc = readEpisodeShots(epDir);

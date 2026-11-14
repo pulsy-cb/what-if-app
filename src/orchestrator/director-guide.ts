@@ -147,17 +147,17 @@ Name what the person does: \`act\` needs <Stage t={t}>. The feet stay on the gro
 ### Characters: build them with cast()
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', skin: 'sand', hair: { style: 'long', color: 'brown' }, outfit: ['hoodie:rose', 'jeans', 'sneakers:white'] }); then look={LOU} (the body comes with it).
 Give each character an explicit \`seed\`, \`body\`, \`kind\`, \`skin\`, \`hair: { style, color }\`, and \`outfit\` matched to the story's age, profession, and tone (use bare \`cast({ seed: 'extra1', body: 'adult' })\` only for unnamed background extras).
-- **Custom protagonist per story (do NOT default to \`as: 'heroine'\`)**: build each story's protagonist specifically for that script! Do NOT use \`as: 'heroine'\` (copper braided-bun, heterochromia, English \`"her"\` chest print, green joggers) unless the prompt explicitly asks for the recurring channel mascot.
-- **1st-person (\`je\`) vs 3rd-person (\`elle\`/\`il\`) POV & chronological presence**:
-  - When \`episode.json.voice.narratorPov === "first"\` (\`je\`), the narrator is a character inside the story whose \`kind\` (\`'fem'\` vs \`'masc'\`) MUST match \`episode.json.voice.narratorGender\`.
-  - When \`narratorPov === "third"\` (\`elle\`/\`il\`), stage ONLY the story's actual characters — NEVER invent an extra "narrator" person standing in the room!
+- **Custom protagonist per story (do NOT default to \`as: 'heroine'\`)**: build each story's protagonist specifically for that script! Do NOT use \`as: 'heroine'\` (copper braided-bun, heterochromia, \`"her"\` chest print, green joggers) unless the prompt explicitly asks for the recurring channel mascot.
+- **1st-person (\`je\` / \`I\`) vs 3rd-person (\`elle\`/\`il\` / \`she\`/\`he\`) POV & chronological presence**:
+  - When \`episode.json.voice.narratorPov === "first"\` (\`je\` / \`I\`), the narrator is a character inside the story whose \`kind\` (\`'fem'\` vs \`'masc'\`) MUST match \`episode.json.voice.narratorGender\`.
+  - When \`narratorPov === "third"\` (\`elle\`/\`il\` / \`she\`/\`he\`), stage ONLY the story's actual characters — NEVER invent an extra "narrator" person standing in the room!
   - **Deceased or absent characters**: NEVER place a dead or absent person standing alive in a present-time room; show them in a framed photo or inside a flashback shot (\`look: "memory"\` in \`episode.json.edit\`).
 - **Age & family coherence + close-up hand skin**:
   - \`body: 'adult'\` for adults, married couples, parents, doctors, police, waiters, drivers; \`body: 'teen'\` ONLY for children, teenagers, middle/high-schoolers.
   - Always set \`skin\` explicitly on main characters (\`porcelain | peach | sand | tan | bronze | brown | deep\`); biological family members (parents, siblings, twins) must have coherent \`skin\` tones.
   - On \`phoneShot({ who: CHAR, ... })\` and \`tabletopShot({ hands: [{ who: CHAR, ... }] })\`, always pass \`who: CHAR\` so close-up hands inherit the exact character's \`skin\` and sleeve colour!
 - Ready role presets: \`cast({ as: 'police', seed: 'sami', skin: 'tan' })\`; what you give wins over the preset. \`as\`: mother father brother sister friend police doctor nurse waiter teacher bride groom boss (plus heroine only when explicitly requested).
-- eyes: blue green brown hazel grey amber, or two for heterochromia ['blue', 'green']. print: { text: '...', color: 'coral' } on the chest (French only in French episodes).
+- eyes: blue green brown hazel grey amber, or two for heterochromia ['blue', 'green']. print: { text: '...', color: 'coral' } on the chest (always match the episode's language: French in French episodes, English in English episodes).
 - hair: long braids bun braided-bun shag buzz sidepart wavy fringe mohawk dreads hijab curls bunches bob suit cap beanie spiky afro ponytail bald helmet hood, or { style, color } with black brown chestnut auburn blond red grey white (or headwear colour like navy/charcoal for cap/beanie/helmet).
 - outfit: tshirt shirt hoodie sweater dress / blazer labcoat apron coat / jeans pants joggers cargo shorts skirt / sneakers boots formal / tie scarf / backpack. Colour after a colon, a second one after + (joggers:green+mustard): rose navy teal mustard plum olive coral sky red green black grey white cream denim khaki brown charcoal anthracite slate bordeaux burgundy crimson emerald forest sage beige camel tan gold orange pink purple indigo, or a #RRGGBB hex (unknown colour names throw an error!).
 - face: eyes round almond sleepy wide; brows thin thick arched; nose none button long wide; marks none freckles mole blush dimples wrinkles; facial none stubble mustache goatee beard (facial & marks default to 'none' unless specified).
@@ -233,8 +233,8 @@ export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.ts
   Give each shot's set a unique id (id="s7") and a different one again if the same set renders twice in one frame.
 
 ### On-screen text
-No subtitles/captions of the narrator's voice, no comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard, and never English text in a French episode.
-DO use concise French diegetic & graphic accents (~1 shot in 4) so episodes feel punchy and visually distinct: cold-open \`title\` on S1, time/location \`stamp\` ("URGENCES · 03H14", "3 ANS PLUS TÔT"), numeric/fact \`tag\` ("15 000 €", "3 APPELS MANQUÉS"), \`phoneShot\` screens, \`tabletopShot\` documents/bills, and character \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`). Every number is real and sourced from the script.
+No subtitles/captions of the narrator's voice, no comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard, and NEVER mix languages: match every on-screen word to the episode's narration language (\`fr\` -> French only, \`en\` -> English only).
+DO use concise diegetic & graphic accents (~1 shot in 4) in the episode's language so episodes feel punchy and visually distinct: cold-open \`title\` on S1, time/location \`stamp\` ("URGENCES · 03H14" / "GYM · 10:15 AM"), numeric/fact \`tag\` ("15 000 €" / "2 WEEKS LEFT"), \`phoneShot\` screens, \`tabletopShot\` documents/bills, and character \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`). Every number is real and sourced from the script.
 
 ### Board self-check (run it shot by shot on the full-size stills, not only on the contact sheet)
 1 one read in a second at phone size · 2 sizes change · 3 light from a visible source · 4 the character pops (face brightest, rim light)
