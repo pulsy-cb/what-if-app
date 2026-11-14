@@ -853,7 +853,7 @@ export function shotsAudit(
     }
   }
 
-  // Fast isolated child-process SSR smoke test (catches runtime TypeErrors/ReferenceErrors in <0.25s without ever running untrusted code inside the server process)
+  // Fast isolated child-process SSR smoke test (catches runtime TypeErrors/ReferenceErrors without ever running untrusted code inside the server process)
   try {
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(path.join(nm, 'typescript')) && fs.existsSync(path.join(nm, 'react-dom'))) {
@@ -875,6 +875,36 @@ const cache = Object.create(null);
 const sandboxCtx = vm.createContext({
   console: { log() {}, warn() {}, error() {} },
 });
+const remotionStub = {
+  AbsoluteFill: ({ children, style, ...rest }) => React.createElement('div', { style, ...rest }, children),
+  Sequence: ({ children }) => React.createElement(React.Fragment, null, children),
+  Series: Object.assign(({ children }) => React.createElement(React.Fragment, null, children), {
+    Sequence: ({ children }) => React.createElement(React.Fragment, null, children),
+  }),
+  Freeze: ({ children }) => React.createElement(React.Fragment, null, children),
+  Loop: ({ children }) => React.createElement(React.Fragment, null, children),
+  Audio: () => null,
+  Html5Audio: () => null,
+  Img: (props) => React.createElement('img', props),
+  OffthreadVideo: () => null,
+  Video: () => null,
+  Html5Video: () => null,
+  Composition: () => null,
+  Folder: ({ children }) => React.createElement(React.Fragment, null, children),
+  Still: () => null,
+  registerRoot: () => {},
+  staticFile: (s) => String(s),
+  useCurrentFrame: () => 0,
+  useVideoConfig: () => ({ fps: 30, durationInFrames: 300, width: 1080, height: 1920, id: 'audit', defaultProps: {}, props: {} }),
+  interpolate: (_v, _inR, outR) => (Array.isArray(outR) && outR.length > 0 ? outR[0] : 0),
+  interpolateColors: () => '#000000',
+  spring: () => 1,
+  Easing: new Proxy({}, { get: () => (t) => t }),
+  random: () => 0.5,
+  continueRender: () => {},
+  delayRender: () => 1,
+  cancelRender: () => {},
+};
 const loadMod = (rel) => {
   let full = path.resolve(projectRoot, rel);
   if (full !== projectRoot && !full.startsWith(projectRoot + path.sep)) {
@@ -892,15 +922,23 @@ const loadMod = (rel) => {
   if (full.endsWith('.json')) return JSON.parse(fs.readFileSync(full, 'utf8'));
   const srcCode = fs.readFileSync(full, 'utf8');
   const transpiled = ts.transpileModule(srcCode, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      jsx: ts.JsxEmit.ReactJSX,
+      esModuleInterop: true,
+    },
   }).outputText;
   const mod = { exports: {} };
   cache[full] = mod;
   const localReq = (id) => {
     if (id === 'react') return React;
-    if (id === 'react/jsx-runtime') return jsxRuntime;
-    if (id === 'remotion') return { AbsoluteFill: 'div', Audio: 'audio', staticFile: (s) => s, useCurrentFrame: () => 0 };
-    if (typeof id === 'string' && id.startsWith('@remotion/google-fonts')) return { loadFont: () => ({ fontFamily: 'sans-serif' }) };
+    if (id === 'react/jsx-runtime' || id === 'react/jsx-dev-runtime') return jsxRuntime;
+    if (id === 'remotion') return remotionStub;
+    if (id === '@remotion/fonts') return { loadFont: () => Promise.resolve() };
+    if (typeof id === 'string' && id.startsWith('@remotion/google-fonts')) {
+      return { loadFont: () => ({ fontFamily: 'sans-serif', waitUntilDone: () => Promise.resolve() }), fontFamily: 'sans-serif' };
+    }
     if (typeof id === 'string' && id.startsWith('.')) {
       const target = path.resolve(path.dirname(full), id);
       if (target !== projectRoot && !target.startsWith(projectRoot + path.sep)) {
@@ -911,12 +949,17 @@ const loadMod = (rel) => {
     throw new Error('module "' + id + '" is forbidden in episode code');
   };
   const wrapper = '(function(exports, require, module) {\\n' + transpiled + '\\n})';
-  const fn = vm.runInContext(wrapper, sandboxCtx, { filename: full, timeout: 1500 });
+  const fn = vm.runInContext(wrapper, sandboxCtx, { filename: full, timeout: 15000 });
+  const prev = [sandboxCtx.__fn, sandboxCtx.__exports, sandboxCtx.__req, sandboxCtx.__mod];
   sandboxCtx.__fn = fn;
   sandboxCtx.__exports = mod.exports;
   sandboxCtx.__req = localReq;
   sandboxCtx.__mod = mod;
-  vm.runInContext('__fn(__exports, __req, __mod)', sandboxCtx, { filename: full, timeout: 1500 });
+  try {
+    vm.runInContext('__fn(__exports, __req, __mod)', sandboxCtx, { filename: full, timeout: 15000 });
+  } finally {
+    [sandboxCtx.__fn, sandboxCtx.__exports, sandboxCtx.__req, sandboxCtx.__mod] = prev;
+  }
   return mod.exports;
 };
 let exportedShots = null;
@@ -927,14 +970,24 @@ try {
   if (!/Cannot find module/.test(message)) errors.push('shots.tsx crashes when it loads: ' + message);
 }
 for (const sh of payload.tlShots) {
-  const id = String(sh.id ?? '');
+  const id = String(sh.id ?? sh.shot ?? '');
   const Comp = exportedShots && exportedShots[id];
   if (typeof Comp !== 'function') continue;
-  const len = Math.max(30, Number(sh.len ?? 90));
+  const span = Number.isFinite(Number(sh.b)) && Number.isFinite(Number(sh.a)) ? Number(sh.b) - Number(sh.a) : undefined;
+  const len = Math.max(30, Number(sh.len ?? span ?? 90));
   const key = Math.min(len - 1, Math.max(0, Number(sh.key ?? 18)));
   for (const t of [0, key, len]) {
     try {
-      ReactDOMServer.renderToStaticMarkup(React.createElement(Comp, { t, len, f: t }));
+      const prevComp = [sandboxCtx.__render, sandboxCtx.__React, sandboxCtx.__Comp, sandboxCtx.__props];
+      sandboxCtx.__render = ReactDOMServer.renderToStaticMarkup;
+      sandboxCtx.__React = React;
+      sandboxCtx.__Comp = Comp;
+      sandboxCtx.__props = { t, len, f: t };
+      try {
+        vm.runInContext('__render(__React.createElement(__Comp, __props))', sandboxCtx, { timeout: 3000 });
+      } finally {
+        [sandboxCtx.__render, sandboxCtx.__React, sandboxCtx.__Comp, sandboxCtx.__props] = prevComp;
+      }
     } catch (err) {
       errors.push(id + ' crashes at runtime (t=' + t + '): ' + (err && err.message ? err.message : String(err)));
       break;
@@ -946,7 +999,7 @@ process.stdout.write(JSON.stringify({ errors }));
       const childRes = spawnSync(process.execPath, ['-e', childHarness], {
         cwd: projectRoot,
         input: JSON.stringify({ projectRoot, slug, tlShots }),
-        timeout: 6_000,
+        timeout: 20_000,
         maxBuffer: 2 * 1024 * 1024,
         encoding: 'utf8',
         env: {

@@ -4448,10 +4448,10 @@ test('security hardening (C1-C4): malformed URL 400, CSRF Origin 403, .env block
     const nm = path.join(proot, 'node_modules');
     for (const [name, body] of [
       ['typescript', `module.exports = require(${JSON.stringify(path.resolve('node_modules/typescript'))});`],
-      ['react', 'module.exports = { createElement: () => null };'],
+      ['react', 'module.exports = { Fragment: "fragment", createElement: (type, props, ...children) => ({ type, props: { ...(props || {}), children } }) };'],
       ['react-dom', 'module.exports = {};'],
-      ['react-dom/server', 'module.exports = { renderToStaticMarkup: () => "" };'],
-      ['react/jsx-runtime', 'module.exports = { jsx: () => null, jsxs: () => null };'],
+      ['react-dom/server', 'const render = (el) => { if (!el || typeof el !== "object") return ""; if (typeof el.type === "function") return render(el.type(el.props || {})); const ch = el.props && el.props.children; return Array.isArray(ch) ? ch.map(render).join("") : render(ch); }; module.exports = { renderToStaticMarkup: render };'],
+      ['react/jsx-runtime', 'module.exports = { Fragment: "fragment", jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };'],
     ]) {
       fs.mkdirSync(path.join(nm, name), { recursive: true });
       fs.writeFileSync(path.join(nm, name, 'index.js'), body);
@@ -4504,6 +4504,25 @@ test('security hardening (C1-C4): malformed URL 400, CSRF Origin 403, .env block
     const auditErrStr = shotsAudit(proot, 'sandboxed', epObj, tlObj) ?? '';
     assert.equal(fs.existsSync(markerPwn), false, 'child_process import blocked by SSR sandbox');
     assert.match(auditErrStr, /module "node:child_process" is forbidden in episode code/, `expected sandbox block error, got ${auditErrStr}`);
+
+    // 6b. Legitimate engine imports (@remotion/fonts, @remotion/google-fonts/*, remotion helpers) + ES2022 Set spread pass SSR sandbox cleanly
+    const engFontsDir = path.join(proot, 'src', 'engine');
+    fs.mkdirSync(engFontsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(engFontsDir, 'fonts.ts'),
+      `import { loadFont } from '@remotion/fonts';\nimport { staticFile, interpolate, spring, Easing } from 'remotion';\nimport { loadFont as loadBricolage } from '@remotion/google-fonts/BricolageGrotesque';\nloadBricolage('normal', { weights: ['700'], subsets: ['latin'] });\nloadFont({ family: 'TestFont', url: staticFile('font.woff2') });\nexport const FONT_LIST = [...new Set(['Bricolage Grotesque', 'Kalam'])];\nexport const SAMPLE_VAL = interpolate(0, [0, 1], [10, 20]) + spring({ frame: 0, fps: 30, config: {} }) + Easing.ease(0.5);\n`,
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S1.tsx'),
+      `import React from 'react';\nimport { AbsoluteFill, Sequence, useVideoConfig } from 'remotion';\nimport { FONT_LIST, SAMPLE_VAL } from '../../../engine/fonts';\nexport const S1 = () => {\n  const cfg = useVideoConfig();\n  if (FONT_LIST.length !== 2 || !cfg.width || !Number.isFinite(SAMPLE_VAL)) throw new Error('broken stub or ES3 Set spread');\n  return <AbsoluteFill><Sequence from={0}><svg viewBox="0 0 1920 1080"><rect width={1920} height={1080} fill="#112233" /></svg></Sequence></AbsoluteFill>;\n};\n`,
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S2.tsx'),
+      `export const S2 = () => { throw new Error('sentinel-s2-executed'); };\n`,
+    );
+    const cleanAuditErr = shotsAudit(proot, 'sandboxed', epObj, tlObj) ?? '';
+    assert.doesNotMatch(cleanAuditErr, /crashes when it loads|forbidden in episode code|broken stub|S1 crashes/, `expected @remotion/fonts + ES2022 Set spread to pass SSR sandbox cleanly, got: ${cleanAuditErr}`);
+    assert.match(cleanAuditErr, /S2 crashes at runtime.*sentinel-s2-executed/, `expected SSR sandbox to execute S1 cleanly and reach S2, got: ${cleanAuditErr}`);
 
     // 7. C4: isAllowedCodexBase & discoverProviderModels origin check prevent credential exfiltration
     const { isAllowedCodexBase, discoverProviderModels } = await import('../dist/orchestrator/providers/index.js');
