@@ -5045,6 +5045,7 @@ test('providers.json multi-provider & multi-model catalog: JSONC parsing, $ENV k
     clearModelDiscoveryCache,
     clearProvidersCatalogCache,
     providerConfig,
+    resolveCatalogFilePaths,
     resolveProvider,
     resolveReviewProvider,
     reviewProviderConfig,
@@ -5053,6 +5054,9 @@ test('providers.json multi-provider & multi-model catalog: JSONC parsing, $ENV k
   const { walk } = await import('../dist/tools/paths.js');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-catalog-'));
+  // Empty WHATIF_PROVIDERS_FILE (as passed by docker-compose `${WHATIF_PROVIDERS_FILE:-}`) must still resolve default paths
+  assert.deepEqual(resolveCatalogFilePaths({ WHATIF_PROVIDERS_FILE: '' }, dir), [path.join(dir, 'providers.json')]);
+  assert.deepEqual(resolveCatalogFilePaths({ WHATIF_PROVIDERS_FILE: 'none' }, dir), []);
   const seenRequests = [];
 
   const mockGateway = http.createServer(async (req, res) => {

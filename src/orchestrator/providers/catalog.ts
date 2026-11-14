@@ -46,7 +46,8 @@ export type ProvidersCatalogPublicSummary = {
 };
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const IS_NODE_TEST_RUNNER = process.execArgv.includes('--test') || process.env.NODE_ENV === 'test';
+const IS_NODE_TEST_RUNNER =
+  Boolean(process.env.NODE_TEST_CONTEXT) || process.execArgv.includes('--test') || process.env.NODE_ENV === 'test';
 
 const MULTIMODAL_MODEL_HINT_RE =
   /(gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|gpt-6|o1|o3|o4|claude-3|claude-sonnet|claude-opus|claude-haiku-4|gemini|pixtral|vision|-vl\b|vl-|qwen2\.5-vl|qwen3-vl|kimi-k2\.5|kimi-k3|glm-4v|glm-5|llama-3\.2-(11|90)b|llama-4)/i;
@@ -190,9 +191,10 @@ function readParsedCatalogFile(absPath: string): { parsed: Record<string, unknow
 }
 
 export function resolveCatalogFilePaths(env: NodeJS.ProcessEnv = process.env, dataRoot?: string): string[] {
-  if ('WHATIF_PROVIDERS_FILE' in env) {
-    const explicit = (env.WHATIF_PROVIDERS_FILE ?? '').trim();
-    return explicit ? [path.resolve(explicit)] : [];
+  const explicit = (env.WHATIF_PROVIDERS_FILE ?? '').trim();
+  if (explicit) {
+    if (/^(none|off|false|0)$/i.test(explicit)) return [];
+    return [path.resolve(explicit)];
   }
 
   const candidates: string[] = [];
