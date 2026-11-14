@@ -109,6 +109,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     let emptyTurns = 0;
     let lastFailSig = '';
     let consecutiveFails = 0;
+    let readOnlyStreak = 0;
     let checkpointedThisTurn = false;
     let reviewRounds = 0;
     // render asked again while the reviewer's refusal stands and nothing was fixed
@@ -570,6 +571,30 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       }
 
       for (const n of heldNotes) db.addMessage(threadId, 'user', n);
+
+      // Guard against pure read-only loops (e.g. re-reading episode.json / shared.tsx step after step without acting)
+      const stepHadAction = res.toolCalls.some((c) => {
+        const t = registry.get(c.name);
+        return Boolean(t?.mutating) || ['whatif_run', 'whatif_new', 'stage_shots', 'edit_shot', 'write_file', 'edit_file', 'shell'].includes(c.name);
+      });
+      if (stepHadAction) {
+        readOnlyStreak = 0;
+      } else {
+        readOnlyStreak++;
+        if (readOnlyStreak === 8) {
+          const roNote =
+            `[orchestrateur] Tu viens d'effectuer ${readOnlyStreak} étapes consécutives de lecture seule sans modifier aucun fichier. ` +
+            `Ne relis plus episode.json ni shared.tsx : exécute immédiatement la prochaine action d'écriture ou de pipeline (write_file DIRECTOR.md, stage_shots, write_file shared.tsx / shots/S<N>.tsx, ou whatif_run).`;
+          db.addMessage(threadId, 'user', roNote);
+          bus.emit(threadId, 'notice', { text: roNote });
+        } else if (readOnlyStreak >= 16) {
+          const stopRo = `Arrêt : l'agent est resté bloqué sur ${readOnlyStreak} étapes consécutives de lecture seule sans faire avancer le projet.`;
+          const id = db.addMessage(threadId, 'assistant', stopRo);
+          bus.emit(threadId, 'assistant_message', { id, text: stopRo });
+          finishTurn(step + 1, false, true);
+          return;
+        }
+      }
 
       if (producedImages.length) {
         // Multimodal feedback: the model gets the images it just produced on the next step.

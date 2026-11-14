@@ -713,6 +713,9 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
     ...(pin ? [{ role: 'system' as const, content: pin }] : []),
   ];
   const headChars = head.reduce((n, m) => n + m.content.length, 0);
+  // Guarantee at least 48k chars (~12k tokens) of conversation memory above the static system head on real runs,
+  // even if `.env` still carries an older `WHATIF_CONTEXT_CHARS=90000` on an 80-shot episode where `headChars` is ~75k.
+  const effectiveMaxChars = opts.maxChars < 20_000 ? opts.maxChars : Math.max(opts.maxChars, headChars + 48_000);
 
   // Walk history backwards, keeping recent turns in full and older ones trimmed.
   const history = opts.history;
@@ -732,7 +735,7 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
 
     const msg = toChatMessage(row, payload, content, opts.projectRoot, imageBudget, age);
     const cost = messageCharCost(msg);
-    if (used + cost > opts.maxChars && kept.length >= 4) {
+    if (used + cost > effectiveMaxChars && kept.length >= 4) {
       dropped = i + 1;
       break;
     }
@@ -740,8 +743,10 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
     kept.unshift(msg);
   }
 
-  // Never start the kept window with orphan `tool` or `assistant` messages when older messages were compacted
-  while (kept.length > 0 && (kept[0]!.role === 'tool' || (dropped > 0 && kept[0]!.role === 'assistant'))) {
+  // Never start the kept window with orphan `tool` messages whose `assistant` call was compacted away.
+  // IMPORTANT: Do NOT shift `assistant` messages here — during a long autonomous turn with a single initial `user` message,
+  // shifting `assistant` would wipe out 100% of `kept` and cause total step-by-step amnesia!
+  while (kept.length > 0 && kept[0]!.role === 'tool') {
     kept.shift();
     dropped++;
   }
@@ -788,6 +793,23 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
       role: 'system',
       content: `(${dropped} older messages were compacted to stay inside the context window. Check Where the episode stands above or read_file if you need details; .git keeps checkpoints.)`,
     });
+    // Ensure the non-system conversation always starts with a `user` turn anchor (required by Anthropic and prevents
+    // models from thinking the conversation just started when the original kickoff user message was >N steps ago).
+    if (sanitized.length === 0 || sanitized[0]!.role !== 'user') {
+      let anchorText = '';
+      for (let j = Math.min(dropped - 1, history.length - 1); j >= 0; j--) {
+        const r = history[j];
+        if (r && r.role === 'user' && !r.content.startsWith('[orchestrateur]')) {
+          anchorText = r.content.slice(0, 2_500);
+          break;
+        }
+      }
+      const resumeNote = `[Contexte : ${dropped} étapes précédentes ont été compactées. Poursuis directement à partir des étapes récentes ci-dessous sans recommencer du début ni relire les fichiers déjà lus.]`;
+      sanitized.unshift({
+        role: 'user',
+        content: anchorText ? `${anchorText}\n\n${resumeNote}` : resumeNote,
+      });
+    }
   }
   out.push(...sanitized);
   return out;

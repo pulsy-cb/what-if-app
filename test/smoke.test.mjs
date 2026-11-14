@@ -5254,3 +5254,57 @@ test('providers.json multi-provider & multi-model catalog: JSONC parsing, $ENV k
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('mid-turn compaction preserves recent assistant+tool steps and prepends user anchor instead of wiping kept history', async () => {
+  const { buildMessages } = await import('../dist/orchestrator/context.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-midturn-'));
+  try {
+    const history = [
+      {
+        id: 1,
+        thread_id: 't1',
+        role: 'user',
+        content: 'Nouvel épisode « custom-100-pintes » (format 16:9). Fais tout du début à la fin.',
+        payload: null,
+        created_at: '',
+      },
+    ];
+    let nextId = 2;
+    for (let step = 1; step <= 18; step++) {
+      const tcId = `call_${step}`;
+      history.push({
+        id: nextId++,
+        thread_id: 't1',
+        role: 'assistant',
+        content: `Step ${step}`,
+        payload: JSON.stringify({ toolCalls: [{ id: tcId, name: 'read_file', args: { path: `file_${step}.tsx` } }] }),
+        created_at: '',
+      });
+      history.push({
+        id: nextId++,
+        thread_id: 't1',
+        role: 'tool',
+        content: `ok\n${'x'.repeat(2500)}\nstep_${step}_done`,
+        payload: JSON.stringify({ toolCallId: tcId, name: 'read_file', ok: true }),
+        created_at: '',
+      });
+    }
+
+    // Force tight maxChars (<19k test budget) so older steps + initial user message get compacted mid-turn
+    const msgs = buildMessages({ projectRoot: dir, history, maxChars: 16_000 });
+    const nonSystem = msgs.filter((m) => m.role !== 'system');
+    assert.ok(nonSystem.length >= 5, `expected preserved assistant+tool history, got ${nonSystem.length} messages`);
+    assert.equal(nonSystem[0].role, 'user', 'first non-system message is the re-anchored user prompt');
+    assert.match(nonSystem[0].content, /custom-100-pintes/, 'original kickoff user goal is preserved in anchor');
+    assert.ok(
+      nonSystem.some((m) => m.role === 'assistant' && m.content === 'Step 18'),
+      'most recent assistant step is preserved (zero amnesia)',
+    );
+    assert.ok(
+      nonSystem.some((m) => m.role === 'tool' && m.content.includes('step_18_done')),
+      'most recent tool result is preserved',
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

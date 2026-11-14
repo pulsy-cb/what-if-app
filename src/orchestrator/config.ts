@@ -63,7 +63,7 @@ export function loadConfig(): Config {
     webDir: path.join(packageRoot, 'web', 'public'),
     authToken: process.env.WHATIF_AUTH_TOKEN?.trim() || null,
     maxSteps: intEnv(process.env.WHATIF_MAX_STEPS, 1_000, 1),
-    contextChars: intEnv(process.env.WHATIF_CONTEXT_CHARS, 90_000, 2_000),
+    contextChars: intEnv(process.env.WHATIF_CONTEXT_CHARS, 180_000, 2_000),
     approvalTimeoutMs: intEnv(process.env.WHATIF_APPROVAL_TIMEOUT_MS, 30 * 60_000, 100),
     maxTokens: intEnv(process.env.WHATIF_MAX_TOKENS, 24_000, 256),
     approvalsMode: ((): 'off' | 'pipeline' | 'all' => {

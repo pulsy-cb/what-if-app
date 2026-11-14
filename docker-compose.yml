@@ -18,7 +18,7 @@ services:
       WHATIF_BASE_URL: ${WHATIF_BASE_URL:-}
       WHATIF_MODEL: ${WHATIF_MODEL:-}
       WHATIF_API_KEY: ${WHATIF_API_KEY:-}
-      WHATIF_CONTEXT_CHARS: ${WHATIF_CONTEXT_CHARS:-90000}
+      WHATIF_CONTEXT_CHARS: ${WHATIF_CONTEXT_CHARS:-180000}
       # off (défaut) = l'agent va au bout sans rien demander ; pipeline|all = portes d'approbation
       WHATIF_APPROVALS: ${WHATIF_APPROVALS:-off}
       WHATIF_MAX_STEPS: ${WHATIF_MAX_STEPS:-1000}
