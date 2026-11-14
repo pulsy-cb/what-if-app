@@ -52,6 +52,10 @@ export function exec(
       resolve({ code: 2, stdout: '', stderr: 'empty command', timedOut: false, argv });
       return;
     }
+    if (opts.signal?.aborted) {
+      resolve({ code: 130, stdout: '', stderr: 'aborted', timedOut: false, argv });
+      return;
+    }
     let out = '';
     let err = '';
     let timedOut = false;
@@ -106,10 +110,12 @@ export function exec(
       terminateGracefully();
     };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
+    const rawTimeout = opts.timeoutMs ?? 180_000;
+    const safeTimeout = Number.isFinite(rawTimeout) ? Math.max(10, Math.min(3_600_000, rawTimeout)) : 180_000;
     const timer = setTimeout(() => {
       timedOut = true;
       terminateGracefully();
-    }, opts.timeoutMs ?? 180_000);
+    }, safeTimeout);
 
     let lineBuf = '';
     const emitLines = (chunk: string) => {

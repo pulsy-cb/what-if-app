@@ -47,6 +47,7 @@ export async function* sseData(body: unknown): AsyncGenerator<string> {
   let buf = '';
   for await (const chunk of stream) {
     buf += decoder.decode(chunk, { stream: true });
+    if (buf.includes('\r')) buf = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let idx: number;
     while ((idx = buf.indexOf('\n\n')) >= 0) {
       const block = buf.slice(0, idx);
@@ -59,8 +60,14 @@ export async function* sseData(body: unknown): AsyncGenerator<string> {
       if (data) yield data;
     }
   }
+  buf += decoder.decode();
+  if (buf.includes('\r')) buf = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   if (buf.trim()) {
-    const data = buf.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+    const data = buf
+      .split('\n')
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).trim())
+      .join('\n');
     if (data) yield data;
   }
 }

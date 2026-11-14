@@ -9,6 +9,7 @@ and skips redundant re-mastering when `<slug>-final.mp4` is already up to date w
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -128,30 +129,46 @@ def main(argv: list[str]) -> int:
     j_end = first_stderr.rfind("}") + 1
     m = json.loads(first_stderr[j_start:j_end]) if j_start >= 0 and j_end > j_start else {}
 
-    in_i = float(m.get("input_i", -24.0)) if str(m.get("input_i", "-inf")) != "-inf" else -24.0
-    in_tp = float(m.get("input_tp", -3.0)) if str(m.get("input_tp", "-inf")) != "-inf" else -3.0
+    raw_in_i = str(m.get("input_i", "-inf"))
+    raw_in_tp = str(m.get("input_tp", "-inf"))
+    raw_in_lra = str(m.get("input_lra", "-inf"))
+    raw_in_thresh = str(m.get("input_thresh", "-inf"))
+    raw_offset = str(m.get("target_offset", "0.0"))
+    valid_two_pass = all(v not in ("", "-inf", "inf", "nan", "NaN") for v in (raw_in_i, raw_in_tp, raw_in_lra, raw_in_thresh, raw_offset))
 
-    if m and in_i > -70.0:
+    in_i = float(raw_in_i) if raw_in_i not in ("", "-inf", "inf", "nan", "NaN") else -99.0
+    in_tp = float(raw_in_tp) if raw_in_tp not in ("", "-inf", "inf", "nan", "NaN") else -3.0
+
+    if m and valid_two_pass and in_i > -70.0:
         # Use linear=true only when true-peak headroom allows reaching -14 LUFS; otherwise dynamic 2-pass hits -14.0 LUFS cleanly
         can_linear = (in_tp + (I_TARGET - in_i)) <= (TP_TARGET + 0.05)
         filt = (
             f"loudnorm=I={I_TARGET}:TP={TP_TARGET}:LRA={LRA_TARGET}"
-            f":measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
-            f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}"
+            f":measured_I={raw_in_i}:measured_TP={raw_in_tp}:measured_LRA={raw_in_lra}"
+            f":measured_thresh={raw_in_thresh}:offset={raw_offset}"
             f":linear={'true' if can_linear else 'false'}"
         )
     else:
         filt = f"loudnorm=I={I_TARGET}:TP={TP_TARGET}:LRA={LRA_TARGET}"
 
-    # Pass 2: stream-copy video (`-c:v copy`) + encode normalized AAC 48kHz audio
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-v", "error", "-i", str(raw),
-            "-c:v", "copy", "-af", filt, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
-            "-movflags", "+faststart", str(final),
-        ],
-        check=True,
-    )
+    # Pass 2: write atomically via a temporary file so a failed/interrupted encode never poisons the mtime cache
+    tmp_final = final.with_name(f".{slug}-final.tmp.mp4")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-v", "error", "-i", str(raw),
+                "-c:v", "copy", "-af", filt, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
+                "-movflags", "+faststart", str(tmp_final),
+            ],
+            check=True,
+        )
+        os.replace(tmp_final, final)
+    finally:
+        if tmp_final.exists():
+            try:
+                tmp_final.unlink()
+            except OSError:
+                pass
 
     # Single audio-only (`-vn`) verification pass for both LUFS and True Peak (replaces 2 full video decodes)
     lufs, true_peak = measure_ebur128_audio_only(final)
@@ -163,12 +180,15 @@ def main(argv: list[str]) -> int:
     fps = float(tl.get("fps") or 30)
     cuts_per_min = round(max(0, len(segs) - 1) / max(0.01, total_f / fps) * 60.0, 1) if segs else 0.0
 
+    has_audible_track = lufs > -70.0
+    loudness_in_range = has_audible_track and abs(lufs + 14.0) <= 0.8 and true_peak <= -0.9
     report = {
         "episode": ep.get("id", slug),
         "file": str(final),
         "seconds": round(dur, 2),
-        "lufs": round(lufs, 2) if lufs > -90 else lufs,
-        "true_peak_dbtp": round(true_peak, 2) if true_peak > -90 else true_peak,
+        "lufs": round(lufs, 2) if lufs > -90 else -99.0,
+        "true_peak_dbtp": round(true_peak, 2) if true_peak > -90 else -99.0,
+        "silent": not has_audible_track,
         "segments": len(segs),
         "cuts_per_min": cuts_per_min,
         "elevenlabs_credits": sum(int(c.get("credits", 0)) for c in costs if isinstance(c, dict)),
@@ -176,10 +196,12 @@ def main(argv: list[str]) -> int:
     }
     save_json(rep_path, report)
     print(json.dumps({k: v for k, v in report.items() if k != "cost_lines"}, indent=1))
-    ok = (not (lufs > -70.0)) or (abs(lufs + 14.0) <= 0.8 and true_peak <= -0.9)
-    print("loudness OK" if ok else f"loudness note: {lufs:.1f} LUFS / {true_peak:.2f} dBTP (within broadcast safety)")
-    print(f"RESULT_JSON:{json.dumps({'ok': True, 'cached': False, 'file': str(final), 'lufs': report['lufs'], 'true_peak_dbtp': report['true_peak_dbtp']})}")
-    return 0
+    if not has_audible_track:
+        print("WARNING: output audio track is silent (-inf LUFS)!", file=sys.stderr)
+    else:
+        print("loudness OK" if loudness_in_range else f"loudness note: {lufs:.1f} LUFS / {true_peak:.2f} dBTP (within broadcast safety)")
+    print(f"RESULT_JSON:{json.dumps({'ok': has_audible_track, 'cached': False, 'file': str(final), 'lufs': report['lufs'], 'true_peak_dbtp': report['true_peak_dbtp']})}")
+    return 0 if has_audible_track else 3
 
 
 if __name__ == "__main__":

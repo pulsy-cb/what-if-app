@@ -1,0 +1,74 @@
+{
+  // Catalogue multi-fournisseurs & multi-modèles (rechargé à chaud sans redémarrer ni toucher au .env).
+  // Copie ce fichier vers `providers.json` (à la racine ou dans `data/providers.json`), puis active (`"enabled": true`)
+  // ou ajoute autant de fournisseurs et de modèles que tu veux.
+  //
+  // Optionnel : définir le fournisseur / modèle global par défaut (si non forcé dans l'interface ⚙)
+  // "defaultProvider": "openrouter-perso",
+  // "defaultReviewProvider": "openrouter-perso",
+
+  "providers": {
+    "openrouter-perso": {
+      "enabled": true,
+      "label": "OpenRouter (Multi-modèles)",
+      "driver": "openai",
+      "baseURL": "https://openrouter.ai/api/v1",
+      // Clé directe ("sk-or-v1-...") OU variable d'environnement ("$OPENROUTER_API_KEY" / "$WHATIF_API_KEY")
+      "apiKey": "$WHATIF_API_KEY",
+      "defaultModel": "anthropic/claude-sonnet-4.5",
+      "reviewModel": "google/gemini-2.5-pro",
+      "discoverModels": false,
+      "models": [
+        { "id": "anthropic/claude-sonnet-4.5", "label": "Claude Sonnet 4.5", "supportsVision": true },
+        { "id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro (Vision)", "supportsVision": true },
+        { "id": "deepseek/deepseek-chat-v3-0324", "label": "DeepSeek V3", "supportsVision": false },
+        { "id": "qwen/qwen3-coder", "label": "Qwen 3 Coder", "supportsVision": false }
+      ]
+    },
+
+    "mon-proxy-ia": {
+      "enabled": true,
+      "label": "Mon Proxy API Compatible OpenAI",
+      "driver": "openai",
+      "baseURL": "https://api.mon-proxy.example.com/v1",
+      "apiKey": "sk-votre-cle-ici",
+      "defaultModel": "glm-5",
+      "reviewModel": "qwen2.5-vl-72b-instruct",
+      // Mets `true` si tu veux AUSSI interroger automatiquement `${baseURL}/models` en plus de la liste ci-dessous :
+      "discoverModels": false,
+      "models": [
+        "glm-5",
+        "deepseek-v3.2",
+        { "id": "qwen2.5-vl-72b-instruct", "label": "Qwen 2.5 VL 72B (Reviewer Vision)", "supportsVision": true }
+      ]
+    },
+
+    "claude-direct": {
+      "enabled": false,
+      "label": "Anthropic Direct (Claude)",
+      "driver": "anthropic",
+      "baseURL": "https://api.anthropic.com",
+      "apiKey": "$ANTHROPIC_API_KEY",
+      "defaultModel": "claude-sonnet-4-5",
+      "reviewModel": "claude-sonnet-4-5",
+      "models": [
+        "claude-sonnet-4-5",
+        "claude-opus-4-5"
+      ]
+    },
+
+    "gemini-direct": {
+      "enabled": false,
+      "label": "Google Gemini API",
+      "driver": "openai",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKey": "$GEMINI_API_KEY",
+      "defaultModel": "gemini-2.5-pro",
+      "reviewModel": "gemini-2.5-flash",
+      "models": [
+        { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "supportsVision": true },
+        { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "supportsVision": true }
+      ]
+    }
+  }
+}

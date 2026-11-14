@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libnss3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 \
       libgtk-3-0 libasound2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
       libpango-1.0-0 libcairo2 libxshmfence1 libx11-xcb1 \
-    && python3 -m pip install --no-cache-dir --break-system-packages pillow numpy modal \
+    && python3 -m pip install --no-cache-dir --break-system-packages pillow numpy "modal>=0.73,<2.0" \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

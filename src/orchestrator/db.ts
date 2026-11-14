@@ -70,9 +70,11 @@ CREATE TABLE IF NOT EXISTS project_runs (
 
 export class Db {
   readonly raw: DatabaseSync;
+  readonly dataRoot: string;
 
   constructor(dbPath: string) {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    this.dataRoot = dbPath === ':memory:' ? '' : path.dirname(path.resolve(dbPath));
+    if (this.dataRoot) fs.mkdirSync(this.dataRoot, { recursive: true });
     this.raw = new DatabaseSync(dbPath);
     this.raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.raw.exec(SCHEMA);

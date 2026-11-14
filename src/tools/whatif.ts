@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { layoutReport } from '../orchestrator/layout.js';
 import { countScriptWords } from '../orchestrator/context.js';
 import { fileURLToPath } from 'node:url';
@@ -350,17 +350,17 @@ export function projectAspect(projectRoot: string, ep?: any): '16:9' | '9:16' {
 export function paceProblem(projectRoot: string, slug: string): string | null {
   const tl = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json'));
   const segs = (tl?.segments ?? []) as any[];
-  const fps = Number(tl?.fps ?? 30);
+  const fps = Math.max(1, Number(tl?.fps ?? 30));
   const durSec = Number(tl?.total ?? 0) / fps;
   if (durSec < 12 || !segs.length) return null;
-  const shots = new Set(segs.map((s) => String(s.shot))).size;
-  const cutsPerMin = ((shots - 1) / durSec) * 60;
+  const cuts = Math.max(0, segs.length - 1);
+  const cutsPerMin = (cuts / durSec) * 60;
   const longestSec = segs.reduce((m, s) => Math.max(m, (Number(s.b ?? 0) - Number(s.a ?? 0)) / fps), 0);
   const ep = readJsonFile(path.join(projectRoot, 'src', 'episodes', slug, 'episode.json'));
   const want = paceTarget(durSec, projectAspect(projectRoot, ep));
   if (cutsPerMin >= want.minCutsPerMin && longestSec <= want.maxShotSec) return null;
   return (
-    `PACE TOO SLOW for a ${want.label}: ${shots} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
+    `PACE TOO SLOW for a ${want.label}: ${segs.length} shots over ${durSec.toFixed(1)}s (${cutsPerMin.toFixed(1)} cuts/min, longest ${longestSec.toFixed(1)}s; ` +
     `wanted >= ${want.minCutsPerMin} cuts/min and no shot over ${want.maxShotSec}s). Run whatif_run { step: "shotlist" } then { step: "plan" }.`
   );
 }
@@ -551,7 +551,13 @@ function characterInspector(source: string): (id: string) => 'yes' | 'no' | 'unk
  * - local clock `t` is used in FRAMES (0..len), never decimal seconds (t - 0.8) and never past `len`,
  * - camera zoom in camT stays within 0.8..3.2, and elements are centred around x=960 (not x=640).
  */
-export function shotsAudit(projectRoot: string, slug: string, episode: any, timeline: any): string | null {
+export function shotsAudit(
+  projectRoot: string,
+  slug: string,
+  episode: any,
+  timeline: any,
+  opts?: { mutate?: boolean },
+): string | null {
   const src = path.join(projectRoot, 'src', 'episodes', slug);
   const tlShots: { id: string; len: number; size?: string; key?: number }[] = Array.isArray(timeline?.shots) ? timeline.shots : [];
   const epShots: Record<string, any> = {};
@@ -561,8 +567,10 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
   const wanted = [...new Set(tlShots.map((s) => String(s.id ?? '')).filter(Boolean))];
   if (!wanted.length) return `timeline.json has no shots: run whatif_run { step: "plan" } first`;
 
-  // an angle decided on the card is written into the shot before anything is read
-  applyCardAngles(src, Array.isArray(episode?.shots) ? episode.shots : []);
+  // an angle decided on the card is written into the shot before stills (never during render/board, which would make boardStale fail)
+  if (opts?.mutate !== false) {
+    applyCardAngles(src, Array.isArray(episode?.shots) ? episode.shots : []);
+  }
   const epSrc = readEpisodeShots(src);
   if (!epSrc.exists) {
     return `src/episodes/${slug}/shots.tsx is missing: write shared.tsx + one component per shot (${wanted.join(', ')}) via edit_shot`;
@@ -723,7 +731,8 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
     const isSchematic = size.includes('schematic') || size.includes('diagram') || set === 'schematic' || /<Schematic\b/.test(body);
-    const character = inspectCharacter(id);
+    const isPovShot = /\bcam\s*:\s*['"]pov['"]/.test(body);
+    const character = isPovShot ? 'yes' : inspectCharacter(id);
     const hasHero = character === 'yes';
     if (hasHero) heroShots++;
     // rhythm: a shot with people must change something while it plays (a beat, a new face, a clip, keyframes)
@@ -844,67 +853,113 @@ export function shotsAudit(projectRoot: string, slug: string, episode: any, time
     }
   }
 
-  // Fast local in-memory SSR smoke test (catches runtime TypeErrors/ReferenceErrors in <0.3s before Modal)
+  // Fast isolated child-process SSR smoke test (catches runtime TypeErrors/ReferenceErrors in <0.25s without ever running untrusted code inside the server process)
   try {
     const nm = path.join(projectRoot, 'node_modules');
     if (fs.existsSync(path.join(nm, 'typescript')) && fs.existsSync(path.join(nm, 'react-dom'))) {
-      const req = createRequire(path.join(projectRoot, 'package.json'));
-      const ts = req('typescript');
-      const React = req('react');
-      const ReactDOMServer = req('react-dom/server');
-      const jsxRuntime = req('react/jsx-runtime');
-      const cache: Record<string, { exports: any }> = {};
-      const loadMod = (rel: string): any => {
-        let full = path.join(projectRoot, rel);
-        if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
-          for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
-            if (fs.existsSync(full + ext) && fs.statSync(full + ext).isFile()) {
-              full = full + ext;
-              break;
-            }
-          }
-        }
-        if (cache[full]) return cache[full]!.exports;
-        if (full.endsWith('.json')) return JSON.parse(fs.readFileSync(full, 'utf8'));
-        const srcCode = fs.readFileSync(full, 'utf8');
-        const transpiled = ts.transpileModule(srcCode, {
-          compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
-        }).outputText;
-        const mod = { exports: {} as any };
-        cache[full] = mod;
-        const localReq = (id: string) => {
-          if (id === 'react') return React;
-          if (id === 'react/jsx-runtime') return jsxRuntime;
-          if (id === 'remotion') return { AbsoluteFill: 'div', Audio: 'audio', staticFile: (s: string) => s, useCurrentFrame: () => 0 };
-          if (id.startsWith('@remotion/google-fonts')) return { loadFont: () => ({ fontFamily: 'sans-serif' }) };
-          if (id.startsWith('.')) return loadMod(path.relative(projectRoot, path.resolve(path.dirname(full), id)));
-          return req(id);
-        };
-        new Function('exports', 'require', 'module', transpiled)(mod.exports, localReq, mod);
-        return mod.exports;
-      };
-      let exportedShots: any = null;
-      try {
-        exportedShots = loadMod(`src/episodes/${slug}/shots.tsx`);
-      } catch (err) {
-        // a wrong name at the top of shots.tsx (cast, place) fails here; a package missing from the sandbox is not the episode's fault
-        const message = (err as Error).message;
-        if (!/Cannot find module/.test(message)) errors.push(`shots.tsx crashes when it loads: ${message}`);
+      const childHarness = `
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+const projectRoot = path.resolve(payload.projectRoot);
+const req = createRequire(path.join(projectRoot, 'package.json'));
+const ts = req('typescript');
+const React = req('react');
+const ReactDOMServer = req('react-dom/server');
+const jsxRuntime = req('react/jsx-runtime');
+delete process.env.TS_PATH;
+const errors = [];
+const cache = Object.create(null);
+const sandboxCtx = vm.createContext({
+  console: { log() {}, warn() {}, error() {} },
+});
+const loadMod = (rel) => {
+  let full = path.resolve(projectRoot, rel);
+  if (full !== projectRoot && !full.startsWith(projectRoot + path.sep)) {
+    throw new Error('module path escapes project: ' + rel);
+  }
+  if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
+    for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
+      if (fs.existsSync(full + ext) && fs.statSync(full + ext).isFile()) {
+        full = full + ext;
+        break;
       }
-      for (const sh of tlShots) {
-        const id = String(sh.id ?? '');
-        const Comp = exportedShots?.[id];
-        if (typeof Comp !== 'function') continue;
-        const len = Math.max(30, Number(sh.len ?? 90));
-        const key = Math.min(len - 1, Math.max(0, Number(sh.key ?? 18)));
-        for (const t of [0, key, len]) {
-          try {
-            ReactDOMServer.renderToStaticMarkup(React.createElement(Comp, { t, len, f: t }));
-          } catch (err) {
-            errors.push(`${id} crashes at runtime (t=${t}): ${(err as Error).message}`);
-            break;
-          }
-        }
+    }
+  }
+  if (cache[full]) return cache[full].exports;
+  if (full.endsWith('.json')) return JSON.parse(fs.readFileSync(full, 'utf8'));
+  const srcCode = fs.readFileSync(full, 'utf8');
+  const transpiled = ts.transpileModule(srcCode, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+  }).outputText;
+  const mod = { exports: {} };
+  cache[full] = mod;
+  const localReq = (id) => {
+    if (id === 'react') return React;
+    if (id === 'react/jsx-runtime') return jsxRuntime;
+    if (id === 'remotion') return { AbsoluteFill: 'div', Audio: 'audio', staticFile: (s) => s, useCurrentFrame: () => 0 };
+    if (typeof id === 'string' && id.startsWith('@remotion/google-fonts')) return { loadFont: () => ({ fontFamily: 'sans-serif' }) };
+    if (typeof id === 'string' && id.startsWith('.')) {
+      const target = path.resolve(path.dirname(full), id);
+      if (target !== projectRoot && !target.startsWith(projectRoot + path.sep)) {
+        throw new Error('module path escapes project: ' + id);
+      }
+      return loadMod(path.relative(projectRoot, target));
+    }
+    throw new Error('module "' + id + '" is forbidden in episode code');
+  };
+  const wrapper = '(function(exports, require, module) {\\n' + transpiled + '\\n})';
+  const fn = vm.runInContext(wrapper, sandboxCtx, { filename: full, timeout: 1500 });
+  sandboxCtx.__fn = fn;
+  sandboxCtx.__exports = mod.exports;
+  sandboxCtx.__req = localReq;
+  sandboxCtx.__mod = mod;
+  vm.runInContext('__fn(__exports, __req, __mod)', sandboxCtx, { filename: full, timeout: 1500 });
+  return mod.exports;
+};
+let exportedShots = null;
+try {
+  exportedShots = loadMod('src/episodes/' + payload.slug + '/shots.tsx');
+} catch (err) {
+  const message = err && err.message ? err.message : String(err);
+  if (!/Cannot find module/.test(message)) errors.push('shots.tsx crashes when it loads: ' + message);
+}
+for (const sh of payload.tlShots) {
+  const id = String(sh.id ?? '');
+  const Comp = exportedShots && exportedShots[id];
+  if (typeof Comp !== 'function') continue;
+  const len = Math.max(30, Number(sh.len ?? 90));
+  const key = Math.min(len - 1, Math.max(0, Number(sh.key ?? 18)));
+  for (const t of [0, key, len]) {
+    try {
+      ReactDOMServer.renderToStaticMarkup(React.createElement(Comp, { t, len, f: t }));
+    } catch (err) {
+      errors.push(id + ' crashes at runtime (t=' + t + '): ' + (err && err.message ? err.message : String(err)));
+      break;
+    }
+  }
+}
+process.stdout.write(JSON.stringify({ errors }));
+`;
+      const childRes = spawnSync(process.execPath, ['-e', childHarness], {
+        cwd: projectRoot,
+        input: JSON.stringify({ projectRoot, slug, tlShots }),
+        timeout: 6_000,
+        maxBuffer: 2 * 1024 * 1024,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH ?? '',
+          NODE_ENV: 'production',
+          ...(process.env.TS_PATH ? { TS_PATH: process.env.TS_PATH } : {}),
+        },
+      });
+      if ((childRes.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || childRes.signal === 'SIGTERM' || childRes.signal === 'SIGKILL') {
+        errors.push(`shots.tsx timed out during render smoke test (infinite loop in episode code?)`);
+      } else if (childRes.status === 0 && childRes.stdout) {
+        const parsed = JSON.parse(childRes.stdout.trim());
+        if (Array.isArray(parsed?.errors)) errors.push(...parsed.errors);
       }
     }
   } catch {
@@ -1015,7 +1070,12 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
   const words = readJson(wordsFile);
   const timeline = readJson(path.join(src, 'timeline.json'));
   const voiced = fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'));
-  const staleTimeline = !timeline || Number(timeline.total ?? 0) <= 300 || String(timeline.title ?? '') === 'PLACEHOLDER';
+  const staleTimeline =
+    !timeline ||
+    String(timeline.title ?? '') === 'PLACEHOLDER' ||
+    !Array.isArray(timeline.segments) ||
+    timeline.segments.length === 0 ||
+    (Number(timeline.total ?? 0) === 300 && timeline.segments.length === 1 && (timeline.shots?.[0]?.len ?? 0) === 300 && !voiced);
 
   if (step === 'voice' || step === 'shotlist' || step === 'plan' || step === 'stills' || step === 'render') {
     if (!scriptWords) return `episode.json has no script yet: write the script first (${slug})`;
@@ -1044,7 +1104,7 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     }
     const pace = paceProblem(projectRoot, slug);
     if (pace) return pace;
-    const auditErr = shotsAudit(projectRoot, slug, episode, timeline);
+    const auditErr = shotsAudit(projectRoot, slug, episode, timeline, { mutate: step === 'stills' });
     if (auditErr) return auditErr;
   }
   if (step === 'sfx' || step === 'mixcheck' || step === 'render') {
@@ -1272,6 +1332,8 @@ const runStep: Tool = {
     additionalProperties: false,
   },
   validate: (input) => {
+    const slug = String(input.episode ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug)) return 'episode must be a clean slug';
     const step = String(input.step ?? '');
     if (step !== 'render' && !STEPS[step]) return `unknown step ${step}`;
     return null;
@@ -1279,12 +1341,14 @@ const runStep: Tool = {
   cost: (input) => (String(input.step) === 'sfx' ? 200 : 0),
   async run(input: { episode: string; step: string; args?: string[] }, ctx): Promise<ToolResult> {
     if (!ctx.skillDir) throw new Error('WHATIF_SKILL_DIR is not set');
+    const slug = String(input.episode ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug)) throw new Error(`invalid episode slug "${slug}"`);
     const scripts = path.join(ctx.skillDir, 'scripts');
     const extra = input.args ?? [];
-    const slug = input.episode;
     syncStudioAspect(ctx.projectRoot, slug);
     if (
       (input.step === 'stills' || input.step === 'render') &&
+      process.env.WHATIF_ALLOW_ENGINE_WRITES !== '1' &&
       fs.existsSync(path.join(ctx.projectRoot, 'src', 'engine', 'shot.tsx')) &&
       fs.existsSync(path.join(ctx.projectRoot, 'src', 'engine', 'rig.tsx'))
     ) {
@@ -1561,9 +1625,11 @@ const status: Tool = {
     additionalProperties: false,
   },
   async run(input: { episode: string }, ctx) {
-    const dir = safeJoin(ctx.projectRoot, `src/episodes/${input.episode}`);
-    const out = safeJoin(ctx.projectRoot, `out/${input.episode}`);
-    const pub = safeJoin(ctx.projectRoot, `public/${input.episode}`);
+    const slug = String(input.episode ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug)) throw new Error(`invalid episode slug "${slug}"`);
+    const dir = safeJoin(ctx.projectRoot, `src/episodes/${slug}`);
+    const out = safeJoin(ctx.projectRoot, `out/${slug}`);
+    const pub = safeJoin(ctx.projectRoot, `public/${slug}`);
     const has = (p: string) => fs.existsSync(p);
     const read = (p: string) => (has(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null);
     const ep = read(path.join(dir, 'episode.json'));
@@ -1616,7 +1682,12 @@ const syncEngine: Tool = {
       return { ok: true, summary: `no skill mounted (WHATIF_SKILL_DIR unset): ${overlaySummary(only, Boolean(input.apply))}`, data: { overlay: only } };
     }
     const skillStudio = path.join(ctx.skillDir, 'studio');
-    const targets = input.paths?.length ? input.paths : ['src/engine', 'src/studio.config.ts'];
+    const targets = input.paths?.length
+      ? input.paths.filter((p) => /^(src\/engine(\/.*)?|src\/studio\.config\.ts)$/.test(String(p).replace(/\\/g, '/').replace(/^\/+/, '')))
+      : ['src/engine', 'src/studio.config.ts'];
+    if (input.paths?.length && !targets.length) {
+      throw new Error('whatif_sync_engine paths must stay within src/engine or src/studio.config.ts');
+    }
     const added: string[] = [];
     const identical: string[] = [];
     const modified: string[] = [];

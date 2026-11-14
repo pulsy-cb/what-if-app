@@ -4362,3 +4362,891 @@ test('7669887273659305246-1 & post-final rerun fixes: tabletop/phone angle exemp
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('security hardening (C1-C4): malformed URL 400, CSRF Origin 403, .env block, Range 416/206, C2 path normalization, symlink escape, shell policy, SSR VM sandbox & API key origin guard', async () => {
+  const http = await import('node:http');
+  const { dir, app } = tmpApp();
+  app.db.setSetting('provider', 'mock');
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  const port = app.server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    // 1. C1: malformed percent-encoding returns 400 instead of crashing the HTTP server
+    const badStatus = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/%E0%A4%A', method: 'GET' }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(badStatus, 400);
+    // Server is still alive right after malformed URL
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+
+    // 2. Cross-origin CSRF & Host rebinding blocked on /api/*
+    const csrfRes = await fetch(`${base}/api/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ model: 'pwned' }),
+    });
+    assert.equal(csrfRes.status, 403);
+
+    // 3. /api/file blocks .env & handles suffix / out-of-bounds Range headers cleanly
+    const created = await (
+      await fetch(`${base}/api/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'secproj' }),
+      })
+    ).json();
+    const pid = created.project.id;
+    const proot = created.project.root;
+    fs.writeFileSync(path.join(proot, '.env'), 'SECRET_KEY=topsecret\n');
+    fs.mkdirSync(path.join(proot, 'out'), { recursive: true });
+    fs.writeFileSync(path.join(proot, 'out', 'sample.bin'), '0123456789');
+
+    assert.equal((await fetch(`${base}/api/file?project=${pid}&path=.env`)).status, 403);
+    assert.equal(
+      (await fetch(`${base}/api/file?project=${pid}&path=out/sample.bin`, { headers: { range: 'bytes=999-' } })).status,
+      416,
+    );
+    const suffixRes = await fetch(`${base}/api/file?project=${pid}&path=out/sample.bin`, { headers: { range: 'bytes=-4' } });
+    assert.equal(suffixRes.status, 206);
+    assert.equal(await suffixRes.text(), '6789');
+
+    // 4. C2: write_file normalizes ../ segments before checking WRITABLE_PATHS, read_file blocks .env, safeJoin blocks symlinks
+    const registry = defaultRegistry();
+    const ctx = { projectId: pid, projectRoot: proot, dataRoot: dir, skillDir: null, log: () => {} };
+    const dotGitEscape = await registry.run('write_file', { path: 'src/episodes/../../.git/config', content: 'x' }, ctx);
+    assert.equal(dotGitEscape.ok, false);
+    const engineEscape = await registry.run('write_file', { path: 'src/episodes/../engine/hack.ts', content: 'x' }, ctx);
+    assert.equal(engineEscape.ok, false);
+    const envRead = await registry.run('read_file', { path: '.env' }, ctx);
+    assert.equal(envRead.ok, false);
+
+    const outsideFile = path.join(os.tmpdir(), `whatif-outside-${Date.now()}.txt`);
+    fs.writeFileSync(outsideFile, 'outside-secret');
+    try {
+      fs.mkdirSync(path.join(proot, 'src', 'episodes', 'sym'), { recursive: true });
+      fs.symlinkSync(outsideFile, path.join(proot, 'src', 'episodes', 'sym', 'escape.ts'));
+      const symRead = await registry.run('read_file', { path: 'src/episodes/sym/escape.ts' }, ctx);
+      assert.equal(symRead.ok, false);
+    } finally {
+      fs.rmSync(outsideFile, { force: true });
+    }
+
+    // 5. Shell policy blocks npx prefix spoofing, ffmpeg file:/network protocols, python out/ scripts, and git -c
+    const { checkCommand } = await import('../dist/tools/shell-policy.js');
+    assert.equal(checkCommand('npx tsc-evil').ok, false);
+    assert.equal(checkCommand('npx tsc --noEmit').ok, true);
+    assert.equal(checkCommand('ffmpeg -i file:/etc/passwd out/x.mp4').ok, false);
+    assert.equal(checkCommand('python3 out/evil.py').ok, false);
+    assert.equal(checkCommand('git -c core.sshCommand=evil status').ok, false);
+
+    // 6. C3: shotsAudit runs SSR inside an isolated VM child process and blocks require('node:child_process') & process globals
+    const nm = path.join(proot, 'node_modules');
+    for (const [name, body] of [
+      ['typescript', `module.exports = require(${JSON.stringify(path.resolve('node_modules/typescript'))});`],
+      ['react', 'module.exports = { createElement: () => null };'],
+      ['react-dom', 'module.exports = {};'],
+      ['react-dom/server', 'module.exports = { renderToStaticMarkup: () => "" };'],
+      ['react/jsx-runtime', 'module.exports = { jsx: () => null, jsxs: () => null };'],
+    ]) {
+      fs.mkdirSync(path.join(nm, name), { recursive: true });
+      fs.writeFileSync(path.join(nm, name, 'index.js'), body);
+    }
+    fs.writeFileSync(path.join(proot, 'package.json'), '{}');
+    const epDir = path.join(proot, 'src', 'episodes', 'sandboxed');
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.mkdirSync(path.join(proot, 'src', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(proot, 'src', 'engine', 'shot.tsx'), `export const shot = () => () => null;\n`);
+    fs.writeFileSync(
+      path.join(proot, 'src', 'engine', 'index.ts'),
+      `import React from 'react';\nexport const Stage = ({ children }) => React.createElement('g', null, children);\nexport { shot } from './shot';\n`,
+    );
+    const tlObj = {
+      schema: 2,
+      fps: 30,
+      total: 180,
+      shots: [
+        { id: 'S1', len: 60, size: 'establishing' },
+        { id: 'S2', len: 60, size: 'establishing' },
+        { id: 'S3', len: 60, size: 'establishing' },
+      ],
+      segments: [
+        { shot: 'S1', a: 0, b: 60 },
+        { shot: 'S2', a: 60, b: 120 },
+        { shot: 'S3', a: 120, b: 180 },
+      ],
+    };
+    const epObj = {
+      slug: 'sandboxed',
+      shots: [
+        { id: 'S1', size: 'establishing' },
+        { id: 'S2', size: 'establishing' },
+        { id: 'S3', size: 'establishing' },
+      ],
+    };
+    fs.writeFileSync(path.join(epDir, 'timeline.json'), JSON.stringify(tlObj));
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(epObj));
+    fs.writeFileSync(path.join(epDir, 'shared.tsx'), `export const X = 1;\n`);
+    const markerPwn = path.join(dir, 'pwned.txt');
+    fs.writeFileSync(
+      path.join(epDir, 'shots', 'S1.tsx'),
+      `import cp from 'node:child_process';\ncp.execSync('touch ${markerPwn.replace(/\\/g, '/')}');\nexport const S1 = () => null;\n`,
+    );
+    fs.writeFileSync(path.join(epDir, 'shots', 'S2.tsx'), `export const S2 = () => null;\n`);
+    fs.writeFileSync(path.join(epDir, 'shots', 'S3.tsx'), `export const S3 = () => null;\n`);
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), `export { S1 } from './shots/S1';\nexport { S2 } from './shots/S2';\nexport { S3 } from './shots/S3';\n`);
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `import { S1, S2, S3 } from './shots';\nexport default { S1, S2, S3 };\n`);
+    const { shotsAudit } = await import('../dist/tools/whatif.js');
+    const auditErrStr = shotsAudit(proot, 'sandboxed', epObj, tlObj) ?? '';
+    assert.equal(fs.existsSync(markerPwn), false, 'child_process import blocked by SSR sandbox');
+    assert.match(auditErrStr, /module "node:child_process" is forbidden in episode code/, `expected sandbox block error, got ${auditErrStr}`);
+
+    // 7. C4: isAllowedCodexBase & discoverProviderModels origin check prevent credential exfiltration
+    const { isAllowedCodexBase, discoverProviderModels } = await import('../dist/orchestrator/providers/index.js');
+    assert.equal(isAllowedCodexBase('https://chatgpt.com/backend-api/codex'), true);
+    assert.equal(isAllowedCodexBase('http://127.0.0.1:8123/codex'), true);
+    assert.equal(isAllowedCodexBase('https://evil.example/?chatgpt.com'), false);
+    assert.equal(isAllowedCodexBase('https://chatgpt.com.evil.example/v1'), false);
+
+    let leakedAuthHeader = null;
+    const spySrv = http.createServer((req, res) => {
+      leakedAuthHeader = req.headers.authorization ?? null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'spy-model' }] }));
+    });
+    await new Promise((r) => spySrv.listen(0, '127.0.0.1', r));
+    const spyPort = spySrv.address().port;
+    try {
+      app.db.setSetting('provider', 'openai');
+      app.db.setSetting('apiKey', 'sk-super-secret-stored-key');
+      app.db.setSetting('baseURL', 'https://api.openai.com/v1');
+      await discoverProviderModels(app.db, {
+        provider: 'openai',
+        baseURL: `http://127.0.0.1:${spyPort}/v1`,
+        forceRefresh: true,
+        env: {},
+      });
+      assert.equal(leakedAuthHeader, null, 'stored DB apiKey must NOT be sent to an untrusted overrideBaseURL');
+    } finally {
+      await new Promise((r) => spySrv.close(r));
+    }
+
+    // 8. Context buildMessages repairs orphan tool_calls, and Bus coalesces assistant_delta without evicting tool_call
+    const { buildMessages } = await import('../dist/orchestrator/context.js');
+    const { Bus } = await import('../dist/orchestrator/bus.js');
+    const th = app.db.createThread(pid, 'orphan');
+    app.db.addMessage(th.id, 'user', 'bonjour');
+    app.db.addMessage(th.id, 'assistant', '', { toolCalls: [{ id: 'tc_orphan', name: 'read_file', args: { path: 'PROJECT.md' } }] });
+    app.db.addMessage(th.id, 'user', 'relance');
+    const built = buildMessages({ projectRoot: proot, history: app.db.listMessages(th.id), maxChars: 120_000 });
+    assert.ok(
+      built.some((m) => m.role === 'tool' && m.toolCallId === 'tc_orphan'),
+      'orphan assistant.toolCalls receives a synthetic error tool message so OpenAI/Anthropic never 400',
+    );
+
+    const bus = new Bus();
+    bus.emit(th.id, 'tool_call', { id: 'tc1', name: 'read_file' });
+    for (let i = 0; i < 600; i++) bus.emit(th.id, 'assistant_delta', { text: 'a' });
+    const replayed = bus.replay(th.id, 0);
+    assert.equal(replayed[0].type, 'tool_call', 'coalesced assistant_delta stream never evicts earlier tool_call events');
+    assert.equal(replayed[1].data.text.length, 600);
+    assert.equal(bus.replay(th.id, replayed[0].seq).length, 1, 'replay(afterSeq) returns only newer events');
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('visual variety & anti-monotony: shotlist.py prose defaultSet + cutaways + reverse view + varied moves, applyCardAngles & POV monotony audit', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { applyCardAngles, stagingCodeProblems } = await import('../dist/tools/staging.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-variety-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'monotony-fix');
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+
+    const beats = [
+      "Ce soir-là dans notre salon Marc me regarde en silence et demande ce que je cache.",
+      "Je réponds doucement que tout va bien mais mes mains tremblent sur mon téléphone.",
+      "Il crie soudain que je mens encore et pourquoi je refuse de lui parler !",
+      "Je sors en courant dans le couloir puis je descends l'escalier sans me retourner.",
+      "Dehors dans la rue glacée une voiture freine brusquement sur le trottoir devant moi.",
+      "Vingt minutes plus tard aux urgences de l'hôpital le médecin ouvre mon dossier médical.",
+      "Assise près du lit ma sœur murmure pardon avec des larmes plein les yeux.",
+      "Elle me tend l'enveloppe froissée et demande si j'ai enfin compris la vérité ?",
+      "Je souris tristement en silence pendant qu'elle serre ma main une dernière fois.",
+      "De retour dans le salon au petit matin la porte reste grande ouverte sur le couloir.",
+    ];
+
+    const words = [];
+    let t = 0.2;
+    for (const b of beats) {
+      const toks = b.split(/\s+/);
+      for (let wi = 0; wi < toks.length; wi++) {
+        const raw = toks[wi];
+        const m = /^(.+?)([.,!?]+)?$/.exec(raw);
+        const w = m ? m[1] : raw;
+        const p = m && m[2] ? m[2] : wi === toks.length - 1 ? '.' : '';
+        words.push({ w, p, s: Number(t.toFixed(3)), e: Number((t + 0.24).toFixed(3)) });
+        t += 0.27;
+      }
+      t += 0.3;
+    }
+
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify(words));
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'MonotonyFix',
+        slug: 'monotony-fix',
+        aspect: '9:16',
+        title: ['LA VÉRITÉ', 'CACHÉE'],
+        source: { provider: 'nouveau', videoId: 'vid-var-1' },
+        // Long descriptive prose sentence that previously broke set detection:
+        defaultSet: 'Un salon de banlieue à 4 h du matin, éclairé uniquement par la télé',
+        script: beats.map((text, idx) => ({ beat: `b${idx + 1}`, text })),
+        shots: [],
+      }),
+    );
+
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'monotony-fix', '--project', dir], { stdio: 'pipe' });
+    const ep = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+
+    // 1. Prose defaultSet resolved to clean recipe slug ('living'), never copied verbatim as a 70-char set string
+    for (const s of ep.shots) {
+      assert.ok(s.set.length <= 24 && !/\s/.test(s.set), `shot ${s.id} set should be a clean slug, got "${s.set}"`);
+    }
+    const uniqueSets = new Set(ep.shots.map((s) => s.set));
+    assert.ok(uniqueSets.has('living'), 'primary setting resolved from French prose to "living"');
+    assert.ok(uniqueSets.size >= 3, `cutaway clauses switch sets across >= 3 spaces, got ${[...uniqueSets].join(', ')}`);
+    assert.ok(
+      uniqueSets.has('street') || uniqueSets.has('vehicle') || uniqueSets.has('hospital') || uniqueSets.has('corridor'),
+      'cutaway rooms (corridor/street/vehicle/hospital) are triggered from narration',
+    );
+
+    // 2. Champ / contrechamp (`view: "reverse"`) and varied camera `move` (`push`, `pull`, `pan`, `still`)
+    const reverseShots = ep.shots.filter((s) => s.view === 'reverse');
+    assert.ok(reverseShots.length >= 2, `expected >= 2 reverse-angle shots, got ${reverseShots.length}`);
+    const distinctMoves = new Set(ep.shots.map((s) => s.move));
+    assert.ok(distinctMoves.size >= 3, `expected >= 3 distinct camera moves, got ${[...distinctMoves].join(', ')}`);
+    for (let i = 2; i < ep.shots.length; i++) {
+      assert.notEqual(
+        ep.shots[i].move === ep.shots[i - 1].move && ep.shots[i].move === ep.shots[i - 2].move,
+        true,
+        `3 consecutive shots (${ep.shots[i - 2].id}..${ep.shots[i].id}) must never share the same camera move`,
+      );
+    }
+
+    // 3. applyCardAngles injects view: 'reverse' and move: 'pan' / 'still' onto single-shot files
+    fs.writeFileSync(path.join(epDir, 'shots', 'S1.tsx'), `export const S1 = shot({ place: LIVING, cam: 'wide', people: [{ who: MARC, act: 'talk' }] });`);
+    fs.writeFileSync(path.join(epDir, 'shots', 'S2.tsx'), `export const S2 = shot({ place: LIVING, cam: 'close', people: [{ who: CLARA, act: 'shrug' }] });`);
+    const changed = applyCardAngles(epDir, [
+      { id: 'S1', move: 'pan', view: 'front', stage: { angle: 'level' } },
+      { id: 'S2', move: 'still', view: 'reverse', stage: { angle: 'low', view: 'reverse' } },
+    ]);
+    assert.deepEqual(changed, ['S1', 'S2']);
+    assert.match(fs.readFileSync(path.join(epDir, 'shots', 'S1.tsx'), 'utf8'), /shot\(\{ move: 'pan', place: LIVING/);
+    assert.match(fs.readFileSync(path.join(epDir, 'shots', 'S2.tsx'), 'utf8'), /shot\(\{ angle: 'low', view: 'reverse', move: 'still', place: LIVING/);
+
+    // 4. Anti-monotony audit catches 3 identical POVs in a row AND 0 view: 'reverse' across a 1-room dialogue scene
+    const mkCard = (n) => ({
+      see: `Plan ${n} dans le salon où Clara tend le dossier vers Marc debout près du canapé`,
+      subject: 'dossier',
+      people: [
+        { who: 'CLARA', where: 'left', does: `holds out folder ${n}` },
+        { who: 'MARC', where: 'right', does: `leans back with hands up ${n}` },
+      ],
+      objects: [],
+      change: `step ${n} framing`,
+    });
+    const eightShots = Array.from({ length: 8 }, (_, idx) => ({ id: `S${idx + 1}`, size: 'medium', stage: mkCard(idx + 1) }));
+    const monotonousBodies = Object.fromEntries(
+      eightShots.map((s) => [
+        s.id,
+        `export const ${s.id} = shot({ place: LIVING, cam: 'medium', people: [{ who: CLARA, at: { u: 0.3, w: 0.35 }, act: 'give' }, { who: MARC, at: { u: 0.65, w: 0.65 }, act: 'shrug' }] });`,
+      ]),
+    );
+    const monoProblems = stagingCodeProblems(eightShots, monotonousBodies, true, '16:9').join('\n');
+    assert.match(monoProblems, /S1, S2, S3 repeat the exact same POV/);
+    assert.match(monoProblems, /0\/8 shots in LIVING use view: 'reverse'/);
+
+    // Varying cam & adding view: 'reverse' clears all monotony warnings
+    const variedCams = ['wide', 'medium', 'close', 'medium', 'wide', 'close', 'medium', 'close'];
+    const variedBodies = Object.fromEntries(
+      eightShots.map((s, idx) => [
+        s.id,
+        `export const ${s.id} = shot({ place: LIVING, cam: '${variedCams[idx]}', ${idx % 3 === 1 ? "view: 'reverse', " : ''}people: [{ who: CLARA, at: { u: 0.3, w: 0.35 }, act: 'give' }, { who: MARC, at: { u: 0.65, w: 0.65 }, act: 'shrug' }] });`,
+      ]),
+    );
+    assert.deepEqual(stagingCodeProblems(eightShots, variedBodies, true, '16:9'), []);
+
+    // 5. Engine shot.tsx supports move: 'pan', CamBeat view/cut, stronger low/high angle, and per-instance phoneShot SVG IDs
+    const shotSrc = fs.readFileSync('engine-overlay/files/src/engine/shot.tsx', 'utf8');
+    assert.match(shotSrc, /move\?: 'push' \| 'pull' \| 'still' \| 'pan'/);
+    assert.match(shotSrc, /view\?: PlaceView; zone\?: string; cut\?: boolean/);
+    assert.match(shotSrc, /phoneChatClip-\$\{uid\}/);
+    assert.match(shotSrc, /phoneLockGlow-\$\{uid\}/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('2D engine evolution & pipeline hardening: 6 perspectives (3/4 & side walls), OTS/POV amorces, foreground parallax, zones, track/whip moves, sfx cache & modal retry', async () => {
+  const ts = (await import('typescript')).default;
+  const { execFileSync } = await import('node:child_process');
+  const { applyCardAngles, stagingCodeProblems, stageCardProblems } = await import('../dist/tools/staging.js');
+  const { staticMetrics } = await import('../dist/orchestrator/reviewer.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-2d-evo-'));
+  try {
+    // 1. Transpile & execute real rooms.tsx + shot.tsx + objects.tsx + actions.ts + worn.tsx in 9:16 portrait mode
+    const engSrc = path.resolve('engine-overlay/files/src/engine');
+    const engTmp = path.join(dir, 'src', 'engine');
+    fs.mkdirSync(engTmp, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
+    fs.writeFileSync(path.join(dir, 'src', 'studio.config.mjs'), `export const STUDIO = { width: 1080, height: 1920, fps: 30 };\n`);
+
+    const nmReact = path.join(dir, 'node_modules', 'react');
+    fs.mkdirSync(nmReact, { recursive: true });
+    fs.writeFileSync(path.join(nmReact, 'package.json'), JSON.stringify({ name: 'react', type: 'module', main: 'index.mjs' }));
+    fs.writeFileSync(
+      path.join(nmReact, 'index.mjs'),
+      `const h = (type, props, ...children) => {
+        const flat = children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false);
+        if (typeof type === 'function') return type({ ...(props || {}), children: flat.length <= 1 ? flat[0] : flat });
+        return { $$typeof: Symbol.for('react.element'), type, props: props || {}, children: flat };
+      };
+      export default { createElement: h, isValidElement: (v) => Boolean(v && typeof v === 'object' && v.$$typeof), createContext: (d) => ({ Provider: ({ children }) => children, _d: d }) };
+      export const createElement = h;
+      export const isValidElement = (v) => Boolean(v && typeof v === 'object' && v.$$typeof);
+      export const createContext = (d) => ({ Provider: ({ children }) => children, _d: d });\n`,
+    );
+
+    // Lightweight perspective Box/makeRoom + Stage stubs matching the skill engine
+    fs.writeFileSync(
+      path.join(engTmp, 'room.mjs'),
+      `export const makeRoom = (vp, back, near = 3.2) => {
+        const s = (w) => 1 + (near - 1) * w;
+        const P = (u, v, w) => {
+          const bx = back.x0 + (back.x1 - back.x0) * u;
+          const by = back.y0 + (back.y1 - back.y0) * v;
+          const k = s(w);
+          return { x: vp.x + (bx - vp.x) * k, y: vp.y + (by - vp.y) * k };
+        };
+        const Q = (pts) => pts.map(([u, v, w]) => { const p = P(u, v, w); return \`\${p.x.toFixed(1)},\${p.y.toFixed(1)}\`; }).join(' ');
+        return { vp, back, s, P, Q };
+      };
+      export const Box = (p) => ({ type: 'box', props: p });\n`,
+    );
+    fs.writeFileSync(
+      path.join(engTmp, 'furnish.mjs'),
+      `export const RoomShell = (p) => ({ type: 'shell', backX0: p.r.back.x0, vpX: p.r.vp.x });
+      export const FloorPlant = () => ({ type: 'plant' });
+      export const FloorShadow = () => ({ type: 'shadow' });
+      export const WallFrame = () => ({ type: 'frame' });
+      export const WallClock = () => ({ type: 'clock' });
+      export const Pendant = () => ({ type: 'pendant' });
+      export const pendantLight = (r, u, w) => { const p = r.P(u, 0.2, w); return [p.x, p.y, 260]; };\n`,
+    );
+    fs.writeFileSync(
+      path.join(engTmp, 'light.mjs'),
+      `export const LightVeil = () => null;
+      export const Dust = () => null;
+      export const Glow = () => null;
+      export const RoomCorners = () => null;\n`,
+    );
+    fs.writeFileSync(
+      path.join(engTmp, 'pieces.mjs'),
+      `export const WallBoard = () => ({ type: 'board' });
+      export const PinBoard = () => ({ type: 'pinboard' });\n`,
+    );
+    fs.writeFileSync(
+      path.join(engTmp, 'stage.mjs'),
+      `export const roomGround = (r, k = 0.62) => ({
+        project: (u, w) => {
+          const p = r.P(u, 1, w);
+          return { x: p.x, y: p.y, scale: (k * (r.back.y1 - r.back.y0) * r.s(w)) / 378 };
+        },
+      });
+      export const Stage = ({ children }) => ({ type: 'stage', children: Array.isArray(children) ? children : [children] });
+      export const StageItem = ({ depth, children }) => ({ type: 'stage-item', depth, children });
+      export const Staged = (p) => ({ type: 'staged-person', look: p.look, at: p.at, yaw: p.yaw, act: p.act, handRProp: p.handRProp });
+      export const Duo = (p) => ({ type: 'duo', action: p.action });\n`,
+    );
+    fs.writeFileSync(path.join(engTmp, 'person.mjs'), `export const bodyOf = () => ({ thigh: 72, shin: 68 });\n`);
+    fs.writeFileSync(path.join(engTmp, 'rig.mjs'), `export const faceAt = () => ({});\n`);
+    fs.writeFileSync(
+      path.join(engTmp, 'accents.mjs'),
+      `export const HeadVfx = () => null;
+      export const HookTitle = () => null;
+      export const ShockBurst = () => null;
+      export const StampCard = () => null;
+      export const ValueTag = () => null;\n`,
+    );
+
+    const transpileToMjs = (srcFile, outName) => {
+      let raw = fs.readFileSync(path.join(engSrc, srcFile), 'utf8');
+      raw = raw.replace(/from '(\.\.?\/[^']+)'/g, (_, spec) => `from '${spec}.mjs'`);
+      const out = ts.transpileModule(raw, {
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ES2022,
+          jsx: ts.JsxEmit.React,
+          esModuleInterop: true,
+        },
+      }).outputText;
+      fs.writeFileSync(path.join(engTmp, outName), out);
+    };
+    transpileToMjs('actions.ts', 'actions.mjs');
+    transpileToMjs('objects.tsx', 'objects.mjs');
+    transpileToMjs('worn.tsx', 'worn.mjs');
+    transpileToMjs('rooms.tsx', 'rooms.mjs');
+    transpileToMjs('shot.tsx', 'shot.mjs');
+
+    const R = await import(path.join(engTmp, 'rooms.mjs'));
+    const S = await import(path.join(engTmp, 'shot.mjs'));
+
+    // Verify all 6 views on place('living') + spotForView / yawForView + zoneOf
+    const LIVING = R.place('living');
+    for (const v of ['front', 'reverse', 'left', 'right', '3/4-left', '3/4-right']) {
+      const pv = LIVING.viewOf(v);
+      assert.equal(pv.view, v);
+      const shellJson = JSON.stringify(pv.Shell({ t: 0, id: `rm_${v}` }));
+      assert.match(shellJson, /"type":"shell"/);
+    }
+    assert.equal(LIVING.reverse, LIVING.viewOf('reverse'), '.reverse getter stays identical to viewOf("reverse")');
+    // 3/4-left and 3/4-right shift vanishing points to opposite sides of 900
+    const shellFront = JSON.stringify(LIVING.viewOf('front').Shell({ t: 0 }));
+    const shell3qL = JSON.stringify(LIVING.viewOf('3/4-left').Shell({ t: 0 }));
+    const shell3qR = JSON.stringify(LIVING.viewOf('3/4-right').Shell({ t: 0 }));
+    assert.match(shellFront, /"vpX":900/);
+    assert.match(shell3qL, /"vpX":580/);
+    assert.match(shell3qR, /"vpX":1220/);
+
+    // Side-wall 90-degree spot & yaw geometry
+    assert.deepEqual(R.spotForView({ u: 0.2, w: 0.6 }, 'left'), { u: 0.4, w: 0.2 });
+    assert.deepEqual(R.spotForView({ u: 0.2, w: 0.6 }, 'right'), { u: 0.6, w: 0.8 });
+    assert.equal(R.yawForView(0, 'left'), -1);
+    assert.equal(R.yawForView(0, 'right'), 1);
+
+    // Sub-zones inside a single room
+    const zWin = LIVING.zoneOf('window');
+    const zSofa = LIVING.zoneOf('sofa');
+    assert.ok(zWin && zSofa && Math.abs(zWin.x - zSofa.x) > 80, 'window and sofa zones frame distinct parts of LIVING');
+
+    // OTS amorce: draws blurred interlocutor shoulder in screen space with interlocutor's jacket/hair & hides duplicate world rig
+    const PROF = { skin: '#E5B895', skinShade: '#C49572', hair: '#1E1816', jacket: '#8B2635', jacketShade: '#5E1924' };
+    const MAYA = { skin: '#F2C9A8', skinShade: '#D4A582', hair: '#4A2E1B', jacket: '#2A6F97', jacketShade: '#1B4965' };
+    const otsShot = S.shot({
+      place: LIVING,
+      cam: 'ots',
+      on: 1,
+      people: [
+        { who: PROF, at: { u: 0.28, w: 0.62 }, act: 'talk' },
+        { who: MAYA, at: { u: 0.64, w: 0.38 }, look: 0, act: 'explain' },
+      ],
+    });
+    const otsTree = JSON.stringify(otsShot({ t: 12, len: 60 }));
+    assert.match(otsTree, /"data-amorce":"ots"/);
+    assert.match(otsTree, /#8B2635/, 'interlocutor PROF jacket appears in OTS shoulder amorce');
+    assert.equal((otsTree.match(/"type":"staged-person"/g) ?? []).length, 1, 'only target MAYA is staged in world space; PROF is the OTS amorce');
+
+    // Single-person OTS degrades cleanly to medium without crashing
+    const otsSolo = S.shot({ place: LIVING, cam: 'ots', people: [{ who: MAYA, act: 'talk' }] });
+    const soloTree = JSON.stringify(otsSolo({ t: 10, len: 60 }));
+    assert.doesNotMatch(soloTree, /"data-amorce":"ots"/);
+    assert.equal((soloTree.match(/"type":"staged-person"/g) ?? []).length, 1);
+
+    // POV shot: renders subjective hands + held object in screen space and hides POV owner's 3rd-person rig
+    const povShot = S.shot({
+      place: LIVING,
+      cam: 'pov',
+      on: 0,
+      people: [
+        { who: MAYA, hold: 'phone', look: 1 },
+        { who: PROF, at: { u: 0.52, w: 0.36 }, act: 'point' },
+      ],
+    });
+    const povTree = JSON.stringify(povShot({ t: 15, len: 60 }));
+    assert.match(povTree, /"data-amorce":"pov"/);
+    assert.match(povTree, /#2A6F97/, 'MAYA sleeve colour appears on POV hands');
+    assert.equal((povTree.match(/"type":"staged-person"/g) ?? []).length, 1, 'POV owner MAYA is hidden from 3rd-person stage');
+
+    // Foreground amorce + track/whip camera motion parallax
+    const fgShot = S.shot({
+      place: LIVING,
+      cam: 'medium',
+      move: 'track',
+      foreground: 'plant',
+      people: [{ who: MAYA, walkTo: { u: 0.7, w: 0.45 }, at: { u: 0.25, w: 0.45 } }],
+    });
+    const fg0 = JSON.stringify(fgShot({ t: 0, len: 60 }));
+    const fg60 = JSON.stringify(fgShot({ t: 60, len: 60 }));
+    assert.match(fg0, /"data-foreground":"plant"/);
+    assert.notEqual(fg0, fg60, 'track move shifts camera and foreground parallax across frames');
+
+    const whipShot = S.shot({ place: LIVING, cam: 'medium', move: 'whip', zone: 'door', people: [{ who: MAYA, act: 'shock' }] });
+    const whip0 = JSON.stringify(whipShot({ t: 0, len: 45 }));
+    const whip15 = JSON.stringify(whipShot({ t: 15, len: 45 }));
+    assert.notEqual(whip0, whip15, 'whip move settles from fast offset at t=0 to resting frame at t=15');
+
+    // 2. Staging cards, applyCardAngles, move-monotony audit & staticMetrics
+    const validCardErrs = stageCardProblems(
+      {
+        see: 'En amorce par-dessus l’épaule de Marc près de la fenêtre, Clara ouvre la lettre',
+        subject: 'la lettre ouverte',
+        people: [{ who: 'CLARA', where: 'near window', does: 'unfolds the letter with both hands' }],
+        objects: ['lettre'],
+        view: '3/4-left',
+        cam: 'ots',
+        zone: 'window',
+        foreground: 'auto',
+        change: 'switched to 3/4-left OTS near window',
+      },
+      { id: 'S2', size: 'medium' },
+      false,
+    );
+    assert.deepEqual(validCardErrs, []);
+
+    const epDir = path.join(dir, 'src', 'episodes', 'evo');
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.writeFileSync(path.join(epDir, 'shots', 'S1.tsx'), `export const S1 = shot({ place: LIVING, people: [{ who: CLARA, act: 'read', hold: 'paper' }] });`);
+    const applied = applyCardAngles(epDir, [
+      { id: 'S1', move: 'track', stage: { angle: 'high', view: '3/4-left', cam: 'ots', zone: 'window', foreground: 'auto' } },
+    ]);
+    assert.deepEqual(applied, ['S1']);
+    const patchedS1 = fs.readFileSync(path.join(epDir, 'shots', 'S1.tsx'), 'utf8');
+    for (const frag of ["angle: 'high'", "view: '3/4-left'", "cam: 'ots'", "zone: 'window'", "foreground: 'auto'", "move: 'track'"]) {
+      assert.ok(patchedS1.includes(frag), `expected ${frag} in ${patchedS1}`);
+    }
+
+    // Move-monotony check flags 8 shots all locked on move: 'push'
+    const mkStage = (n) => ({
+      see: `Plan ${n} dans le salon où Clara montre le contrat à Marc près de la fenêtre`,
+      subject: 'contrat',
+      people: [{ who: 'CLARA', where: 'left', does: `holds up contract ${n}` }, { who: 'MARC', where: 'right', does: `steps back ${n}` }],
+      objects: [],
+      change: `beat ${n} framing`,
+    });
+    const pushShots = Array.from({ length: 8 }, (_, idx) => ({ id: `S${idx + 1}`, size: 'medium', move: 'push', stage: mkStage(idx + 1) }));
+    const cams = ['wide', 'ots', 'close', 'medium', 'wide', 'ots', 'close', 'medium'];
+    const views = ['front', 'reverse', '3/4-left', 'front', '3/4-right', 'reverse', 'left', 'front'];
+    const pushBodies = Object.fromEntries(
+      pushShots.map((s, idx) => [
+        s.id,
+        `export const ${s.id} = shot({ place: LIVING, cam: '${cams[idx]}', view: '${views[idx]}', move: 'push', people: [{ who: CLARA, at: { u: 0.3, w: 0.35 }, act: 'point' }, { who: MARC, at: { u: 0.65, w: 0.7 }, act: 'shrug' }] });`,
+      ]),
+    );
+    const pushIssues = stagingCodeProblems(pushShots, pushBodies, true, '16:9').join('\n');
+    assert.match(pushIssues, /move: 'push' is used in 8\/8 character shots/);
+
+    assert.match(staticMetrics(`export const S1 = shot({ place: R, cam: 'ots', view: '3/4-left', people: [{ who: A, look: 1 }, { who: B }] });\n`), /1\/1 plans avec un personnage orienté.*1\/1 plans avec amorce floue/);
+
+    // 3. shotlist.py emits 3/4 & side views, 'track' on walking clauses, and flashback cutaway to secondary_set
+    const pyWords = [];
+    const clauses = [
+      'Ce soir-là dans mon salon sombre, il a crié fort !',
+      'Je me souviens encore de mon enfance autrefois quand tout allait bien.',
+      'Puis j’ai marché vite dans le couloir vers la porte.',
+      'Il m’a demandé pourquoi je pleurais en silence ?',
+      'Soudain la vérité a explosé devant nous tous !',
+      'Je suis restée debout près de la fenêtre sans bouger.',
+    ];
+    let curT = 0.2;
+    for (const cl of clauses) {
+      for (const tok of cl.split(/\s+/)) {
+        const clean = tok.replace(/[.,!?]/g, '');
+        const punc = tok.match(/[.,!?]+/)?.[0] ?? '';
+        pyWords.push({ w: clean, p: punc, s: Number(curT.toFixed(2)), e: Number((curT + 0.32).toFixed(2)) });
+        curT += 0.36;
+      }
+      curT += 0.3;
+    }
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify(pyWords));
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'evo',
+        aspect: '9:16',
+        defaultSet: 'living',
+        script: clauses.map((text, idx) => ({ beat: `b${idx + 1}`, text })),
+      }),
+    );
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'evo', '--project', dir, '--shots', '6'], { encoding: 'utf8' });
+    const evoEp = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    const emittedViews = new Set(evoEp.shots.map((s) => s.view));
+    assert.equal(emittedViews.size >= 2, true, `expected rich views, got ${[...emittedViews].join(', ')}`);
+    assert.equal(evoEp.shots.some((s) => s.move === 'track'), true, 'walking clause emits move: "track"');
+    assert.equal(evoEp.shots.some((s) => s.set !== 'living'), true, 'memory/corridor clauses cut away from primary set');
+
+    // 4. sfx_run.py prompt-hash cache & unresolved cue warning + modal_render.py _get_call_result retry helper
+    const pyCheck = execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+import importlib.util, io, pathlib, sys, tempfile, types
+sys.path.insert(0, "pipeline")
+sys.modules.setdefault("modal", types.ModuleType("modal"))
+def load_mod(name, rel):
+    spec = importlib.util.spec_from_file_location(name, rel)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+sfx = load_mod("sfx_run", "pipeline/sfx_run.py")
+modal_r = load_mod("modal_render", "pipeline/modal_render.py")
+
+# Unresolved cue logs a warning to stderr and returns 0
+buf = io.StringIO()
+old_err = sys.stderr
+sys.stderr = buf
+try:
+    fr = sfx.resolve_cue("mot_introuvable", [{"w": "bonjour", "s": 1.0}], 30, [{"shot": "S1", "a": 0, "b": 30}], ["S1"])
+finally:
+    sys.stderr = old_err
+assert fr == 0
+assert "unresolved cue 'mot_introuvable'" in buf.getvalue(), buf.getvalue()
+
+# Custom prompt does not blindly match unhashed prefix when allow_fuzzy=False
+with tempfile.TemporaryDirectory() as td:
+    lib = pathlib.Path(td)
+    (lib / "pop-deadbeef.mp3").write_bytes(b"fake")
+    # Built-in prompt matches prefix
+    assert sfx.find_library_clip(lib, "pop", sfx.LIBRARY_CLIPS["pop"][0], 0.5, allow_fuzzy=False) is not None
+    # Changed custom prompt does NOT match stale prefix when allow_fuzzy=False
+    assert sfx.find_library_clip(lib, "pop", "a heavy medieval cannon blast outdoors", 2.0, allow_fuzzy=False) is None
+
+# _get_call_result catches gRPC/worker exceptions cleanly so retry logic runs
+class BrokenCall:
+    def get(self, timeout=2400):
+        raise RuntimeError("transient gRPC stream reset")
+res = modal_r._get_call_result(BrokenCall(), timeout_sec=5)
+assert res["ok"] is False and "RuntimeError" in res["log"], res
+print("PY_OK")
+`,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.match(pyCheck, /PY_OK/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('providers.json multi-provider & multi-model catalog: JSONC parsing, $ENV keys, hot-reload, concurrent OpenAI/Anthropic routing & secret isolation', async () => {
+  const http = await import('node:http');
+  const {
+    clearModelDiscoveryCache,
+    clearProvidersCatalogCache,
+    providerConfig,
+    resolveProvider,
+    resolveReviewProvider,
+    reviewProviderConfig,
+  } = await import('../dist/orchestrator/providers/index.js');
+  const { checkCommand } = await import('../dist/tools/shell-policy.js');
+  const { walk } = await import('../dist/tools/paths.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-catalog-'));
+  const seenRequests = [];
+
+  const mockGateway = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    seenRequests.push({
+      url: req.url,
+      auth: req.headers.authorization || '',
+      xApiKey: req.headers['x-api-key'] || '',
+      body: body ? JSON.parse(body) : null,
+    });
+
+    if (req.url === '/proxy/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'live-discovered-vl' }, { id: 'text-embedding-3-large' }] }));
+      return;
+    }
+    if (req.url === '/or/v1/chat/completions') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: {"choices":[{"delta":{"content":"Réponse OpenRouter OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      return;
+    }
+    if (req.url === '/claude/v1/messages') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Réponse Claude OK"}}\n\n' +
+          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+      );
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  await new Promise((r) => mockGateway.listen(0, '127.0.0.1', r));
+  const gwPort = mockGateway.address().port;
+  const prevSecret = process.env.WHATIF_TEST_CAT_SECRET;
+  process.env.WHATIF_TEST_CAT_SECRET = 'sk-from-env-interpolation-999';
+
+  const catalogPath = path.join(dir, 'providers.json');
+  fs.writeFileSync(
+    catalogPath,
+    `{
+      // JSONC comments + trailing commas must work cleanly with URLs containing "https://"
+      "defaultProvider": "openrouter-pro",
+      "defaultReviewProvider": "proxy-live",
+      "providers": {
+        "openrouter-pro": {
+          "label": "OpenRouter Pro",
+          "driver": "openai",
+          "baseURL": "http://127.0.0.1:${gwPort}/or/v1",
+          "apiKey": "$WHATIF_TEST_CAT_SECRET",
+          "defaultModel": "anthropic/claude-sonnet-4.5",
+          "reviewModel": "google/gemini-2.5-pro",
+          "models": [
+            "anthropic/claude-sonnet-4.5",
+            { "id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro Vision", "supportsVision": true },
+            "deepseek/deepseek-chat-v3",
+          ],
+        },
+        "claude-perso": {
+          "label": "Claude Direct Perso",
+          "driver": "anthropic",
+          "baseURL": "http://127.0.0.1:${gwPort}/claude",
+          "apiKey": "sk-ant-literal-secret-777",
+          "defaultModel": "claude-sonnet-4-5",
+          "models": ["claude-sonnet-4-5", "claude-opus-4-5"],
+        },
+        "proxy-live": {
+          "label": "Proxy Live Discovery",
+          "driver": "openai",
+          "baseURL": "http://127.0.0.1:${gwPort}/proxy/v1",
+          "apiKey": "sk-proxy-live-555",
+          "defaultModel": "pinned-model-1",
+          "discoverModels": true,
+          "models": ["pinned-model-1"],
+        },
+        "disabled-prov": {
+          "enabled": false,
+          "baseURL": "https://disabled.example.com/v1",
+          "apiKey": "sk-disabled"
+        }
+      }
+    }\n`,
+  );
+
+  clearProvidersCatalogCache();
+  clearModelDiscoveryCache();
+  const app = createApp({
+    ...loadConfig(),
+    dataRoot: dir,
+    dbPath: path.join(dir, 'app.db'),
+    projectsDir: path.join(dir, 'projects'),
+    skillDir: null,
+  });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+
+  try {
+    // 1. /api/settings exposes catalog providers & defaults without ever leaking secret apiKey strings
+    const rawSettingsText = await (await fetch(`${base}/api/settings`)).text();
+    assert.ok(!rawSettingsText.includes('sk-from-env-interpolation-999'), 'never leak env-interpolated apiKey');
+    assert.ok(!rawSettingsText.includes('sk-ant-literal-secret-777'), 'never leak literal apiKey');
+    const settings = JSON.parse(rawSettingsText);
+    assert.equal(settings.provider, 'openrouter-pro');
+    assert.equal(settings.model, 'anthropic/claude-sonnet-4.5');
+    assert.equal(settings.hasKey, true);
+    assert.equal(settings.reviewer?.provider, 'proxy-live');
+    assert.deepEqual(settings.providersCatalog.providerIds, ['openrouter-pro', 'claude-perso', 'proxy-live']);
+    assert.equal('disabled-prov' in settings.presets, false, 'enabled:false provider is omitted');
+
+    // 2. Static catalog models return immediately (`source: "config_file"`), while `discoverModels: true` merges pinned + live
+    const orModels = await (await fetch(`${base}/api/models?provider=openrouter-pro`)).json();
+    assert.equal(orModels.source, 'config_file');
+    assert.deepEqual(
+      orModels.models.map((m) => m.id),
+      ['anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat-v3'],
+    );
+    assert.equal(orModels.defaultAgentModel, 'anthropic/claude-sonnet-4.5');
+    assert.equal(orModels.defaultReviewerModel, 'google/gemini-2.5-pro');
+
+    const liveModels = await (await fetch(`${base}/api/models?provider=proxy-live`)).json();
+    assert.equal(liveModels.source, 'live');
+    assert.deepEqual(
+      liveModels.models.map((m) => m.id),
+      ['pinned-model-1', 'live-discovered-vl'],
+      'merges pinned providers.json models with live /models and filters out embeddings',
+    );
+
+    // 3. Hot-reload on file edit without restarting server
+    await new Promise((r) => setTimeout(r, 15));
+    const updatedRaw = fs
+      .readFileSync(catalogPath, 'utf8')
+      .replace('"deepseek/deepseek-chat-v3",', '"deepseek/deepseek-chat-v3", "qwen/qwen3-max-hot",');
+    fs.writeFileSync(catalogPath, updatedRaw);
+
+    const orModelsAfterEdit = await (await fetch(`${base}/api/models?provider=openrouter-pro`)).json();
+    assert.ok(
+      orModelsAfterEdit.models.some((m) => m.id === 'qwen/qwen3-max-hot'),
+      'editing providers.json hot-reloads new models immediately without restart',
+    );
+
+    // 4. Concurrent projects use distinct catalog providers & drivers simultaneously without touching .env
+    const p1 = app.db.createProject('proj-or', 'Proj OR', path.join(dir, 'projects', 'proj-or'), {
+      provider: 'openrouter-pro',
+      model: 'qwen/qwen3-max-hot',
+      review_provider: 'claude-perso',
+      review_model: 'claude-opus-4-5',
+    });
+    const p2 = app.db.createProject('proj-cl', 'Proj Claude', path.join(dir, 'projects', 'proj-cl'), {
+      provider: 'claude-perso',
+      model: 'claude-sonnet-4-5',
+    });
+
+    assert.equal(providerConfig(app.db, p1).apiKey, 'sk-from-env-interpolation-999');
+    assert.equal(reviewProviderConfig(app.db, p1)?.apiKey, 'sk-ant-literal-secret-777');
+    assert.equal(reviewProviderConfig(app.db, p1)?.model, 'claude-opus-4-5');
+
+    const prov1 = resolveProvider(app.db, p1);
+    const prov2 = resolveProvider(app.db, p2);
+    const rev1 = resolveReviewProvider(app.db, p1);
+    assert.equal(prov1.id, 'openrouter-pro');
+    assert.equal(prov2.id, 'claude-perso');
+    assert.equal(rev1?.id, 'claude-perso');
+
+    const res1 = await prov1.chat({ messages: [{ role: 'user', content: 'ping 1' }], tools: [] });
+    const res2 = await prov2.chat({ messages: [{ role: 'user', content: 'ping 2' }], tools: [] });
+    assert.equal(res1.text, 'Réponse OpenRouter OK');
+    assert.equal(res2.text, 'Réponse Claude OK');
+
+    const orReq = seenRequests.find((r) => r.url === '/or/v1/chat/completions');
+    const clReq = seenRequests.find((r) => r.url === '/claude/v1/messages');
+    assert.equal(orReq?.auth, 'Bearer sk-from-env-interpolation-999');
+    assert.equal(orReq?.body?.model, 'qwen/qwen3-max-hot');
+    assert.equal(clReq?.xApiKey, 'sk-ant-literal-secret-777');
+    assert.equal(clReq?.body?.model, 'claude-sonnet-4-5');
+
+    // 5. Security: providers.json is blocked from /api/file, read_file, write_file, walk(), and shell
+    fs.mkdirSync(p1.root, { recursive: true });
+    fs.writeFileSync(path.join(p1.root, 'providers.json'), '{"providers":{"leak":{"apiKey":"sk-leak"}}}');
+    fs.writeFileSync(path.join(p1.root, 'PROJECT.md'), '# ok\n');
+
+    assert.equal((await fetch(`${base}/api/file?project=${p1.id}&path=providers.json`)).status, 403);
+    assert.equal(walk(p1.root).includes('providers.json'), false, 'walk() hides providers.json');
+
+    const reg = defaultRegistry();
+    const tctx = { projectId: p1.id, projectRoot: p1.root, dataRoot: dir, skillDir: null, log: () => {} };
+    assert.equal((await reg.run('read_file', { path: 'providers.json' }, tctx)).ok, false);
+    assert.equal((await reg.run('write_file', { path: 'providers.json', content: '{}' }, tctx)).ok, false);
+    assert.equal(checkCommand('cat providers.json').ok, false);
+  } finally {
+    if (prevSecret === undefined) delete process.env.WHATIF_TEST_CAT_SECRET;
+    else process.env.WHATIF_TEST_CAT_SECRET = prevSecret;
+    await app.close();
+    await new Promise((r) => mockGateway.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

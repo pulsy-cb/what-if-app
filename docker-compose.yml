@@ -14,6 +14,7 @@ services:
       WHATIF_PORT: 3000
       WHATIF_AUTH_TOKEN: ${WHATIF_AUTH_TOKEN:-}
       WHATIF_PROVIDER: ${WHATIF_PROVIDER:-mock}
+      WHATIF_PROVIDERS_FILE: ${WHATIF_PROVIDERS_FILE:-}
       WHATIF_BASE_URL: ${WHATIF_BASE_URL:-}
       WHATIF_MODEL: ${WHATIF_MODEL:-}
       WHATIF_API_KEY: ${WHATIF_API_KEY:-}
@@ -43,7 +44,8 @@ services:
       # Persist Google Antigravity (agy) OAuth token on disk (/data/.gemini) instead of desktop keyring
       GEMINI_FORCE_FILE_STORAGE: "true"
     volumes:
-      - ./data:/data                                   # projects, sqlite, git checkpoints
+      - ./data:/data                                   # projects, sqlite, git checkpoints (+ data/providers.json)
+      - ./providers.json:/app/providers.json:ro        # multi-provider & multi-model catalog (hot-reloaded)
       - ../what-if-animation:/skill:ro                 # the skill: engine, scripts, references
       - ${HOME}/.modal.toml:/home/node/.modal.toml:ro  # Modal credentials, if not passed as env
       - ${HOME}/.codex:/home/node/.codex               # ChatGPT / Codex OAuth session (auth.json)

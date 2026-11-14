@@ -3,7 +3,7 @@ import { fetchWithRetry } from './retry.js';
 import { safeJson, sseData } from './types.js';
 
 const TRANSIENT_SSE_RE =
-  /temporarily unavailable|please retry|overloaded|rate limit|too many requests|bad gateway|gateway timeout|service unavailable|internal error|server error|upstream|timed? out|connection reset|\b(429|500|502|503|504)\b/i;
+  /temporarily unavailable|please retry|overloaded|rate limit|too many requests|bad gateway|gateway timeout|service unavailable|internal error|server error|upstream|timed? out|connection reset|terminated|body timeout|econnreset|socket hang up|und_err_|premature close|\b(429|500|502|503|504)\b/i;
 
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -20,38 +20,49 @@ function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+const NO_VISION_ERR_RE =
+  /image_url|image input|support[s]?\s+image|vision|multimodal|modality|does not support images|no endpoints found that support image/i;
+
 /** Any /chat/completions endpoint: OpenAI, OpenRouter, Groq, Mistral, DeepSeek, vLLM, LM Studio, llama.cpp, Ollama (/v1). */
 export function openAIProvider(cfg: {
+  id?: string;
   baseURL: string;
   apiKey: string;
   model: string;
   label?: string;
   maxTokens?: number;
+  supportsVision?: boolean;
   sseRetryBaseMs?: number;
 }): Provider {
   const base = cfg.baseURL.replace(/\/+$/, '');
+  let visionEnabled = cfg.supportsVision !== false;
   return {
-    id: 'openai',
+    id: cfg.id || 'openai',
     label: cfg.label ?? `openai-compatible (${base})`,
     model: cfg.model,
     async chat(req: ChatRequest): Promise<ChatResult> {
-      const body: Record<string, unknown> = {
-        model: cfg.model,
-        stream: true,
-        messages: req.messages.map(toOpenAI),
-        // Reasoning models (Kimi-K3, GLM, o-series) spend this budget thinking first: leave it out and the
-        // gateway's small default gives an empty message with finish_reason "length".
-        max_tokens: cfg.maxTokens ?? 8_000,
+      const hasImages = req.messages.some((m) => m.role === 'user' && Boolean(m.images?.length));
+      const buildSerializedBody = (includeImages: boolean): string => {
+        const body: Record<string, unknown> = {
+          model: cfg.model,
+          stream: true,
+          messages: req.messages.map((m) => toOpenAI(m, includeImages)),
+          // Reasoning models (Kimi-K3, GLM, o-series) spend this budget thinking first: leave it out and the
+          // gateway's small default gives an empty message with finish_reason "length".
+          max_tokens: cfg.maxTokens ?? 8_000,
+        };
+        if (req.tools.length) {
+          body.tools = req.tools.map((t: ToolSchema) => t);
+          body.tool_choice = 'auto';
+        }
+        return JSON.stringify(body);
       };
-      if (req.tools.length) {
-        body.tools = req.tools.map((t: ToolSchema) => t);
-        body.tool_choice = 'auto';
-      }
-      const serializedBody = JSON.stringify(body);
+
+      let serializedBody = buildSerializedBody(visionEnabled);
       const maxSseAttempts = 4;
 
       for (let sseAttempt = 0; sseAttempt < maxSseAttempts; sseAttempt++) {
-        const res = await fetchWithRetry(`${base}/chat/completions`, {
+        let res = await fetchWithRetry(`${base}/chat/completions`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -62,7 +73,26 @@ export function openAIProvider(cfg: {
         });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
-          throw new Error(`${res.status} ${res.statusText} from ${base}/chat/completions\n${text.slice(0, 1200)}`);
+          // Automatic fallback if a model rejects image_url inputs despite vision being assumed by default
+          if (visionEnabled && hasImages && (res.status === 400 || res.status === 404 || res.status === 422) && NO_VISION_ERR_RE.test(text)) {
+            visionEnabled = false;
+            serializedBody = buildSerializedBody(false);
+            res = await fetchWithRetry(`${base}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
+              },
+              body: serializedBody,
+              signal: req.signal,
+            });
+            if (!res.ok) {
+              const text2 = await res.text().catch(() => '');
+              throw new Error(`${res.status} ${res.statusText} from ${base}/chat/completions\n${text2.slice(0, 1200)}`);
+            }
+          } else {
+            throw new Error(`${res.status} ${res.statusText} from ${base}/chat/completions\n${text.slice(0, 1200)}`);
+          }
         }
 
         let text = '';
@@ -125,7 +155,7 @@ export function openAIProvider(cfg: {
   };
 }
 
-function toOpenAI(m: ChatMessage): any {
+function toOpenAI(m: ChatMessage, includeImages = true): any {
   if (m.role === 'tool') return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
   if (m.role === 'assistant') {
     const out: any = { role: 'assistant', content: m.content || null };
@@ -134,7 +164,7 @@ function toOpenAI(m: ChatMessage): any {
     }
     return out;
   }
-  if (m.role === 'user' && m.images?.length) {
+  if (includeImages && m.role === 'user' && m.images?.length) {
     return {
       role: 'user',
       content: [

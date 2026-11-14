@@ -303,7 +303,12 @@ def main(argv: List[str]) -> int:
             src_md = proj.out_dir(slug) / "source.fr.md"
             if src_md.exists():
                 voice_det = detect_narrator_voice(src_md.read_text(encoding="utf-8", errors="ignore"), title_str)
-        if voice_det["femaleScore"] > 0 or voice_det["maleScore"] > 0 or not ep_voice.get("narratorGender"):
+        has_explicit_ep_voice = bool(str(ep_voice.get("voiceId") or "").strip())
+        if (
+            voice_det["femaleScore"] > 0
+            or voice_det["maleScore"] > 0
+            or (not ep_voice.get("narratorGender") and not has_explicit_ep_voice)
+        ):
             V["voiceId"] = voice_det["voiceId"]
             detected_pov = voice_det.get("pov", "first")
             if (
@@ -324,6 +329,13 @@ def main(argv: List[str]) -> int:
                 )
 
     script = proj.split_words(text)
+    norm_text = re.sub(r"\s+", " ", proj.strip_tts_tags(text)).strip()
+    text_sig = hashlib.sha1(norm_text.encode("utf-8")).hexdigest()[:12]
+    src_md_file = proj.out_dir(slug) / "source.fr.md"
+    src_text_sig = ""
+    if src_md_file.is_file():
+        src_norm = re.sub(r"\s+", " ", proj.strip_tts_tags(src_md_file.read_text(encoding="utf-8", errors="ignore"))).strip()
+        src_text_sig = hashlib.sha1(src_norm.encode("utf-8")).hexdigest()[:12]
     sig = hashlib.sha1(
         (proj.STUDIO.name + json_dumps([text, V, video_id])).encode("utf-8")
     ).hexdigest()[:12]
@@ -339,6 +351,10 @@ def main(argv: List[str]) -> int:
         reused_from_server = False
         res: Dict[str, Any] = {}
         audio_path = ""
+        # Only reuse :8005 server audio if episode.json.script has not diverged from source.fr.md (or an earlier local take)
+        script_matches_server = (not src_text_sig or text_sig == src_text_sig) and (
+            not meta.get("text_sig") or meta.get("text_sig") == text_sig
+        )
         if not force:
             try:
                 chk = nv.tts_check(str(video_id))
@@ -348,11 +364,11 @@ def main(argv: List[str]) -> int:
                 raw_voice_tag = str(chk.get("voice") or "").strip()
                 srv_prov, srv_vid = raw_voice_tag.split(":", 1) if ":" in raw_voice_tag else (raw_voice_tag, "")
                 can_reuse = False
-                if raw_voice_tag == "upload" and not explicit_voice:
+                if raw_voice_tag == "upload" and not explicit_voice and (not meta.get("text_sig") or meta.get("text_sig") == text_sig):
                     can_reuse = True
-                elif srv_vid and srv_vid == str(V.get("voiceId") or ""):
+                elif script_matches_server and srv_vid and srv_vid == str(V.get("voiceId") or ""):
                     can_reuse = True
-                elif not srv_vid and raw_voice_tag == "" and not explicit_voice and not voice_det:
+                elif script_matches_server and not srv_vid and raw_voice_tag == "" and not explicit_voice and not voice_det:
                     can_reuse = True
 
                 if can_reuse:
@@ -440,6 +456,7 @@ def main(argv: List[str]) -> int:
             meta_path,
             {
                 "sig": sig,
+                "text_sig": text_sig,
                 "chars": len(text),
                 "provider": provider,
                 "modelId": V["modelId"],

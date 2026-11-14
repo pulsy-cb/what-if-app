@@ -78,7 +78,7 @@ export function validateSchema(schema: JsonSchema, value: unknown, path = '$'): 
       }
       if (schema.additionalProperties === false) {
         for (const key of Object.keys(obj)) {
-          if (!schema.properties || !(key in schema.properties)) errors.push(`${path}.${key}: unexpected property`);
+          if (!schema.properties || !Object.hasOwn(schema.properties, key)) errors.push(`${path}.${key}: unexpected property`);
         }
       }
       break;

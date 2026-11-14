@@ -40,6 +40,13 @@ function detectSkillDir(): string | null {
   return null;
 }
 
+function intEnv(raw: string | undefined, fallback: number, min = 0): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.trunc(n));
+}
+
 export function loadConfig(): Config {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const packageRoot = path.resolve(here, '..', '..');
@@ -47,24 +54,24 @@ export function loadConfig(): Config {
   const dbPath = process.env.WHATIF_DB ?? path.join(dataRoot, 'app.db');
   fs.mkdirSync(dataRoot, { recursive: true });
   return {
-    host: process.env.WHATIF_HOST ?? '127.0.0.1',
-    port: Number(process.env.WHATIF_PORT ?? 3000),
+    host: process.env.WHATIF_HOST?.trim() || '127.0.0.1',
+    port: intEnv(process.env.WHATIF_PORT, 3000, 0),
     dataRoot,
     dbPath,
     projectsDir: path.join(dataRoot, 'projects'),
     skillDir: detectSkillDir(),
     webDir: path.join(packageRoot, 'web', 'public'),
-    authToken: process.env.WHATIF_AUTH_TOKEN ?? null,
-    maxSteps: Number(process.env.WHATIF_MAX_STEPS ?? 1_000),
-    contextChars: Number(process.env.WHATIF_CONTEXT_CHARS ?? 90_000),
-    approvalTimeoutMs: Number(process.env.WHATIF_APPROVAL_TIMEOUT_MS ?? 30 * 60_000),
-    maxTokens: Number(process.env.WHATIF_MAX_TOKENS ?? 24_000),
+    authToken: process.env.WHATIF_AUTH_TOKEN?.trim() || null,
+    maxSteps: intEnv(process.env.WHATIF_MAX_STEPS, 1_000, 1),
+    contextChars: intEnv(process.env.WHATIF_CONTEXT_CHARS, 90_000, 2_000),
+    approvalTimeoutMs: intEnv(process.env.WHATIF_APPROVAL_TIMEOUT_MS, 30 * 60_000, 100),
+    maxTokens: intEnv(process.env.WHATIF_MAX_TOKENS, 24_000, 256),
     approvalsMode: ((): 'off' | 'pipeline' | 'all' => {
       const raw = (process.env.WHATIF_APPROVALS ?? 'off').toLowerCase();
       return raw === 'all' ? 'all' : raw === 'pipeline' || raw === 'on' ? 'pipeline' : 'off';
     })(),
-    nouveauUrl: (process.env.WHATIF_NOUVEAU_URL ?? 'http://127.0.0.1:8005').replace(/\/$/, ''),
+    nouveauUrl: (process.env.WHATIF_NOUVEAU_URL?.trim() || 'http://127.0.0.1:8005').replace(/\/$/, ''),
     renderMode: process.env.WHATIF_RENDER === 'local' ? 'local' : 'modal',
-    reviewMaxRounds: Math.max(0, Number(process.env.WHATIF_REVIEW_MAX_ROUNDS ?? 3)),
+    reviewMaxRounds: intEnv(process.env.WHATIF_REVIEW_MAX_ROUNDS, 3, 0),
   };
 }

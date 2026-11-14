@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, type Config } from './config.js';
 import { Db } from './db.js';
@@ -9,9 +10,11 @@ import { Bus } from './bus.js';
 import { Approvals } from './approvals.js';
 import { defaultRegistry, type ToolContext, type ToolRegistry } from '../tools/index.js';
 import {
+  clearProvidersCatalogCache,
   discoverProviderModels,
   getEnvProviderSummary,
   getProviderPresets,
+  getProvidersCatalogSummary,
   hasAgyCli,
   hasCodexAuth,
   providerConfig,
@@ -72,10 +75,50 @@ export type App = {
 
 export function createApp(config: Config = loadConfig()): App {
   const db = new Db(config.dbPath);
+  // Expire any stale pending approvals left over from a previous crashed/restarted server process
+  try {
+    db.raw.prepare("UPDATE approvals SET status = 'timeout', decided_at = datetime('now') WHERE status = 'pending'").run();
+  } catch {
+    /* ignore */
+  }
+  const bootId = crypto.randomUUID().slice(0, 12);
   const bus = new Bus();
   const registry = defaultRegistry();
   const approvals = new Approvals(db, bus);
-  const running = new Map<string, { controller: AbortController; startedAt: number }>();
+  const running = new Map<
+    string,
+    { controller: AbortController; startedAt: number; projectId: string; promise: Promise<void> }
+  >();
+
+  const isAllowedHost = (rawHost: string | undefined): boolean => {
+    if (!rawHost) return true;
+    let hostname = rawHost.trim().toLowerCase();
+    if (hostname.startsWith('[')) {
+      const end = hostname.indexOf(']');
+      if (end > 0) hostname = hostname.slice(0, end + 1);
+    } else {
+      hostname = hostname.split(':')[0] ?? hostname;
+    }
+    const cfgHost = config.host.trim().toLowerCase();
+    if (cfgHost === '0.0.0.0' || cfgHost === '::') return true;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === cfgHost;
+  };
+
+  const isAllowedOrigin = (originHeader: string | undefined, reqHost: string | undefined): boolean => {
+    if (!originHeader) return true; // Non-browser / Node fetch / same-origin GETs
+    try {
+      const u = new URL(originHeader);
+      const h = u.hostname.toLowerCase();
+      const cfgHost = config.host.trim().toLowerCase();
+      const reqHostname = (reqHost ?? '').trim().toLowerCase().replace(/:\d+$/, '');
+      if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1') return true;
+      if (cfgHost !== '0.0.0.0' && cfgHost !== '::' && h === cfgHost) return true;
+      if ((cfgHost === '0.0.0.0' || cfgHost === '::') && reqHostname && h === reqHostname) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
 
   const toolContext = (projectId: string, threadId: string, signal?: AbortSignal): ToolContext => {
     const project = db.getProject(projectId);
@@ -103,12 +146,22 @@ export function createApp(config: Config = loadConfig()): App {
   };
 
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const pathname = decodeURIComponent(url.pathname);
-    const method = req.method ?? 'GET';
-
     try {
+      const hostHeader = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+      let url: URL;
+      let pathname: string;
+      try {
+        url = new URL(req.url ?? '/', `http://${hostHeader || 'localhost'}`);
+        pathname = decodeURIComponent(url.pathname);
+      } catch {
+        return json(res, 400, { error: 'bad request url' });
+      }
+      const method = req.method ?? 'GET';
+
       if (pathname.startsWith('/api/')) {
+        if (!isAllowedHost(hostHeader)) return json(res, 403, { error: 'forbidden host' });
+        const originHeader = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+        if (!isAllowedOrigin(originHeader, hostHeader)) return json(res, 403, { error: 'cross-origin request blocked' });
         if (!authorised(url, req)) return json(res, 401, { error: 'unauthorized' });
         return await api(method, pathname, url, req, res);
       }
@@ -151,16 +204,25 @@ export function createApp(config: Config = loadConfig()): App {
         const codexReady = hasCodexAuth();
         const agyReady = hasAgyCli();
         const envProvider = getEnvProviderSummary();
+        const providersCatalog = getProvidersCatalogSummary(process.env, config.dataRoot);
         return json(res, 200, {
           provider: cfg.provider,
           baseURL: cfg.baseURL,
           model: cfg.model,
-          hasKey: cfg.provider === 'codex' ? codexReady : cfg.provider === 'agy' ? agyReady : Boolean(cfg.apiKey),
+          hasKey:
+            cfg.provider === 'codex'
+              ? codexReady
+              : cfg.provider === 'agy'
+                ? agyReady
+                : cfg.provider === 'mock'
+                  ? true
+                  : Boolean(cfg.apiKey) || /127\.0\.0\.1|localhost/.test(cfg.baseURL),
           codexReady,
           agyReady,
           envProvider,
+          providersCatalog,
           reviewer: revCfg ? { provider: revCfg.provider, model: revCfg.model, baseURL: revCfg.baseURL } : null,
-          presets: getProviderPresets(),
+          presets: getProviderPresets(process.env, config.dataRoot),
           skillDir: config.skillDir,
           maxSteps: config.maxSteps,
         });
@@ -183,23 +245,26 @@ export function createApp(config: Config = loadConfig()): App {
         const provider = url.searchParams.get('provider') || undefined;
         const baseURL = url.searchParams.get('baseURL') || undefined;
         const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
+        if (forceRefresh) clearProvidersCatalogCache();
         const result = await discoverProviderModels(db, { provider, baseURL, forceRefresh });
         return json(res, 200, result);
       }
       if (method === 'POST') {
         const body = await readJson(req);
+        const forceRefresh = Boolean(body.refresh);
+        if (forceRefresh) clearProvidersCatalogCache();
         const result = await discoverProviderModels(db, {
           provider: typeof body.provider === 'string' ? body.provider : undefined,
           baseURL: typeof body.baseURL === 'string' ? body.baseURL : undefined,
           apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
-          forceRefresh: Boolean(body.refresh),
+          forceRefresh,
         });
         return json(res, 200, result);
       }
     }
 
     // ---- providers (presets you can pick, for the UI)
-    if (parts[1] === 'presets') return json(res, 200, getProviderPresets());
+    if (parts[1] === 'presets') return json(res, 200, getProviderPresets(process.env, config.dataRoot));
 
     // ---- projects
     if (parts[1] === 'projects') {
@@ -375,23 +440,40 @@ export function createApp(config: Config = loadConfig()): App {
           startedAt: activeRun?.startedAt ?? null,
           elapsedMs: timing.totalMs,
           lastRunMs: timing.lastRunMs,
+          maxSeq: bus.lastSeq(threadId!),
+          bootId,
         });
       }
 
       if (method === 'POST' && parts[3] === 'messages') {
         if (running.has(threadId!)) return json(res, 409, { error: 'the agent is already running on this thread' });
-        const body = await readJson(req);
-        const text = String(body.text ?? '').trim();
-        if (!text) return json(res, 400, { error: 'empty message' });
+        for (const [otherId, r] of running.entries()) {
+          if (otherId !== threadId && r.projectId === thread!.project_id) {
+            return json(res, 409, { error: 'the agent is already running on another thread in this project' });
+          }
+        }
+        // Reserve lock synchronously BEFORE awaiting body so concurrent POSTs cannot both enter runTurn
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        running.set(threadId!, { controller, startedAt, projectId: thread!.project_id, promise: Promise.resolve() });
+        let text = '';
+        try {
+          const body = await readJson(req);
+          text = String(body.text ?? '').trim();
+        } catch (err) {
+          running.delete(threadId!);
+          throw err;
+        }
+        if (!text) {
+          running.delete(threadId!);
+          return json(res, 400, { error: 'empty message' });
+        }
         const id = db.addMessage(threadId!, 'user', text);
         bus.emit(threadId!, 'user_message', { id, text });
         if (!thread!.title) {
           db.raw.prepare('UPDATE threads SET title = ? WHERE id = ?').run(text.slice(0, 80), threadId!);
         }
-        const controller = new AbortController();
-        const startedAt = Date.now();
-        running.set(threadId!, { controller, startedAt });
-        void runTurn(
+        const runPromise = runTurn(
           {
             db,
             bus,
@@ -403,7 +485,13 @@ export function createApp(config: Config = loadConfig()): App {
           },
           threadId!,
           controller.signal,
-        ).finally(() => running.delete(threadId!));
+        )
+          .catch((err) => {
+            console.error(`[runTurn] unhandled error on thread ${threadId}:`, err);
+          })
+          .finally(() => running.delete(threadId!));
+        const cur = running.get(threadId!);
+        if (cur) cur.promise = runPromise;
         return json(res, 202, { ok: true, startedAt });
       }
 
@@ -424,18 +512,24 @@ export function createApp(config: Config = loadConfig()): App {
         };
         const activeRun = running.get(threadId!);
         const timing = db.projectTiming(thread!.project_id);
+        const lastEvtHeader = Array.isArray(req.headers['last-event-id'])
+          ? req.headers['last-event-id'][0]
+          : req.headers['last-event-id'];
+        const sinceRaw = url.searchParams.get('since') ?? lastEvtHeader ?? '0';
+        const sinceSeq = Math.max(0, Number.isFinite(Number(sinceRaw)) ? Math.trunc(Number(sinceRaw)) : 0);
         write({
           seq: 0,
           type: 'hello',
           data: {
             threadId,
+            bootId,
             running: Boolean(activeRun),
             startedAt: activeRun?.startedAt ?? null,
             elapsedMs: timing.totalMs,
             lastRunMs: timing.lastRunMs,
           },
         });
-        for (const e of bus.replay(threadId!)) write(e);
+        for (const e of bus.replay(threadId!, sinceSeq)) write(e);
         const unsubscribe = bus.subscribe(threadId!, write);
         const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
         req.on('close', () => {
@@ -477,25 +571,53 @@ export function createApp(config: Config = loadConfig()): App {
       } catch {
         return json(res, 403, { error: 'forbidden path' });
       }
+      const baseName = path.basename(abs);
+      if (
+        baseName === '.env' ||
+        baseName.startsWith('.env.') ||
+        baseName.toLowerCase() === 'providers.json' ||
+        abs.split(path.sep).includes('.git')
+      ) {
+        return json(res, 403, { error: 'forbidden path' });
+      }
       if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return json(res, 404, { error: 'no such file' });
       const stat = fs.statSync(abs);
       const type = mimeOf(abs);
       const range = req.headers.range;
-      if (range) {
-        const m = /bytes=(\d*)-(\d*)/.exec(range);
-        const start = m && m[1] ? Number(m[1]) : 0;
-        const end = m && m[2] ? Number(m[2]) : stat.size - 1;
+      if (range && stat.size > 0) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
+        if (!m || (!m[1] && !m[2])) {
+          res.writeHead(416, { 'content-range': `bytes */${stat.size}` });
+          res.end();
+          return;
+        }
+        let start: number;
+        let end: number;
+        if (!m[1] && m[2]) {
+          // Suffix byte-range-spec: bytes=-N
+          const suffixLen = Number(m[2]);
+          start = Math.max(0, stat.size - suffixLen);
+          end = stat.size - 1;
+        } else {
+          start = Number(m[1]);
+          end = m[2] ? Math.min(Number(m[2]), stat.size - 1) : stat.size - 1;
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= stat.size || start > end) {
+          res.writeHead(416, { 'content-range': `bytes */${stat.size}` });
+          res.end();
+          return;
+        }
         res.writeHead(206, {
           'content-type': type,
           'content-range': `bytes ${start}-${end}/${stat.size}`,
           'accept-ranges': 'bytes',
           'content-length': end - start + 1,
         });
-        fs.createReadStream(abs, { start, end }).pipe(res);
+        pipeline(fs.createReadStream(abs, { start, end }), res, () => {});
         return;
       }
       res.writeHead(200, { 'content-type': type, 'content-length': stat.size, 'accept-ranges': 'bytes' });
-      fs.createReadStream(abs).pipe(res);
+      pipeline(fs.createReadStream(abs), res, () => {});
       return;
     }
 
@@ -503,7 +625,18 @@ export function createApp(config: Config = loadConfig()): App {
   }
 
   const close = async () => {
-    for (const c of running.values()) c.controller.abort();
+    const activePromises: Promise<void>[] = [];
+    for (const c of running.values()) {
+      c.controller.abort();
+      activePromises.push(c.promise);
+    }
+    server.closeAllConnections?.();
+    if (activePromises.length > 0) {
+      await Promise.race([
+        Promise.allSettled(activePromises),
+        new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+      ]);
+    }
     await new Promise<void>((resolve) => server.close(() => resolve()));
     db.close();
   };
@@ -512,6 +645,9 @@ export function createApp(config: Config = loadConfig()): App {
 }
 
 export async function main(): Promise<void> {
+  process.on('unhandledRejection', (err) => {
+    console.error('[what-if-app] unhandledRejection:', err);
+  });
   const config = loadConfig();
   const app = createApp(config);
   await new Promise<void>((resolve) => app.server.listen(config.port, config.host, resolve));

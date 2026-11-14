@@ -26,22 +26,31 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const WRITABLE_PATHS = [/^src\/episodes\//, /^[^/]+\.md$/, /^out\//];
 const ENGINE_PATHS = /^src\/(engine|exports)\//;
 
-function assertWritableProjectPath(relPath: string): void {
-  const norm = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (/\(exports:|\[compacted/i.test(norm)) {
-    throw new Error(`writing to "${norm}" is refused: pass the clean file path (e.g. "src/episodes/<slug>/shots.tsx") without annotations`);
+function assertWritableProjectPath(projectRoot: string, relPath: string): { abs: string; rel: string } {
+  const raw = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (/\(exports:|\[compacted/i.test(raw)) {
+    throw new Error(`writing to "${raw}" is refused: pass the clean file path (e.g. "src/episodes/<slug>/shots.tsx") without annotations`);
   }
+  const abs = safeJoin(projectRoot, relPath);
+  const norm = relOf(projectRoot, abs);
   if (
+    !norm ||
     norm === 'package.json' ||
     norm === 'package-lock.json' ||
     norm.startsWith('scripts/') ||
     norm.startsWith('.git/') ||
-    /(^|\/)\.env(\.|$)/.test(norm)
+    /(^|\/)\.env(\.|$)/i.test(norm) ||
+    /(^|\/)providers\.json$/i.test(norm)
   ) {
-    throw new Error(`writing to "${norm}" is refused by security policy`);
+    throw new Error(`writing to "${norm || raw}" is refused by security policy`);
   }
-  if (WRITABLE_PATHS.some((re) => re.test(norm))) return;
-  if (process.env.WHATIF_ALLOW_ENGINE_WRITES === '1' && ENGINE_PATHS.test(norm)) return;
+  // Enforce uppercase S<N>.tsx inside shots/ so Linux case-sensitive imports never break the barrel
+  const shotCase = /^src\/episodes\/[^/]+\/shots\/(s\d+)\.tsx$/i.exec(norm);
+  if (shotCase && shotCase[1] !== shotCase[1]!.toUpperCase()) {
+    throw new Error(`shot file "${norm}" must use uppercase "${shotCase[1]!.toUpperCase()}.tsx"`);
+  }
+  if (WRITABLE_PATHS.some((re) => re.test(norm))) return { abs, rel: norm };
+  if (process.env.WHATIF_ALLOW_ENGINE_WRITES === '1' && ENGINE_PATHS.test(norm)) return { abs, rel: norm };
   throw new Error(
     `writing to "${norm}" is refused: write inside src/episodes/<slug>/ (shots.tsx, index.tsx, DIRECTOR.md…), a root note like PROJECT.md, or out/. ` +
       `The engine (src/engine) is shared by every episode and is not edited by the agent.`,
@@ -198,6 +207,10 @@ const readFile: Tool = {
     additionalProperties: false,
   },
   async run(input: { path: string; start?: number; end?: number; limit?: number }, ctx) {
+    const normRel = relOf(ctx.projectRoot, safeJoin(ctx.projectRoot, input.path));
+    if (/(^|\/)\.env(\.|$)/i.test(normRel)) {
+      throw new Error(`reading "${normRel}" is refused by security policy`);
+    }
     const src = readText(ctx.projectRoot, input.path, 2_000_000);
     if (src === null) throw new Error(`cannot read ${input.path} (missing, binary or > 2MB)`);
     const all = src.split('\n');
@@ -233,34 +246,33 @@ const writeFile: Tool = {
   },
   async run(input: { path: string; content: string; append?: boolean }, ctx): Promise<ToolResult> {
     if (isBinaryPath(input.path)) throw new Error('write_file refuses binary extensions');
-    assertWritableProjectPath(input.path);
+    const { abs, rel: normPath } = assertWritableProjectPath(ctx.projectRoot, input.path);
     assertNotCompactedPlaceholder(input.content, 'write_file');
-    const abs = safeJoin(ctx.projectRoot, input.path);
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (input.append && existed) {
       const prev = fs.readFileSync(abs, 'utf8');
       const sep = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
-      const combined = normalizeEpisodeTsx(ctx.projectRoot, input.path, prev + sep + input.content);
+      const combined = normalizeEpisodeTsx(ctx.projectRoot, normPath, prev + sep + input.content);
       fs.writeFileSync(abs, combined, 'utf8');
-      maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
+      maybeSyncEpisodeBarrel(ctx.projectRoot, normPath);
       const totalLines = combined.split('\n').length;
-      const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
+      const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, normPath);
       return {
         ok: true,
-        summary: `appended to ${input.path} (+${input.content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
-        data: { path: input.path, created: false, appended: true, lines: totalLines },
+        summary: `appended to ${normPath} (+${input.content.split('\n').length} lines, total ${totalLines} lines)${tscNote}`,
+        data: { path: normPath, created: false, appended: true, lines: totalLines },
       };
     }
-    const content = normalizeEpisodeTsx(ctx.projectRoot, input.path, input.content);
+    const content = normalizeEpisodeTsx(ctx.projectRoot, normPath, input.content);
     fs.writeFileSync(abs, content, 'utf8');
-    maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
+    maybeSyncEpisodeBarrel(ctx.projectRoot, normPath);
     const lines = content.split('\n').length;
-    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
+    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, normPath);
     return {
       ok: true,
-      summary: `${existed ? 'replaced' : 'created'} ${input.path} (${lines} lines, ${Buffer.byteLength(content)} bytes)${tscNote}`,
-      data: { path: input.path, created: !existed, lines },
+      summary: `${existed ? 'replaced' : 'created'} ${normPath} (${lines} lines, ${Buffer.byteLength(content)} bytes)${tscNote}`,
+      data: { path: normPath, created: !existed, lines },
     };
   },
 };
@@ -394,13 +406,13 @@ const editFile: Tool = {
     additionalProperties: false,
   },
   async run(input: { path: string; edits: { oldText: string; newText: string }[] }, ctx) {
-    assertWritableProjectPath(input.path);
+    const { abs, rel: normPath } = assertWritableProjectPath(ctx.projectRoot, input.path);
     for (const e of input.edits) assertNotCompactedPlaceholder(e.newText, 'edit_file');
-    const src = readText(ctx.projectRoot, input.path, 2_000_000);
+    const src = readText(ctx.projectRoot, normPath, 2_000_000);
     if (src === null) throw new Error(`cannot read ${input.path}`);
     let out = src;
     const applied: number[] = [];
-    const isShotsTsx = /(?:^|\/)shots\.tsx$/.test(input.path.replace(/\\/g, '/'));
+    const isShotsTsx = /(?:^|\/)shots\.tsx$/.test(normPath);
     const shotsTip = isShotsTsx
       ? '\nTip: for shots.tsx, prefer edit_shot (replaces one shot S<N> cleanly by ID) or send smaller single-shot edits.'
       : '';
@@ -441,15 +453,14 @@ const editFile: Tool = {
           shotsTip,
       );
     }
-    const abs = safeJoin(ctx.projectRoot, input.path);
-    const normalizedOut = normalizeEpisodeTsx(ctx.projectRoot, input.path, out);
+    const normalizedOut = normalizeEpisodeTsx(ctx.projectRoot, normPath, out);
     fs.writeFileSync(abs, normalizedOut, 'utf8');
-    maybeSyncEpisodeBarrel(ctx.projectRoot, input.path);
-    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, input.path);
+    maybeSyncEpisodeBarrel(ctx.projectRoot, normPath);
+    const tscNote = await quickEpisodeTypecheck(ctx.projectRoot, normPath);
     return {
       ok: true,
-      summary: `${applied.length} edit(s) applied to ${input.path}${tscNote}`,
-      data: { path: input.path, edits: applied.length },
+      summary: `${applied.length} edit(s) applied to ${normPath}${tscNote}`,
+      data: { path: normPath, edits: applied.length },
     };
   },
 };
@@ -492,19 +503,28 @@ const grep: Tool = {
     additionalProperties: false,
   },
   async run(input: { pattern: string; glob?: string; path?: string; max?: number }, ctx) {
-    const re = new RegExp(input.pattern, 'i');
+    if (input.pattern.length > 300) throw new Error('grep pattern is too long (max 300 chars)');
+    let re: RegExp;
+    try {
+      re = new RegExp(input.pattern, 'i');
+    } catch (e) {
+      throw new Error(`invalid regex "${input.pattern}": ${(e as Error).message}`);
+    }
     const filterPat = input.glob ?? input.path;
     const globRe = filterPat ? globToRegExp(filterPat) : null;
-    const max = input.max ?? 120;
+    const max = Math.max(1, Math.min(500, input.max ?? 120));
     const hits: string[] = [];
+    const deadline = Date.now() + 3_000;
     for (const rel of walk(ctx.projectRoot, { maxFiles: 6000 })) {
+      if (Date.now() > deadline) break;
       if (globRe && !globRe.test(rel)) continue;
       const src = readText(ctx.projectRoot, rel);
       if (!src) continue;
       const lines = src.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i]!)) {
-          hits.push(`${rel}:${i + 1}: ${lines[i]!.trim().slice(0, 240)}`);
+        const line = lines[i]!;
+        if (re.test(line.length > 2000 ? line.slice(0, 2000) : line)) {
+          hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 240)}`);
           if (hits.length >= max) break;
         }
       }
@@ -568,6 +588,8 @@ const editShot: Tool = {
     additionalProperties: false,
   },
   validate: (input) => {
+    const slug = String(input.episode ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug)) return 'episode must be a clean slug (letters, digits, hyphens, underscores)';
     const id = String(input.id ?? '');
     if (!/^S\d+$/.test(id)) return 'id must be a shot id like "S7"';
     const code = String(input.code ?? '');
@@ -582,8 +604,12 @@ const editShot: Tool = {
     return null;
   },
   async run(input: { episode: string; id: string; code: string }, ctx): Promise<ToolResult> {
-    const epRel = `src/episodes/${input.episode}`;
-    assertWritableProjectPath(`${epRel}/shots.tsx`);
+    const slug = String(input.episode ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug)) {
+      throw new Error(`episode must be a clean slug, got "${slug}"`);
+    }
+    const epRel = `src/episodes/${slug}`;
+    assertWritableProjectPath(ctx.projectRoot, `${epRel}/shots.tsx`);
     assertNotCompactedPlaceholder(input.code, 'edit_shot');
     const epDir = safeJoin(ctx.projectRoot, epRel);
     if (!fs.existsSync(epDir)) {

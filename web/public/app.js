@@ -21,6 +21,9 @@ const S = {
   timerInterval: null,
   es: null,
   lastSeq: 0,
+  bootId: null,
+  selectGen: 0,
+  delivGen: 0,
   live: null,
   lastMsgRole: null,
   lastMsgTs: 0,
@@ -876,18 +879,21 @@ $('#deliverables-toggle')?.addEventListener('click', () => {
 async function loadDeliverables() {
   const box = $('#deliverables');
   if (!S.project || !box) return;
+  const gen = ++S.delivGen;
+  const projId = S.project.id;
   box.replaceChildren();
   S.deliverablesCount = 0;
   syncDeliverablesVisibility();
 
   let files = [];
   try {
-    ({ files } = await api(`/api/projects/${encodeURIComponent(S.project.id)}/artifacts`));
+    ({ files } = await api(`/api/projects/${encodeURIComponent(projId)}/artifacts`));
   } catch {
     return;
   }
+  if (gen !== S.delivGen || S.project?.id !== projId) return;
   const artifactUrl = (p) => {
-    const u = new URL(`/api/file?project=${encodeURIComponent(S.project.id)}&path=${encodeURIComponent(p)}`, location.origin);
+    const u = new URL(`/api/file?project=${encodeURIComponent(projId)}&path=${encodeURIComponent(p)}`, location.origin);
     if (S.token) u.searchParams.set('token', S.token);
     return u;
   };
@@ -925,8 +931,9 @@ async function loadDeliverables() {
   }
   if (report) {
     const url = artifactUrl(report.path);
-    api(`/api/file?project=${encodeURIComponent(S.project.id)}&path=${encodeURIComponent(report.path)}`)
+    api(`/api/file?project=${encodeURIComponent(projId)}&path=${encodeURIComponent(report.path)}`)
       .then((r) => {
+        if (gen !== S.delivGen || S.project?.id !== projId) return;
         const agentSec = r.agent_total_seconds || r.agent_elapsed_seconds || (S.elapsedMs ? S.elapsedMs / 1000 : 0);
         const agentTxt = agentSec ? ` · ⏱ ${fmtDuration(agentSec * 1000)}` : '';
         const txt = `−${Math.abs(r.lufs ?? 0).toFixed(1)} LUFS · ${(r.true_peak_dbtp ?? 0).toFixed(1)} dBTP · ${(r.seconds ?? 0).toFixed(1)}s${agentTxt}`;
@@ -958,20 +965,25 @@ function detach() {
 }
 
 async function selectThread(thread) {
+  const gen = ++S.selectGen;
   S.thread = thread;
   renderSidebar();
   syncChannelHeader();
   try {
     const pending = await api(`/api/approvals?thread=${encodeURIComponent(thread.id)}`);
+    if (gen !== S.selectGen) return;
     $('#approvals').replaceChildren();
     for (const a of pending) showApproval(a);
   } catch {
     /* older server */
   }
+  if (gen !== S.selectGen) return;
   detach();
   messagesBox().replaceChildren();
   resetFeedGrouping();
   const data = await api(`/api/threads/${thread.id}/messages`);
+  if (gen !== S.selectGen) return;
+  if (data.bootId) S.bootId = data.bootId;
   if (data.thread) {
     S.thread = { ...thread, ...data.thread };
     syncChannelHeader();
@@ -984,16 +996,19 @@ async function selectThread(thread) {
   updateRunningUI();
   for (const a of data.pending ?? []) showApproval({ id: a.id, tool: a.tool, input: JSON.parse(a.input) });
   scrollDown();
-  connect(thread.id);
+  S.lastSeq = typeof data.maxSeq === 'number' ? data.maxSeq : 0;
+  connect(thread.id, S.lastSeq);
 }
 
-function connect(threadId) {
+function connect(threadId, sinceSeq = 0) {
   const url = new URL(`/api/threads/${threadId}/events`, location.origin);
   if (S.token) url.searchParams.set('token', S.token);
+  if (sinceSeq > 0) url.searchParams.set('since', String(sinceSeq));
   const es = new EventSource(url);
   S.es = es;
   const on = (type, fn) =>
     es.addEventListener(type, (e) => {
+      if (type === 'error' && (!e.data || typeof e.data !== 'string')) return;
       let data = {};
       try {
         data = JSON.parse(e.data);
@@ -1093,7 +1108,11 @@ function connect(threadId) {
     });
   });
 
-  on('error', (d) => messagesBox().append(el('div', { class: 'think-row', text: `⚠ Erreur : ${d.message}` })));
+  on('error', (d) => {
+    if (d && typeof d.message === 'string' && d.message.trim()) {
+      messagesBox().append(el('div', { class: 'think-row', text: `⚠ Erreur : ${d.message}` }));
+    }
+  });
 
   on('turn_start', (d) => {
     S.running = true;
@@ -1117,8 +1136,13 @@ function connect(threadId) {
   });
 
   on('hello', (d) => {
+    if (d.bootId) {
+      if (S.bootId && S.bootId !== d.bootId) S.lastSeq = 0;
+      S.bootId = d.bootId;
+    }
     S.running = Boolean(d.running);
     if (d.running) S.startedAt = d.startedAt || Date.now();
+    else S.startedAt = null;
     if (typeof d.elapsedMs === 'number' && d.elapsedMs > 0) S.elapsedMs = d.elapsedMs;
     updateRunningUI();
   });
@@ -1424,14 +1448,13 @@ $('#np-rev-provider')?.addEventListener('change', () => {
 
 async function openNewProject() {
   if (location.hash === '#nouveau') location.hash = '';
-  if (!S.settings || !Object.keys(S.presets || {}).length) {
-    try {
-      const s = await api('/api/settings');
-      S.settings = s;
-      S.presets = s.presets || S.presets;
-    } catch {
-      /* ignore */
-    }
+  try {
+    const s = await api('/api/settings');
+    S.settings = s;
+    S.presets = s.presets || S.presets;
+    S.modelsByProvider = {};
+  } catch {
+    /* ignore */
   }
   const globalSummary = S.settings ? `Défaut global du Studio (${S.settings.provider} · ${S.settings.model})` : 'Défaut global du Studio';
   populateProviderSelect($('#np-provider-mode'), S.presets, { includeInheritLabel: globalSummary });
@@ -1539,16 +1562,39 @@ function formatModelSummary(s) {
 function syncSettingsApiKeyVisibility() {
   const p1 = $('#s-provider')?.value || '';
   const p2 = $('#s-rev-provider')?.value || '';
-  const managedCreds = (p) => p === 'codex' || p === 'agy' || p === 'env' || p === 'mock';
-  const noKeyNeeded = (p) => managedCreds(p) || p === 'local';
+  const managedCreds = (p) => {
+    const preset = S.presets?.[p];
+    return p === 'codex' || p === 'agy' || p === 'env' || p === 'mock' || Boolean(preset?.fromCatalog);
+  };
+  const noKeyNeeded = (p) => {
+    const preset = S.presets?.[p];
+    if (preset?.fromCatalog) return Boolean(preset.hasKey);
+    return managedCreds(p) || p === 'local' || preset?.authMode === 'none';
+  };
   if ($('#s-baseurl-wrap')) $('#s-baseurl-wrap').hidden = managedCreds(p1);
   if ($('#s-key-wrap')) $('#s-key-wrap').hidden = noKeyNeeded(p1) && noKeyNeeded(p2);
+}
+
+function renderCatalogStatusBanner(s) {
+  const catStatus = $('#s-catalog-status');
+  if (!catStatus) return;
+  const cat = s?.providersCatalog;
+  if (cat?.errors?.length) {
+    catStatus.hidden = false;
+    catStatus.textContent = `⚠ providers.json : ${cat.errors.join(' | ')}`;
+  } else if (cat?.providerIds?.length) {
+    catStatus.hidden = false;
+    catStatus.textContent = `✓ providers.json chargé (${cat.providerIds.length} fournisseur(s) : ${cat.providerIds.join(', ')}) — modifiable à chaud sans toucher au .env.`;
+  } else {
+    catStatus.hidden = true;
+  }
 }
 
 async function openSettings() {
   const s = await api('/api/settings');
   S.settings = s;
   S.presets = s.presets || S.presets;
+  S.modelsByProvider = {};
 
   const select = $('#s-provider');
   const revSelect = $('#s-rev-provider');
@@ -1562,16 +1608,20 @@ async function openSettings() {
   if ($('#s-theme')) $('#s-theme').value = S.theme;
   $('#s-baseurl').value = s.baseURL || '';
   $('#s-key').value = '';
+  const activePreset = S.presets?.[s.provider];
   $('#s-key').placeholder =
     s.provider === 'codex' || s.provider === 'agy'
       ? '(session OAuth locale — aucune clé requise)'
       : s.provider === 'env'
         ? '(clé lue depuis .env)'
-        : s.hasKey
-          ? '(clé enregistrée)'
-          : 'sk-…';
+        : activePreset?.fromCatalog && activePreset?.hasKey
+          ? '(clé lue depuis providers.json)'
+          : s.hasKey
+            ? '(clé enregistrée)'
+            : 'sk-…';
   $('#s-token').value = S.token;
   syncSettingsApiKeyVisibility();
+  renderCatalogStatusBanner(s);
 
   const envStatus = $('#s-env-status');
   if (envStatus) {
@@ -1624,14 +1674,26 @@ $('#s-refresh-models')?.addEventListener('click', async () => {
   if (btn) btn.disabled = true;
   try {
     S.modelsByProvider = {};
-    const p1 = $('#s-provider').value;
-    const p2 = $('#s-rev-provider')?.value || p1;
-    const curAgent = readModelValue(p1, $('#s-model-select'), $('#s-model'));
-    const curRev = readModelValue(p2, $('#s-rev-model-select'), $('#s-rev-model'));
-    const agentOpts =
-      p1 !== 'codex' && p1 !== 'agy' && p1 !== 'env'
-        ? { refresh: true, baseURL: $('#s-baseurl').value, apiKey: $('#s-key').value }
-        : { refresh: true };
+    const prevP1 = $('#s-provider').value;
+    const prevP2 = $('#s-rev-provider')?.value || prevP1;
+    const curAgent = readModelValue(prevP1, $('#s-model-select'), $('#s-model'));
+    const curRev = readModelValue(prevP2, $('#s-rev-model-select'), $('#s-rev-model'));
+
+    // Reload `/api/settings` too so newly added providers in `providers.json` appear immediately
+    const s = await api('/api/settings');
+    S.settings = s;
+    S.presets = s.presets || S.presets;
+    renderCatalogStatusBanner(s);
+    populateProviderSelect($('#s-provider'), S.presets);
+    populateProviderSelect($('#s-rev-provider'), S.presets);
+    const p1 = S.presets[prevP1] ? prevP1 : s.provider;
+    const p2 = S.presets[prevP2] ? prevP2 : s.reviewer?.provider || p1;
+    $('#s-provider').value = p1;
+    if ($('#s-rev-provider')) $('#s-rev-provider').value = p2;
+    syncSettingsApiKeyVisibility();
+
+    const isManaged = p1 === 'codex' || p1 === 'agy' || p1 === 'env' || Boolean(S.presets?.[p1]?.fromCatalog);
+    const agentOpts = !isManaged ? { refresh: true, baseURL: $('#s-baseurl').value, apiKey: $('#s-key').value } : { refresh: true };
     await syncModelControl(p1, 'agent', $('#s-model-select'), $('#s-model'), curAgent, agentOpts);
     await syncModelControl(p2, 'reviewer', $('#s-rev-model-select'), $('#s-rev-model'), curRev, { refresh: p2 !== p1 });
   } finally {
@@ -1685,10 +1747,13 @@ function syncProjectModelModeUI() {
 
 async function openProjectModelDialog() {
   if (!S.project) return;
-  if (!S.settings || !Object.keys(S.presets || {}).length) {
+  try {
     const s = await api('/api/settings');
     S.settings = s;
     S.presets = s.presets || {};
+    S.modelsByProvider = {};
+  } catch {
+    /* keep cached presets */
   }
   $('#pm-title').textContent = `Modèles du projet #${S.project.name}`;
   populateProviderSelect($('#pm-provider'), S.presets);
@@ -1728,10 +1793,19 @@ $('#pm-refresh-models')?.addEventListener('click', async () => {
   if (btn) btn.disabled = true;
   try {
     S.modelsByProvider = {};
-    const p1 = $('#pm-provider').value;
-    const p2 = $('#pm-rev-provider').value;
-    const curAgent = readModelValue(p1, $('#pm-model-select'), $('#pm-model'));
-    const curRev = readModelValue(p2, $('#pm-rev-model-select'), $('#pm-rev-model'));
+    const prevP1 = $('#pm-provider').value;
+    const prevP2 = $('#pm-rev-provider').value;
+    const curAgent = readModelValue(prevP1, $('#pm-model-select'), $('#pm-model'));
+    const curRev = readModelValue(prevP2, $('#pm-rev-model-select'), $('#pm-rev-model'));
+    const s = await api('/api/settings');
+    S.settings = s;
+    S.presets = s.presets || S.presets;
+    populateProviderSelect($('#pm-provider'), S.presets);
+    populateProviderSelect($('#pm-rev-provider'), S.presets);
+    const p1 = S.presets[prevP1] ? prevP1 : s.provider;
+    const p2 = S.presets[prevP2] ? prevP2 : s.reviewer?.provider || p1;
+    $('#pm-provider').value = p1;
+    $('#pm-rev-provider').value = p2;
     await syncModelControl(p1, 'agent', $('#pm-model-select'), $('#pm-model'), curAgent, { refresh: true });
     await syncModelControl(p2, 'reviewer', $('#pm-rev-model-select'), $('#pm-rev-model'), curRev, { refresh: p2 !== p1 });
   } finally {

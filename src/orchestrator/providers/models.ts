@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../db.js';
 import { listAgyModels } from './agy.js';
-import { CODEX_DEFAULT_BASE_URL, defaultCodexAuthPath, hasCodexAuth, loadValidCodexAuth } from './codex.js';
+import { loadProvidersCatalog } from './catalog.js';
+import { CODEX_DEFAULT_BASE_URL, defaultCodexAuthPath, hasCodexAuth, isAllowedCodexBase, loadValidCodexAuth } from './codex.js';
 import { getEnvProviderSummary, getProviderPresets } from './index.js';
 
 export type DiscoveredModel = {
@@ -14,7 +15,7 @@ export type DiscoveredModel = {
 
 export type ModelDiscoveryResult = {
   provider: string;
-  source: 'live' | 'cache_file' | 'env_fallback' | 'preset_fallback' | 'empty';
+  source: 'live' | 'config_file' | 'cache_file' | 'env_fallback' | 'preset_fallback' | 'empty';
   models: DiscoveredModel[];
   defaultAgentModel: string;
   defaultReviewerModel: string;
@@ -153,6 +154,15 @@ function pickPreferred(models: DiscoveredModel[], candidates: Array<string | und
   return models[0]?.id ?? String(candidates.find((c) => c && c.trim()) ?? '');
 }
 
+function sameUrlOrigin(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+  }
+}
+
 export async function discoverProviderModels(
   db: Db,
   opts?: {
@@ -167,27 +177,58 @@ export async function discoverProviderModels(
 ): Promise<ModelDiscoveryResult> {
   const env = opts?.env ?? process.env;
   const s = db.settings();
-  const presets = getProviderPresets(env);
+  const catalog = loadProvidersCatalog(env, db.dataRoot);
+  const presets = getProviderPresets(env, db.dataRoot);
   const envSummary = getEnvProviderSummary(env);
-  const provider = String(opts?.provider || s.provider || (envSummary.available ? 'env' : env.WHATIF_PROVIDER) || 'mock').trim();
+  const provider = String(
+    opts?.provider ||
+      s.provider ||
+      catalog.defaultProvider ||
+      (envSummary.available ? 'env' : env.WHATIF_PROVIDER) ||
+      'mock',
+  ).trim();
   const preset = presets[provider] ?? presets.openai!;
+  const catEntry = catalog.providers[provider];
+  const effectiveDriver = catEntry
+    ? catEntry.driver
+    : provider === 'env'
+      ? envSummary.underlyingKind
+      : provider;
 
-  // Resolve effective baseURL & apiKey for HTTP providers
-  let effectiveBaseURL = (opts?.baseURL ?? '').trim();
-  let effectiveApiKey = (opts?.apiKey ?? '').trim();
+  // Resolve effective baseURL & apiKey for HTTP providers.
+  // Security: NEVER send a stored DB/.env/providers.json API key to an unverified caller-supplied baseURL override!
+  const callerBaseURL = (opts?.baseURL ?? '').trim();
+  const callerApiKey = (opts?.apiKey ?? '').trim();
+  let effectiveBaseURL = callerBaseURL;
+  let effectiveApiKey = callerApiKey;
 
-  if (provider === 'env') {
-    effectiveBaseURL = effectiveBaseURL || envSummary.baseURL;
-    effectiveApiKey = effectiveApiKey || (env.WHATIF_API_KEY ?? '').trim();
+  if (catEntry) {
+    const configuredBase = catEntry.baseURL || (provider === s.provider ? s.baseURL || '' : '');
+    if (!effectiveBaseURL) effectiveBaseURL = configuredBase;
+    const isTrustedOverride = !callerBaseURL || sameUrlOrigin(callerBaseURL, configuredBase);
+    if (!effectiveApiKey && isTrustedOverride) {
+      effectiveApiKey = catEntry.apiKey || (provider === s.provider ? s.apiKey || '' : '');
+    }
+  } else if (provider === 'env') {
+    const trustedBase = envSummary.baseURL;
+    effectiveBaseURL = callerBaseURL || trustedBase;
+    if (!effectiveApiKey && (!callerBaseURL || sameUrlOrigin(callerBaseURL, trustedBase))) {
+      effectiveApiKey = (env.WHATIF_API_KEY ?? '').trim();
+    }
   } else if (provider !== 'agy' && provider !== 'codex' && provider !== 'mock') {
     const matchesEnvProvider = provider === (env.WHATIF_PROVIDER || '').trim();
+    const configuredBase =
+      (provider === s.provider ? s.baseURL : '') ||
+      (matchesEnvProvider ? env.WHATIF_BASE_URL || '' : '') ||
+      preset.baseURL;
     if (!effectiveBaseURL) {
-      effectiveBaseURL =
-        (provider === s.provider ? s.baseURL : '') ||
-        (matchesEnvProvider ? env.WHATIF_BASE_URL || '' : '') ||
-        preset.baseURL;
+      effectiveBaseURL = configuredBase;
     }
-    if (!effectiveApiKey) {
+    const isTrustedOverride =
+      !callerBaseURL ||
+      sameUrlOrigin(callerBaseURL, configuredBase) ||
+      sameUrlOrigin(callerBaseURL, preset.baseURL);
+    if (!effectiveApiKey && isTrustedOverride) {
       effectiveApiKey =
         (provider === s.provider ? s.apiKey || '' : '') ||
         (matchesEnvProvider ? env.WHATIF_API_KEY || '' : '');
@@ -197,7 +238,7 @@ export async function discoverProviderModels(
   const keyHash = effectiveApiKey
     ? crypto.createHash('sha1').update(effectiveApiKey).digest('hex').slice(0, 10)
     : 'nokey';
-  const cacheKey = `${provider}|${effectiveBaseURL}|${keyHash}`;
+  const cacheKey = `${provider}|${effectiveBaseURL}|${keyHash}|${catalog.signature}`;
   if (!opts?.forceRefresh) {
     const cached = discoveryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -210,19 +251,40 @@ export async function discoverProviderModels(
     return res;
   };
 
-  if (provider === 'mock') {
+  // Fast path: explicit model list in `providers.json` with `discoverModels: false` (default when `models` is provided)
+  if (catEntry && catEntry.models.length > 0 && !catEntry.discoverModels) {
+    const defaultAgentModel = pickPreferred(catEntry.models, [
+      provider === s.provider ? s.model : null,
+      catEntry.model,
+    ]);
+    const defaultReviewerModel = pickPreferred(catEntry.models, [
+      provider === s.reviewProvider ? s.reviewModel : null,
+      catEntry.reviewModel,
+      catEntry.model,
+    ]);
+    return saveCache({
+      provider,
+      source: 'config_file',
+      models: catEntry.models,
+      defaultAgentModel,
+      defaultReviewerModel,
+      error: null,
+    });
+  }
+
+  if (effectiveDriver === 'mock') {
     return saveCache({
       provider,
       source: 'preset_fallback',
-      models: [{ id: 'mock', label: 'mock (test local)' }],
-      defaultAgentModel: 'mock',
-      defaultReviewerModel: 'mock',
+      models: catEntry?.models.length ? catEntry.models : [{ id: 'mock', label: 'mock (test local)' }],
+      defaultAgentModel: catEntry?.model || 'mock',
+      defaultReviewerModel: catEntry?.reviewModel || 'mock',
       error: null,
     });
   }
 
   // 1. Google Antigravity CLI (`agy models`)
-  if (provider === 'agy') {
+  if (effectiveDriver === 'agy') {
     const { models, error } = await listAgyModels({ agyBin: opts?.agyBin, env });
     if (models.length > 0) {
       const defaultAgentModel = pickPreferred(models, [
@@ -257,10 +319,10 @@ export async function discoverProviderModels(
   }
 
   // 2. ChatGPT / Codex subscription OAuth (`/codex/models` + `~/.codex/models_cache.json` fallback)
-  if (provider === 'codex') {
+  if (effectiveDriver === 'codex') {
     const authPath = opts?.codexAuthPath || defaultCodexAuthPath();
     const rawBase = (effectiveBaseURL || CODEX_DEFAULT_BASE_URL).replace(/\/+$/, '');
-    const base = /chatgpt\.com|localhost|127\.0\.0\.1/.test(rawBase) ? rawBase : CODEX_DEFAULT_BASE_URL;
+    const base = isAllowedCodexBase(rawBase) ? rawBase : CODEX_DEFAULT_BASE_URL;
     let liveError: string | null = null;
 
     if (hasCodexAuth(authPath)) {
@@ -327,45 +389,64 @@ export async function discoverProviderModels(
   }
 
   // 3. Anthropic (`/v1/models`)
-  if (provider === 'anthropic' || (provider === 'env' && env.WHATIF_PROVIDER === 'anthropic')) {
+  if (effectiveDriver === 'anthropic') {
     const base = (effectiveBaseURL || 'https://api.anthropic.com').replace(/\/+$/, '');
     const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+    const pinnedCatModels = catEntry?.models ?? [];
     if (!effectiveApiKey) {
       return saveCache({
         provider,
-        source: 'empty',
-        models: [],
-        defaultAgentModel: preset.model,
-        defaultReviewerModel: preset.reviewModel ?? preset.model,
-        error: 'Clé API Anthropic requise pour lister les modèles',
+        source: pinnedCatModels.length > 0 ? 'config_file' : 'empty',
+        models: pinnedCatModels,
+        defaultAgentModel: pinnedCatModels[0]?.id ?? preset.model,
+        defaultReviewerModel: preset.reviewModel ?? pinnedCatModels[0]?.id ?? preset.model,
+        error: pinnedCatModels.length > 0 ? null : 'Clé API Anthropic requise pour lister les modèles',
       });
     }
     const resp = await fetchJsonWithTimeout(modelsUrl, {
       'x-api-key': effectiveApiKey,
       'anthropic-version': '2023-06-01',
     });
-    const models = resp.ok ? parseAnthropicModelsPayload(resp.json) : [];
+    const mergedAnthropic = new Map<string, DiscoveredModel>();
+    for (const pm of pinnedCatModels) mergedAnthropic.set(pm.id, pm);
+    if (resp.ok) {
+      for (const m of parseAnthropicModelsPayload(resp.json)) {
+        if (!mergedAnthropic.has(m.id)) mergedAnthropic.set(m.id, m);
+      }
+    }
+    const models = [...mergedAnthropic.values()];
     return saveCache({
       provider,
-      source: models.length > 0 ? 'live' : 'empty',
+      source: resp.ok && models.length > 0 ? 'live' : pinnedCatModels.length > 0 ? 'config_file' : 'empty',
       models,
-      defaultAgentModel: pickPreferred(models, [preset.model]),
-      defaultReviewerModel: pickPreferred(models, [preset.reviewModel, preset.model]),
+      defaultAgentModel: pickPreferred(models, [provider === s.provider ? s.model : null, preset.model]),
+      defaultReviewerModel: pickPreferred(models, [
+        provider === s.reviewProvider ? s.reviewModel : null,
+        preset.reviewModel,
+        preset.model,
+      ]),
       error: resp.ok ? null : resp.error ?? null,
     });
   }
 
-  // 4. `.env` custom API & all OpenAI-compatible providers (`openai`, `openrouter`, `google`, `mistral`, `groq`, `local`)
+  // 4. `.env` custom API, `providers.json` (with discoverModels: true), & all OpenAI-compatible providers
   const isLocal = /127\.0\.0\.1|localhost/.test(effectiveBaseURL);
-  const pinnedEnvModels: DiscoveredModel[] = [];
+  const pinnedEnvModels: DiscoveredModel[] = [...(catEntry?.models ?? [])];
+  const seenPinned = new Set(pinnedEnvModels.map((m) => m.id));
   if (provider === 'env' || provider === (env.WHATIF_PROVIDER || '').trim()) {
-    if (env.WHATIF_MODEL?.trim()) {
+    if (env.WHATIF_MODEL?.trim() && !seenPinned.has(env.WHATIF_MODEL.trim())) {
+      seenPinned.add(env.WHATIF_MODEL.trim());
       pinnedEnvModels.push({
         id: env.WHATIF_MODEL.trim(),
         label: `${env.WHATIF_MODEL.trim()} (défaut Agent .env)`,
       });
     }
-    if (env.WHATIF_REVIEW_MODEL?.trim() && env.WHATIF_REVIEW_MODEL.trim() !== env.WHATIF_MODEL?.trim()) {
+    if (
+      env.WHATIF_REVIEW_MODEL?.trim() &&
+      env.WHATIF_REVIEW_MODEL.trim() !== env.WHATIF_MODEL?.trim() &&
+      !seenPinned.has(env.WHATIF_REVIEW_MODEL.trim())
+    ) {
+      seenPinned.add(env.WHATIF_REVIEW_MODEL.trim());
       pinnedEnvModels.push({
         id: env.WHATIF_REVIEW_MODEL.trim(),
         label: `${env.WHATIF_REVIEW_MODEL.trim()} (défaut Reviewer .env)`,
@@ -376,10 +457,10 @@ export async function discoverProviderModels(
   if (!effectiveBaseURL || (!effectiveApiKey && !isLocal && provider !== 'openrouter')) {
     return saveCache({
       provider,
-      source: pinnedEnvModels.length > 0 ? 'env_fallback' : 'empty',
+      source: catEntry && pinnedEnvModels.length > 0 ? 'config_file' : pinnedEnvModels.length > 0 ? 'env_fallback' : 'empty',
       models: pinnedEnvModels,
       defaultAgentModel: pinnedEnvModels[0]?.id ?? preset.model,
-      defaultReviewerModel: pinnedEnvModels[1]?.id ?? pinnedEnvModels[0]?.id ?? preset.reviewModel ?? preset.model,
+      defaultReviewerModel: preset.reviewModel ?? pinnedEnvModels[1]?.id ?? pinnedEnvModels[0]?.id ?? preset.model,
       error: !effectiveApiKey ? `Clé API requise pour interroger ${effectiveBaseURL || provider}/models` : null,
     });
   }
@@ -433,7 +514,13 @@ export async function discoverProviderModels(
 
   return saveCache({
     provider,
-    source: primaryResp.ok ? 'live' : models.length > 0 ? 'env_fallback' : 'empty',
+    source: primaryResp.ok
+      ? 'live'
+      : catEntry && models.length > 0
+        ? 'config_file'
+        : models.length > 0
+          ? 'env_fallback'
+          : 'empty',
     models,
     defaultAgentModel,
     defaultReviewerModel,

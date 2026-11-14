@@ -7,11 +7,44 @@ const BINARY_EXT = new Set([
   '.zip', '.gz', '.woff', '.woff2', '.ttf', '.otf', '.ico', '.pdf',
 ]);
 
-/** Resolve a project-relative path, refusing anything that escapes the project root. */
+function isSensitiveConfigPath(rel: string): boolean {
+  const norm = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+  return /(^|\/)\.env(\.|$)/i.test(norm) || /(^|\/)providers\.json$/i.test(norm);
+}
+
+/** Resolve a project-relative path, refusing anything that escapes the project root (including via symlinks). */
 export function safeJoin(root: string, rel: string): string {
   const base = path.resolve(root);
   const full = path.resolve(base, rel);
   if (full !== base && !full.startsWith(base + path.sep)) throw new Error(`path escapes the project: ${rel}`);
+
+  // Prevent symlink escapes outside the project root (allow the studio's shared node_modules junction only)
+  const relPosix = path.relative(base, full).split(path.sep).join('/');
+  if (relPosix && relPosix !== 'node_modules' && !relPosix.startsWith('node_modules/')) {
+    let realBase = base;
+    try {
+      if (fs.existsSync(base)) realBase = fs.realpathSync(base);
+    } catch {
+      /* keep base */
+    }
+    let cur = full;
+    while (cur.length >= base.length && !fs.existsSync(cur)) {
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    if (fs.existsSync(cur)) {
+      let realCur: string;
+      try {
+        realCur = fs.realpathSync(cur);
+      } catch {
+        throw new Error(`path escapes the project (unresolvable symlink): ${rel}`);
+      }
+      if (realCur !== realBase && !realCur.startsWith(realBase + path.sep)) {
+        throw new Error(`path escapes the project via symlink: ${rel}`);
+      }
+    }
+  }
   return full;
 }
 
@@ -54,21 +87,25 @@ export function walk(root: string, opts: WalkOptions = {}): string[] {
         continue;
       }
       if (!e.isFile()) continue;
+      const entryRel = relOf(root, abs);
+      if (isSensitiveConfigPath(entryRel)) continue;
       if (!opts.includeBinary && isBinaryPath(abs)) continue;
       try {
         if (fs.statSync(abs).size > maxBytes) continue;
       } catch {
         continue;
       }
-      out.push(relOf(root, abs));
+      out.push(entryRel);
     }
   }
   return out.sort();
 }
 
-/** Read a text file, or null when it is binary, missing or too large. */
+/** Read a text file, or null when it is binary, missing, .env/providers.json, or too large. */
 export function readText(root: string, rel: string, maxBytes = 400_000): string | null {
   const abs = safeJoin(root, rel);
+  const normRel = relOf(root, abs);
+  if (isSensitiveConfigPath(normRel)) return null;
   let st: fs.Stats;
   try {
     st = fs.statSync(abs);

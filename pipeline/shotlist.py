@@ -39,35 +39,77 @@ SIZES = [
 ]
 
 KEYWORDS = {
+    "living": [
+        "salon", "canape", "fauteuil", "tele", "television", "sejour", "appartement", "maison",
+        "tapis", "coussin", "table-basse", "entree", "porte-d-entree",
+    ],
     "classroom": [
         "prof", "professeur", "classe", "eleve", "eleves", "tableau", "ecole", "college", "lycee",
-        "cours", "interro", "examen", "scolaire", "maitre", " Craie",
+        "cours", "interro", "examen", "scolaire", "maitre", "craie",
     ],
     "kitchen": [
         "cuisine", "cuisiner", "tasse", "cafe", "manger", "couteau", "assiette", "four", "frigo",
-        "cookie", "biscuit", "pizza", "repas", "petit-dejeuner", "diner", "recette",
+        "cookie", "biscuit", "pizza", "repas", "petit-dejeuner", "recette", "evier", "poele",
     ],
     "restaurant": [
-        "restaurant", "resto", "serveur", "serveuse", "menu", "addition", "table", "ravioli",
-        "raviolis", "tupperware", "soda", "verre", "plat", "date", "patron", "cheque", "pourboire",
-        "commande", "commander", "boisson", "entree", "dessert", "bistrot",
+        "restaurant", "resto", "serveur", "serveuse", "menu", "addition", "ravioli", "raviolis",
+        "tupperware", "soda", "plat", "date", "patron", "cheque", "pourboire", "commande",
+        "commander", "boisson", "entree", "dessert", "bistrot", "brasserie", "diner",
+    ],
+    "hospital": [
+        "hopital", "urgences", "urgence", "medecin", "docteur", "infirmier", "infirmiere",
+        "patient", "patiente", "clinique", "chirurgien", "chirurgie", "ambulance", "civiere",
+        "brancard", "perfusion", "moniteur", "blouse", "diagnostic", "ordonnance", "medical", "medicale",
+    ],
+    "police-office": [
+        "police", "policier", "policiere", "commissariat", "inspecteur", "agent", "interrogatoire",
+        "plainte", "menottes", "garde-a-vue", "enquete", "brigade", "gendarme",
+    ],
+    "cell": [
+        "cellule", "prison", "barreaux", "detenu", "gardien", "cachot", "penitencier",
+    ],
+    "office": [
+        "entreprise", "collegue", "patronne", "reunion", "open-space", "contrat", "licenciement",
+        "salaire", "entretien", "rh", "manager", "directeur", "directrice", "imprimante",
+    ],
+    "shop": [
+        "magasin", "supermarche", "boutique", "caisse", "caissier", "caissiere", "rayon",
+        "client", "cliente", "panier", "caddie", "vendeur", "vendeuse", "vitrine", "achat",
+    ],
+    "salon": [
+        "coiffeur", "coiffeuse", "coiffure", "manucure", "ongles", "estheticienne", "miroir", "ciseaux",
+    ],
+    "cafeteria": [
+        "cantine", "cafeteria", "plateau", "self", "refectoire",
+    ],
+    "auditorium": [
+        "amphi", "amphitheatre", "scene", "estrade", "public", "spectateurs", "discours", "conference", "tribunal", "juge", "avocat",
+    ],
+    "corridor": [
+        "couloir", "hall", "palier", "ascenseur", "vestiaire", "casier", "casiers",
     ],
     "vehicle": [
-        "voiture", "auto", "volant", "route", "conduire", "conduit", "conducteur", "passager",
+        "voiture", "auto", "volant", "conduire", "conduit", "conducteur", "passager", "parking",
         "siege", "bus", "train", "metro", "trajet", "embouteillage", "phare", "autoroute", "frein",
         "vitesse", "camion", "taxi", "habitacle", "pare-brise", "ceinture",
     ],
+    "street": [
+        "rue", "trottoir", "carrefour", "passage", "passant", "passants", "lampadaire", "immeubles",
+        "facade", "quartier", "ruelle", "avenue", "boulevard",
+    ],
+    "park": [
+        "parc", "arbre", "foret", "jardin", "herbe", "banc", "nature", "sentier", "pelouse", "square",
+    ],
     "outdoor": [
-        "rue", "trottoir", "parc", "arbre", "foret", "jardin", "marche", "marcher", "dehors",
-        "plage", "montagne", "chemin", "route", "nature", "herbe", "banc", "passant", "ville",
+        "dehors", "plage", "montagne", "chemin", "route", "ville", "sortir",
     ],
     "bedroom": [
         "chambre", "lit", "dormir", "dors", "reve", "nuit", "oreiller", "reveil", "matin",
         "casque", "micro", "muet", "mute", "jeu", "jouer", "gamer", "vocal", "console", "manette",
-        "stream", "discord", "appel",
+        "stream", "discord", "pyjama", "couette",
     ],
-    "rooftop": ["toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "etoile", "lune", "terrasse"],
-    "stairwell": ["escalier", "marche", "monte", "descend", "etage", "rampe", "couloir", "ascenseur"],
+    "rooftop": ["toit", "ciel", "soleil", "nuage", "horizon", "immeuble", "etoile", "lune", "terrasse", "balcon"],
+    "stairwell": ["escalier", "escaliers", "rampe", "etage"],
     "study": [
         "bureau", "feuille", "fiche", "crayon", "cahier", "stylo", "papier", "dessin", "bande",
         "bandes", "colle", "decoupe", "ordinateur", "ecran", "clavier", "dossier", "travail",
@@ -76,6 +118,29 @@ KEYWORDS = {
         "geometrie", "theoreme", "nombre", "equation", "surface", "courbe", "angle",
         "orientable", "energie", "joules", "physique", "formule", "calcul", "pourcent", "statistique",
     ],
+}
+
+# Unambiguous place nouns capable of switching `set` on a single cutaway clause even when `defaultSet` is set
+CLAUSE_LOCATION_WORDS = {
+    "living": {"salon", "canape", "sejour"},
+    "kitchen": {"cuisine", "frigo", "evier"},
+    "bedroom": {"chambre", "lit", "oreiller", "couette"},
+    "corridor": {"couloir", "ascenseur", "palier", "hall", "vestiaire"},
+    "stairwell": {"escalier", "escaliers"},
+    "hospital": {"hopital", "urgences", "clinique", "ambulance", "civiere", "brancard"},
+    "police-office": {"commissariat", "interrogatoire", "garde-a-vue"},
+    "cell": {"cellule", "prison", "barreaux"},
+    "restaurant": {"restaurant", "resto", "bistrot", "brasserie"},
+    "cafeteria": {"cantine", "cafeteria", "refectoire"},
+    "shop": {"magasin", "supermarche", "boutique", "caisse"},
+    "salon": {"coiffeur", "coiffeuse", "manucure"},
+    "office": {"open-space", "reunion", "entreprise"},
+    "auditorium": {"amphi", "amphitheatre", "tribunal"},
+    "classroom": {"classe", "ecole", "lycee", "college"},
+    "vehicle": {"voiture", "volant", "habitacle", "autoroute", "bus", "train", "metro", "taxi", "parking"},
+    "street": {"rue", "trottoir", "ruelle", "avenue", "boulevard", "carrefour"},
+    "park": {"parc", "jardin", "foret", "banc", "pelouse"},
+    "rooftop": {"toit", "terrasse", "balcon"},
 }
 
 # Words after which a cut is forbidden (determiners, prepositions, clitics, auxiliaries that bind to the next word)
@@ -216,6 +281,31 @@ def strip_tts_tags(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def resolve_set_name(raw: str) -> str:
+    """Turn either a clean recipe slug ('living', 'hospital') or a descriptive French sentence
+    ('Un salon de banlieue à 4 h du matin...') into a canonical short set name."""
+    s = (raw or "").strip().lower()
+    if not s:
+        return ""
+    if re.fullmatch(r"[a-z0-9_-]{2,24}", s):
+        return s
+    tokens = [bare_ascii(w) for w in re.findall(r"[\w'\u2019-]+", s) if bare_ascii(w)]
+    if not tokens:
+        return ""
+    best_room = ""
+    best_score = 0
+    for room_name, kw_list in KEYWORDS.items():
+        if room_name == DIAGRAM:
+            continue
+        kw_set = {bare_ascii(k) for k in kw_list}
+        loc_set = {bare_ascii(k) for k in CLAUSE_LOCATION_WORDS.get(room_name, set())}
+        score = sum(3 if tok in loc_set else (1 if tok in kw_set else 0) for tok in tokens)
+        if score > best_score:
+            best_score = score
+            best_room = room_name
+    return best_room if best_score > 0 else "living"
+
+
 def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], dict[int, str]]:
     """Map word indices where each script beat starts -> beat label, and every word index -> beat set (if specified)."""
     out: dict[int, str] = {}
@@ -227,7 +317,7 @@ def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], d
             continue
         btext = strip_tts_tags(str(b.get("text") or "").strip())
         blabel = str(b.get("beat") or "").strip()
-        bset = str(b.get("set") or "").strip().lower()
+        bset = resolve_set_name(str(b.get("set") or ""))
         bwords = [bare_ascii(x) for x in re.findall(r"[\w'\u2019-]+", btext) if bare_ascii(x)]
         if not bwords:
             continue
@@ -247,28 +337,43 @@ def beat_starts_in_words(ep: dict, words: list[dict]) -> tuple[dict[int, str], d
 
 
 COMPANION_SETS: dict[str, str] = {
-    "bedroom": "study",
+    "living": "kitchen",
+    "kitchen": "living",
+    "bedroom": "corridor",
     "study": "bedroom",
-    "restaurant": "restaurant",
-    "vehicle": "outdoor",
+    "office": "corridor",
+    "hospital": "corridor",
+    "clinic": "corridor",
+    "police-office": "corridor",
+    "cell": "police-office",
+    "restaurant": "street",
+    "diner": "street",
+    "cafeteria": "corridor",
+    "shop": "street",
+    "salon": "street",
+    "auditorium": "corridor",
+    "corridor": "street",
+    "hallway": "street",
+    "vehicle": "street",
+    "street": "living",
+    "park": "street",
     "outdoor": "rooftop",
     "rooftop": "outdoor",
-    "kitchen": "study",
-    "classroom": "stairwell",
+    "classroom": "corridor",
     "stairwell": "outdoor",
 }
 
 
 def infer_story_sets(ep: dict, words: list[dict], root: Path, slug: str) -> tuple[str, str]:
     """Infer the coherent primary and secondary locations for this story (never forcing unrelated rooms like classroom)."""
-    explicit = str(ep.get("defaultSet") or ep.get("set") or "").strip().lower()
+    explicit = resolve_set_name(str(ep.get("defaultSet") or ep.get("set") or ""))
     if explicit and explicit != DIAGRAM:
         return explicit, COMPANION_SETS.get(explicit, explicit)
 
     # Also check if any beat in episode.json.script explicitly declares a set
     for b in ep.get("script") or []:
         if isinstance(b, dict):
-            bs = str(b.get("set") or "").strip().lower()
+            bs = resolve_set_name(str(b.get("set") or ""))
             if bs and bs != DIAGRAM:
                 return bs, COMPANION_SETS.get(bs, bs)
 
@@ -718,6 +823,9 @@ def main() -> int:
 
     wi_prev = 0
     prev_size = ""
+    prev_view = "front"
+    front_run_in_room = 0
+    prev_moves: list[str] = []
     insert_count = 0
     since_insert = 99
     look_counts: dict[str, int] = {"memory": 0, "tension": 0}
@@ -731,6 +839,7 @@ def main() -> int:
         if not chunk:
             continue
         text = [str(w["w"]).strip() for w in chunk]
+        clause_tokens = [bare_ascii(t) for t in text if bare_ascii(t)]
         span = max(18, round(float(chunk[-1].get("e", 0)) * FPS) - round(float(chunk[0].get("s", 0)) * FPS))
         label = clean_french_spacing(" ".join(text[:12]))
         b_label = next((beat_map[idx] for idx in range(start, end) if idx in beat_map), "")
@@ -747,21 +856,41 @@ def main() -> int:
             room = explicit_beat_set
         else:
             has_explicit_default = bool(str(ep.get("defaultSet") or ep.get("set") or "").strip())
-            min_hits = 2 if has_explicit_default else 1
-            hits = {
-                room_name: sum(1 for t in text if bare_ascii(t) in {bare_ascii(k) for k in words_of})
-                for room_name, words_of in KEYWORDS.items()
+            # 1. Explicit cutaway location noun in this clause switches set cleanly even when defaultSet is set
+            loc_hits = {
+                r_name: sum(1 for tok in clause_tokens if tok in {bare_ascii(k) for k in loc_words})
+                for r_name, loc_words in CLAUSE_LOCATION_WORDS.items()
             }
-            ranked = sorted(hits.items(), key=lambda kv: -kv[1])
-            best = next((name for name, score in ranked if score >= min_hits and (name != DIAGRAM or (has_science and run < 2))), "")
-            if best:
-                room = best
-            elif previous_set and previous_set != DIAGRAM and (has_explicit_default or run < 3):
-                room = previous_set
+            loc_ranked = sorted(loc_hits.items(), key=lambda kv: -kv[1])
+            best_loc = next((name for name, sc in loc_ranked if sc >= 1), "")
+            if best_loc:
+                room = best_loc
             else:
-                # Stay faithful to the story's world (primary_set / secondary_set) — never teleport into classroom/kitchen
-                room = secondary_set if (previous_set == primary_set and run >= 3 and not has_explicit_default) else primary_set
-        run = run + 1 if room == previous_set else 1
+                min_hits = 2 if has_explicit_default else 1
+                hits = {
+                    room_name: sum(1 for tok in clause_tokens if tok in {bare_ascii(k) for k in words_of})
+                    for room_name, words_of in KEYWORDS.items()
+                }
+                ranked = sorted(hits.items(), key=lambda kv: -kv[1])
+                best = next(
+                    (name for name, score in ranked if score >= min_hits and (name != DIAGRAM or (has_science and run < 2))),
+                    "",
+                )
+                if best:
+                    room = best
+                elif set(clause_tokens) & MEMORY_LOOK_WORDS and secondary_set != primary_set:
+                    # Flashback / memory clause cuts away from the main room so visual memory beats feel distinct
+                    room = secondary_set
+                elif previous_set and previous_set != DIAGRAM and (
+                    (not has_explicit_default and run < 3)
+                    or (has_explicit_default and (run < 8 or not (set(clause_tokens) & {"entre", "sorti", "sortie", "porte", "couloir", "dehors"})))
+                ):
+                    room = previous_set
+                else:
+                    # Stay faithful to the story's world (primary_set / secondary_set) — never teleport into classroom/kitchen
+                    room = secondary_set if (previous_set == primary_set and run >= 3) else primary_set
+        same_room = room == previous_set
+        run = run + 1 if same_room else 1
         previous_set = room
 
         size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count, since_insert)
@@ -780,10 +909,59 @@ def main() -> int:
         if drama_score >= 3 and 1 <= i < len(bounds) - 1:
             drama_candidates.append((drama_score, i))
 
+        # Alternate champ / contrechamp (`reverse`) + 3/4 & side perspectives so multi-shot scenes never stare at 1 flat wall
+        speech_or_react = bool(set(clause_tokens) & SPEECH_REACTION_WORDS) or any(
+            c in "".join(str(w.get("p") or "") for w in chunk) for c in "?!"
+        )
+        crossing_clause = bool(set(clause_tokens) & {"marche", "entre", "sorti", "sortie", "approche", "couloir", "escalier", "porte", "traverse", "avance", "couru"})
+        is_char_shot = room != DIAGRAM and not is_title and "insert" not in size and "establishing" not in size
+        if not is_char_shot or not same_room:
+            shot_view = "3/4-left" if (is_char_shot and i % 3 == 2) else "front"
+            front_run_in_room = 1 if is_char_shot else 0
+        elif ("close" in size or "medium" in size) and prev_view in {"front", "3/4-left", "3/4-right"} and (speech_or_react or front_run_in_room >= 2):
+            shot_view = "reverse"
+            front_run_in_room = 0
+        elif crossing_clause and prev_view not in {"left", "right"}:
+            shot_view = "left" if i % 2 == 0 else "right"
+            front_run_in_room = 0
+        elif "wide" in size and prev_view == "front":
+            shot_view = "3/4-right" if i % 2 == 0 else "3/4-left"
+            front_run_in_room += 1
+        elif prev_view == "reverse" and i % 3 == 1:
+            shot_view = "3/4-left" if (i // 3) % 2 == 0 else "3/4-right"
+            front_run_in_room = 1
+        else:
+            shot_view = "front"
+            front_run_in_room += 1
+        prev_view = shot_view
+
+        # Vary camera motion (`push`, `pull`, `pan`, `track`, `whip`, `still`) from shot semantics; never repeat 3 times in a row
+        if is_title or "insert" in size:
+            cand_moves = ["push", "still"]
+        elif crossing_clause:
+            cand_moves = ["track", "pan", "push"]
+        elif drama_score >= 4 and i > 1:
+            cand_moves = ["whip", "push", "still"]
+        elif "wide" in size or "establishing" in size:
+            cand_moves = ["pan", "track", "pull", "push"] if i % 2 == 0 else ["pull", "pan", "still"]
+        elif "close" in size:
+            cand_moves = ["push", "still", "pull"] if (drama_score >= 2 or i % 2 == 0) else ["still", "push", "pull"]
+        else:
+            order = ["still", "pan", "push", "pull", "track"]
+            rot = i % len(order)
+            cand_moves = order[rot:] + order[:rot]
+        shot_move = next(
+            (m for m in cand_moves if not (len(prev_moves) >= 2 and prev_moves[-1] == m and prev_moves[-2] == m)),
+            cand_moves[0],
+        )
+        prev_moves.append(shot_move)
+
         shot_entry: dict = {
             "id": f"S{i + 1}",
             "size": size,
             "set": room,
+            "view": shot_view,
+            "move": shot_move,
             "key": max(10, min(max(10, span - 4), round(span * 0.55))),
             "note": label,
             # the staging card: filled by the agent (stage_shots) before the shot is coded

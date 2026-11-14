@@ -19,8 +19,25 @@ export class Bus {
   emit(threadId: string, type: string, data: unknown): AgentEvent {
     const event: AgentEvent = { seq: ++this.seq, type, data, at: new Date().toISOString() };
     const buf = this.buffer.get(threadId) ?? [];
-    buf.push(event);
-    if (buf.length > this.cap) buf.splice(0, buf.length - this.cap);
+    const last = buf[buf.length - 1];
+    // Coalesce consecutive assistant_delta chunks inside the bounded replay buffer so a 500-token stream
+    // never evicts structural events (tool_call, approval_request, turn_start), while live subscribers get every delta.
+    if (
+      type === 'assistant_delta' &&
+      last?.type === 'assistant_delta' &&
+      typeof (last.data as any)?.text === 'string' &&
+      typeof (data as any)?.text === 'string'
+    ) {
+      buf[buf.length - 1] = {
+        seq: event.seq,
+        type: 'assistant_delta',
+        data: { text: `${(last.data as any).text}${(data as any).text}` },
+        at: event.at,
+      };
+    } else {
+      buf.push(event);
+      if (buf.length > this.cap) buf.splice(0, buf.length - this.cap);
+    }
     this.buffer.set(threadId, buf);
     for (const fn of this.subs.get(threadId) ?? []) {
       try {
@@ -32,8 +49,15 @@ export class Bus {
     return event;
   }
 
-  replay(threadId: string): AgentEvent[] {
-    return [...(this.buffer.get(threadId) ?? [])];
+  replay(threadId: string, afterSeq = 0): AgentEvent[] {
+    const list = this.buffer.get(threadId) ?? [];
+    return afterSeq > 0 ? list.filter((e) => e.seq > afterSeq) : [...list];
+  }
+
+  lastSeq(threadId?: string): number {
+    if (!threadId) return this.seq;
+    const list = this.buffer.get(threadId);
+    return list && list.length > 0 ? list[list.length - 1]!.seq : this.seq;
   }
 
   subscribe(threadId: string, fn: (e: AgentEvent) => void): () => void {

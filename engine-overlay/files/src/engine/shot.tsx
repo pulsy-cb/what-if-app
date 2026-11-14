@@ -3,8 +3,8 @@ import { STUDIO } from '../studio.config';
 import { Stage, Staged, StageItem, Duo } from './stage';
 import type { StageBeat } from './stage';
 import type { DuoAction, Place } from './stage';
-import type { Placed } from './rooms';
-import { mirrorSpot, mirrorYaw } from './rooms';
+import type { Placed, PlaceView } from './rooms';
+import { mirrorSpot, mirrorYaw, spotForView, yawForView } from './rooms';
 import type { PersonLook } from './person';
 import { bodyOf } from './person';
 import type { ActName, OwnActionSpec, Stance } from './actions';
@@ -28,9 +28,11 @@ import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec }
 // way out: a literal camera, a literal position, `extra` for your own SVG, or a hand-written shot beside this one.
 
 type ShotProps = { t: number; len: number; f?: number };
-/** 'deep': two depths in one frame, the nearest person large in the lower half and the others small behind */
-export type CamSize = 'establishing' | 'wide' | 'medium' | 'close' | 'deep';
+/** 'deep': two depths in one frame; 'ots': over-the-shoulder with blurred interlocutor amorce; 'pov': first-person view */
+export type CamSize = 'establishing' | 'wide' | 'medium' | 'close' | 'deep' | 'ots' | 'pov';
 export type CamSpec = CamSize | { x: number; y: number; zoom: number };
+export type ForegroundKind = 'auto' | 'plant' | 'doorframe' | 'lamp' | 'chair' | 'curtain' | 'none';
+export type ForegroundSpec = ForegroundKind | { kind: Exclude<ForegroundKind, 'auto' | 'none'>; side?: 'left' | 'right' };
 
 type Timed<T> = T | ((t: number, len: number) => T);
 export type FaceExpr = Expr | 'sad' | 'angry' | 'scared' | 'surprised' | 'smile' | 'calm';
@@ -42,8 +44,8 @@ export type ReachTarget = number | string | { u: number; w: number; v?: number }
 export type ReachSpec = { to: ReachTarget; side?: 'L' | 'R'; part?: 'head' | 'chest' | 'hand' };
 /** from frame `at`, this person does something else. Frames are the shot's own clock (0..len): use the word frames given for the shot. */
 export type PersonBeat = { at: number; act?: ActName | OwnActionSpec; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null };
-/** from frame `at`, the camera changes: another size, another person, or a shake (an impact) */
-export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level' };
+/** from frame `at`, the camera changes: another size, another person, a reverse/side-angle cut, a zone shift, or a shake */
+export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level'; view?: PlaceView; zone?: string; cut?: boolean };
 export type PersonSpec = {
   who: PersonLook;
   /** turn toward this person (index in people) */ look?: number;
@@ -87,12 +89,15 @@ export type ShotSpec = {
   place: Placed;
   /** how close: establishing, wide, medium, close; or a literal camera */ cam?: CamSpec;
   /** which person the camera is on: index in `people`, default the first */ on?: number;
-  /** slow move during the shot; default a gentle push-in */ move?: 'push' | 'pull' | 'still';
+  /** slow move during the shot; default a gentle push-in */ move?: 'push' | 'pull' | 'still' | 'pan' | 'track' | 'whip';
   /** depth kept sharp; the rest softens. Close-ups do it on their own (soft background), medium shots a little */ focus?: number;
   /** 'sharp' keeps the room sharp in a close-up (to read a board, a screen) */ background?: 'soft' | 'sharp';
-  /** 'reverse': the reverse angle. The camera looks at the opposite wall, people keep their places and are seen from the
-   * other side (a face becomes a back). Alternate it with the normal view in a dialogue: shot / reverse shot. */
-  view?: 'front' | 'reverse';
+  /** camera perspective in the room: 'front' | 'reverse' | 'left' | 'right' | '3/4-left' | '3/4-right' */
+  view?: PlaceView;
+  /** sub-zone or piece id to anchor framing inside the room ('window', 'door', 'sofa', 'counter', 'left', 'right') */
+  zone?: string;
+  /** soft-blurred foreground depth silhouette with camera parallax ('auto' | 'plant' | 'doorframe' | 'lamp' | 'chair' | 'curtain' | 'none') */
+  foreground?: ForegroundSpec;
   /** 'low': the camera looks up, the person looms and the ceiling shows; 'high': it looks down, the person shrinks over the floor */
   angle?: 'low' | 'high';
   /** camera changes during the shot: a punch-in on the key word, a switch to the other person, a shake */ beats?: CamBeat[];
@@ -117,6 +122,9 @@ export type ShotSpec = {
 
 const PORTRAIT = STUDIO.height > STUDIO.width;
 const FRAME = PORTRAIT ? { w: 900, h: 1600 } : { w: 1920, h: 1080 };
+const SCREEN = PORTRAIT
+  ? { x0: 510, y0: -260, w: 900, h: 1600, x1: 1410, y1: 1340 }
+  : { x0: 0, y0: 0, w: 1920, h: 1080, x1: 1920, y1: 1080 };
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const ease01 = (v: number) => { const k = clamp(v, 0, 1); return k * k * (3 - 2 * k); };
 const BODY = 378;
@@ -133,6 +141,8 @@ export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number 
     wide: { height: 378 * s, width: 620 * s, share: PORTRAIT ? 0.46 : 0.62, chest: 0.52 },
     // headroom: buns, afros and a push-in of 5 % took the crown to the edge (the-er, la-promesse, 2026-11-11)
     medium: { height: 250 * s, width: 400 * s, share: PORTRAIT ? 0.5 : 0.68, chest: 0.74 },
+    ots: { height: 226 * s, width: 356 * s, share: PORTRAIT ? 0.48 : 0.68, chest: 0.79 },
+    pov: { height: 245 * s, width: 390 * s, share: PORTRAIT ? 0.5 : 0.66, chest: 0.75 },
     close: { height: 190 * s, width: 280 * s, share: PORTRAIT ? 0.44 : 0.66, chest: 0.87 },
   };
   const c = fit[size];
@@ -191,6 +201,106 @@ const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L
 
 const sortBeats = <T extends { at: number },>(b: T[] | undefined): T[] => [...(b ?? [])].sort((x, y) => x.at - y.at);
 
+/** Screen-space blurred shoulder & back-of-head amorce of the interlocutor for over-the-shoulder (`cam: 'ots'`) shots. */
+const OtsAmorce: React.FC<{ who: PersonLook; side: 'left' | 'right'; shiftX: number; t: number }> = ({ who, side, shiftX, t }) => {
+  const rec = who as unknown as Record<string, string | undefined>;
+  const jacket = rec.jacket ?? '#2B3648';
+  const jacketShade = rec.jacketShade ?? '#1B2330';
+  const skin = rec.skinShade ?? rec.skin ?? '#C59675';
+  const hair = rec.hair ?? '#221A18';
+  const w = SCREEN.w * (PORTRAIT ? 0.34 : 0.27);
+  const h = SCREEN.h * (PORTRAIT ? 0.44 : 0.58);
+  const breathe = Math.sin(t / 18) * 3;
+  const anchorX = side === 'left' ? SCREEN.x0 + w * 0.34 + shiftX : SCREEN.x1 - w * 0.34 + shiftX;
+  const baseY = SCREEN.y1 + 40 + breathe;
+  const flip = side === 'left' ? 1 : -1;
+  return (
+    <g filter="url(#blur6)" opacity={0.94} data-amorce="ots">
+      <g transform={`translate(${anchorX} ${baseY}) scale(${flip} 1)`}>
+        <path d={`M ${-w * 0.9} 40 C ${-w * 0.85} ${-h * 0.42}, ${-w * 0.2} ${-h * 0.5}, ${w * 0.68} ${-h * 0.22} L ${w * 0.82} 40 Z`} fill={jacketShade} />
+        <path d={`M ${-w * 0.72} 40 C ${-w * 0.66} ${-h * 0.36}, ${-w * 0.12} ${-h * 0.44}, ${w * 0.56} ${-h * 0.18} L ${w * 0.68} 40 Z`} fill={jacket} />
+        <rect x={-w * 0.18} y={-h * 0.62} width={w * 0.28} height={h * 0.24} rx={w * 0.08} fill={skin} />
+        <ellipse cx={w * 0.17} cy={-h * 0.73} rx={w * 0.06} ry={h * 0.065} fill={skin} />
+        <ellipse cx={-w * 0.04} cy={-h * 0.78} rx={w * 0.26} ry={h * 0.22} fill={hair} />
+      </g>
+    </g>
+  );
+};
+
+/** Screen-space subjective hands (and optional held item) at the bottom of the frame for `cam: 'pov'`. */
+const PovHands: React.FC<{ who?: PersonLook; heldNode?: React.ReactNode; shiftX: number; t: number }> = ({ who, heldNode, shiftX, t }) => {
+  const rec = (who ?? {}) as unknown as Record<string, string | undefined>;
+  const skin = rec.skin ?? '#E5B895';
+  const skinShade = rec.skinShade ?? '#C69572';
+  const sleeve = rec.jacket ?? '#2F3B4E';
+  const bobX = Math.sin(t / 15) * 6 + shiftX * 0.5;
+  const bobY = Math.cos(t / 19) * 5;
+  const u = SCREEN.w * (PORTRAIT ? 0.22 : 0.14);
+  const lx = SCREEN.x0 + SCREEN.w * 0.2 + bobX;
+  const rx = SCREEN.x1 - SCREEN.w * 0.2 + bobX;
+  const by = SCREEN.y1 + 26 + bobY;
+  return (
+    <g data-amorce="pov">
+      <g transform={`translate(${lx} ${by}) rotate(14)`}>
+        <rect x={-u * 0.42} y={-u * 0.55} width={u * 0.84} height={u * 1.1} rx={u * 0.22} fill={sleeve} />
+        <ellipse cx={u * 0.08} cy={-u * 0.72} rx={u * 0.36} ry={u * 0.3} fill={skin} />
+        <ellipse cx={u * 0.38} cy={-u * 0.66} rx={u * 0.16} ry={u * 0.11} fill={skinShade} />
+      </g>
+      <g transform={`translate(${rx} ${by}) rotate(-14)`}>
+        {heldNode ? <g transform={`translate(${-u * 0.16} ${-u * 1.05}) scale(${PORTRAIT ? 1.55 : 1.85})`}>{heldNode}</g> : null}
+        <rect x={-u * 0.42} y={-u * 0.55} width={u * 0.84} height={u * 1.1} rx={u * 0.22} fill={sleeve} />
+        <ellipse cx={-u * 0.08} cy={-u * 0.72} rx={u * 0.36} ry={u * 0.3} fill={skin} />
+        <ellipse cx={-u * 0.38} cy={-u * 0.66} rx={u * 0.16} ry={u * 0.11} fill={skinShade} />
+      </g>
+    </g>
+  );
+};
+
+/** Screen-space soft-blurred foreground silhouette with 1.8x horizontal parallax for multiplane 2.5D depth. */
+const ForegroundAmorce: React.FC<{ spec: ForegroundSpec | undefined; tokens: Placed['tokens']; sideHint: 'left' | 'right'; parallaxX: number; zoomK: number; seed: number }> = ({ spec, tokens, sideHint, parallaxX, zoomK, seed }) => {
+  if (!spec || spec === 'none') return null;
+  const AUTO_KINDS: Exclude<ForegroundKind, 'auto' | 'none'>[] = ['plant', 'doorframe', 'lamp', 'curtain', 'chair'];
+  const kind = typeof spec === 'string' ? (spec === 'auto' ? AUTO_KINDS[Math.abs(seed) % AUTO_KINDS.length]! : spec) : spec.kind;
+  const side = typeof spec === 'object' && spec.side ? spec.side : sideHint;
+  const w = SCREEN.w * (PORTRAIT ? 0.22 : 0.16);
+  const h = SCREEN.h;
+  const edgeX = side === 'left' ? SCREEN.x0 : SCREEN.x1;
+  const flip = side === 'left' ? 1 : -1;
+  return (
+    <g filter="url(#blur6)" opacity={0.82} data-foreground={kind}>
+      <g transform={`translate(${edgeX + parallaxX} ${SCREEN.y0}) scale(${flip * zoomK} ${zoomK})`}>
+        {kind === 'doorframe' ? (
+          <g>
+            <rect x={-w * 0.35} y={-60} width={w * 0.95} height={h + 120} fill={tokens.trim} />
+            <rect x={w * 0.48} y={-60} width={w * 0.14} height={h + 120} fill={tokens.side} opacity={0.7} />
+          </g>
+        ) : kind === 'curtain' ? (
+          <g>
+            <path d={`M ${-w * 0.3} -40 L ${w * 0.85} -40 Q ${w * 0.62} ${h * 0.48} ${w * 0.92} ${h + 40} L ${-w * 0.3} ${h + 40} Z`} fill={tokens.curtain} />
+            <path d={`M ${w * 0.28} -40 Q ${w * 0.14} ${h * 0.5} ${w * 0.38} ${h + 40}`} stroke="#000" strokeOpacity={0.22} strokeWidth={14} fill="none" />
+          </g>
+        ) : kind === 'lamp' ? (
+          <g>
+            <rect x={w * 0.18} y={h * 0.34} width={w * 0.12} height={h * 0.72} fill={tokens.metal} />
+            <polygon points={`${-w * 0.15},${h * 0.36} ${w * 0.88},${h * 0.36} ${w * 0.62},${h * 0.14} ${w * 0.04},${h * 0.14}`} fill={tokens.wood.side} />
+          </g>
+        ) : kind === 'chair' ? (
+          <g>
+            <rect x={-w * 0.2} y={h * 0.62} width={w * 1.05} height={h * 0.44} rx={w * 0.14} fill={tokens.wood.side} />
+            <rect x={w * 0.62} y={h * 0.56} width={w * 0.18} height={h * 0.5} rx={w * 0.06} fill={tokens.wood.front} />
+          </g>
+        ) : (
+          <g fill="#1A2E24">
+            <path d={`M ${-w * 0.2} ${h * 0.88} Q ${w * 0.45} ${h * 0.62} ${w * 1.05} ${h * 0.68} Q ${w * 0.55} ${h * 0.82} ${-w * 0.2} ${h * 0.96} Z`} />
+            <path d={`M ${-w * 0.2} ${h * 0.76} Q ${w * 0.5} ${h * 0.44} ${w * 0.96} ${h * 0.46} Q ${w * 0.46} ${h * 0.64} ${-w * 0.2} ${h * 0.84} Z`} />
+            <path d={`M ${-w * 0.2} ${h * 0.64} Q ${w * 0.35} ${h * 0.3} ${w * 0.76} ${h * 0.26} Q ${w * 0.34} ${h * 0.48} ${-w * 0.2} ${h * 0.72} Z`} />
+          </g>
+        )}
+      </g>
+    </g>
+  );
+};
+
 /** Turn a description into a shot. */
 export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
   const pl0 = spec.place as unknown as { items?: unknown; ground?: unknown } | string | undefined;
@@ -198,10 +308,35 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     throw new Error(`shot({ place }) needs what place('name') returns, got ${typeof pl0 === 'string' ? `the string "${pl0}"` : pl0 === undefined ? 'nothing (undefined: is the place defined above this shot, and exported from shared.tsx?)' : 'something else'}. Write const ROOM = place('classroom') once in shared.tsx and pass place: ROOM.`);
   }
   const ShotComp: React.FC<ShotProps> = ({ t, len }) => {
-    const reverse = spec.view === 'reverse';
-    const pl = reverse ? spec.place.reverse : spec.place;
-    const flipYaw = (y: number | undefined) => (y === undefined || !reverse ? y : mirrorYaw(y));
-    const flipAt = <T extends Place>(at: T): Place => (reverse && 'u' in at ? mirrorSpot(at as { u: number; w: number }) : at);
+    let camNow = { cam: spec.cam ?? ('wide' as CamSpec), on: spec.duo ? -1 : spec.on ?? 0 };
+    let camPrev: typeof camNow | null = null;
+    let camAt = 0;
+    let camCut = false;
+    let shake = 0;
+    let angle: 'low' | 'high' | 'level' = spec.angle ?? 'level';
+    let viewNow: PlaceView = spec.view ?? 'front';
+    let zoneNow: string | undefined = spec.zone;
+    for (const b of sortBeats(spec.beats)) {
+      if (b.at > t) break;
+      if (b.angle) angle = b.angle;
+      const viewChanged = b.view !== undefined && b.view !== viewNow;
+      if (b.view) viewNow = b.view;
+      const zoneChanged = b.zone !== undefined && b.zone !== zoneNow;
+      if (b.zone) zoneNow = b.zone;
+      if (b.cam !== undefined || b.on !== undefined || viewChanged || zoneChanged || b.cut) {
+        camPrev = camNow;
+        camNow = { cam: b.cam ?? camNow.cam, on: b.on ?? camNow.on };
+        camAt = b.at;
+        camCut = Boolean(b.cut || viewChanged);
+      }
+      if (b.shake) shake = b.shake * Math.max(0, 1 - (t - b.at) / 10);
+    }
+    if (zoneNow === 'door' && spec.view === undefined && !spec.place.has('door') && spec.place.reverse?.has?.('door')) {
+      viewNow = 'reverse';
+    }
+    const pl = typeof spec.place.viewOf === 'function' ? spec.place.viewOf(viewNow) : (viewNow === 'reverse' ? spec.place.reverse : spec.place);
+    const flipYaw = (y: number | undefined) => (viewNow === 'front' ? y : yawForView(y, viewNow));
+    const flipAt = <T extends Place>(at: T): Place => (viewNow !== 'front' && 'u' in at ? spotForView(at as { u: number; w: number }, viewNow) : at);
     const people = spec.people ?? [];
     // how far along a walkTo this person is, 0..1
     const walkK = (p: PersonSpec, at: number = t): number => {
@@ -331,45 +466,96 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const spare = Math.max(0, FRAME.h / zoom - (bottom - top));
       return { x, y: (top + bottom) / 2 + spare * 0.2, zoom };
     };
+    const otsPair = (on: number): { targetIdx: number; otherIdx: number; side: 'left' | 'right' } | null => {
+      if (people.length < 2) return null;
+      const targetIdx = clamp(on < 0 ? 0 : on, 0, people.length - 1);
+      let otherIdx = -1;
+      let best = Infinity;
+      const tx = spotOfPerson(targetIdx).x;
+      for (let i = 0; i < people.length; i++) {
+        if (i === targetIdx) continue;
+        const d = Math.abs(spotOfPerson(i).x - tx);
+        if (d < best) { best = d; otherIdx = i; }
+      }
+      if (otherIdx < 0) return null;
+      const side: 'left' | 'right' = spotOfPerson(otherIdx).x <= tx ? 'left' : 'right';
+      return { targetIdx, otherIdx, side };
+    };
+    const povTargetOf = (on: number): number => {
+      if (!people.length) return -1;
+      const owner = clamp(on < 0 ? 0 : on, 0, people.length - 1);
+      const explicit = people[owner]?.look;
+      if (explicit !== undefined && explicit !== owner && people[explicit]) return explicit;
+      if (people.length >= 2) return owner === 0 ? 1 : 0;
+      return -1;
+    };
     const cameraFor = (c: CamSpec, on: number) => {
       if (c === 'deep') { const d = deepCam(); if (d) return d; }
+      const zCam = zoneNow && typeof pl.zoneOf === 'function' ? pl.zoneOf(zoneNow) : null;
+      if (zCam && typeof c === 'string' && (people.length === 0 || c === 'establishing')) {
+        return { x: zCam.x, y: zCam.y, zoom: PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom };
+      }
+      if (c === 'ots') {
+        const pair = otsPair(on);
+        if (pair) {
+          const raw = frameOn('ots', focusOn(pair.targetIdx), yawAt(pair.targetIdx));
+          const nudge = (pair.side === 'left' ? -1 : 1) * (FRAME.w / raw.zoom) * 0.13;
+          return { x: raw.x + nudge, y: Math.min(raw.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * raw.zoom)), zoom: raw.zoom };
+        }
+        c = 'medium';
+      }
+      if (c === 'pov') {
+        const lookIdx = povTargetOf(on);
+        if (lookIdx >= 0) {
+          const raw = frameOn('pov', focusOn(lookIdx), yawAt(lookIdx));
+          return { x: raw.x, y: Math.min(raw.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * raw.zoom)), zoom: raw.zoom };
+        }
+        if (zCam) return { x: zCam.x, y: zCam.y, zoom: PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom };
+        const ahead = pl.ground.project(0.5, 0.28);
+        return { x: ahead.x, y: ahead.y - 190 * ahead.scale, zoom: PORTRAIT ? 1.75 : 1.18 };
+      }
       const groupWide = c === 'wide' && on === 0 && spec.on === undefined && people.length >= 2;
       const sized = typeof c === 'string' ? frameOn(c, focusOn(groupWide ? -2 : on), !groupWide && people[on] ? yawAt(on) : 0) : c;
+      const zoned = zCam && typeof c === 'string' && c === 'wide'
+        ? { ...sized, x: sized.x * 0.65 + zCam.x * 0.35, y: sized.y * 0.75 + zCam.y * 0.25 }
+        : sized;
       // a tall frame must not reach below the room's near floor edge, where nothing is drawn
-      return typeof c === 'string' && c !== 'establishing' ? { ...sized, y: Math.min(sized.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * sized.zoom)) } : sized;
+      return typeof c === 'string' && c !== 'establishing' ? { ...zoned, y: Math.min(zoned.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * zoned.zoom)) } : zoned;
     };
-    // the camera's moments: the start, then each camera beat; a change is a quick 5-frame move
-    let camNow = { cam: spec.cam ?? ('wide' as CamSpec), on: spec.duo ? -1 : spec.on ?? 0 };
-    let camPrev: typeof camNow | null = null;
-    let camAt = 0;
-    let shake = 0;
-    let angle: 'low' | 'high' | 'level' = spec.angle ?? 'level';
-    for (const b of sortBeats(spec.beats)) {
-      if (b.at > t) break;
-      if (b.angle) angle = b.angle;
-      if (b.cam !== undefined || b.on !== undefined) {
-        camPrev = camNow;
-        camNow = { cam: b.cam ?? camNow.cam, on: b.on ?? camNow.on };
-        camAt = b.at;
-      }
-      if (b.shake) shake = b.shake * Math.max(0, 1 - (t - b.at) / 10);
-    }
     const target = cameraFor(camNow.cam, camNow.on);
-    const blend = camPrev ? ease01((t - camAt) / 5) : 1;
+    const blend = camPrev ? (camCut ? 1 : ease01((t - camAt) / 5)) : 1;
     const from = camPrev ? cameraFor(camPrev.cam, camPrev.on) : target;
     const base = { x: from.x + (target.x - from.x) * blend, y: from.y + (target.y - from.y) * blend, zoom: from.zoom + (target.zoom - from.zoom) * blend };
     const k = len > 0 ? clamp(t / len, 0, 1) : 0;
     const move = spec.move ?? 'push';
-    const zoom = base.zoom * (move === 'push' ? 1 + 0.05 * k : move === 'pull' ? 1.05 - 0.05 * k : 1);
-    // a close-up separates the face from the room: the room goes soft, people at another depth too
+    const zoom = base.zoom * (
+      move === 'push' ? 1 + 0.05 * k :
+      move === 'pull' ? 1.05 - 0.05 * k :
+      move === 'pan' ? 1 + 0.015 * k :
+      move === 'track' ? 1 + 0.02 * k :
+      move === 'whip' ? 1 + 0.03 * (1 - ease01(t / 9)) :
+      1
+    );
     const size = typeof camNow.cam === 'string' ? camNow.cam : null;
-    const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'medium') && people[camNow.on];
-    const focus = spec.focus ?? (soft ? ('u' in whereOf(people[camNow.on]!, camNow.on) ? (whereOf(people[camNow.on]!, camNow.on) as { w: number }).w : undefined) : undefined);
-    const shellFilter = soft ? (size === 'close' ? 'url(#blur6)' : 'url(#blur3)') : undefined;
+    const isPov = size === 'pov';
+    const povOwner = isPov && people.length > 0 ? clamp(camNow.on < 0 ? 0 : camNow.on, 0, people.length - 1) : -1;
+    const otsActive = size === 'ots' ? otsPair(camNow.on) : null;
+    const panX = (
+      move === 'pan' ? (k - 0.5) * (FRAME.w / zoom) * 0.06 :
+      move === 'track' ? (k - 0.5) * (FRAME.w / zoom) * 0.13 :
+      move === 'whip' ? (1 - ease01(t / 9)) * (FRAME.w / zoom) * 0.26 :
+      0
+    ) + (isPov ? Math.sin(t / 14) * (6 / zoom) : 0);
+    const panY = isPov ? Math.cos(t / 19) * (4 / zoom) : 0;
+    // a close-up or OTS separates the face from the room: the room goes soft, people at another depth too
+    const focusSubjectIdx = otsActive ? otsActive.targetIdx : isPov ? povTargetOf(camNow.on) : camNow.on;
+    const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'ots' || size === 'medium') && people[focusSubjectIdx];
+    const focus = spec.focus ?? (soft ? ('u' in whereOf(people[focusSubjectIdx]!, focusSubjectIdx) ? (whereOf(people[focusSubjectIdx]!, focusSubjectIdx) as { w: number }).w : undefined) : undefined);
+    const shellFilter = soft ? (size === 'close' || size === 'ots' ? 'url(#blur6)' : 'url(#blur3)') : undefined;
     // an angle in a flat drawing: stretch the world about the subject's feet and move the frame toward ceiling or floor
-    const feet = people[camNow.on] ? spotOfPerson(camNow.on).y : base.y;
-    const tall = angle === 'low' ? 1.08 : angle === 'high' ? 0.93 : 1;
-    const lift = angle === 'low' ? -0.1 : angle === 'high' ? 0.1 : 0;
+    const feet = people[focusSubjectIdx] ? spotOfPerson(focusSubjectIdx).y : base.y;
+    const tall = angle === 'low' ? 1.14 : angle === 'high' ? 0.88 : 1;
+    const lift = angle === 'low' ? -0.15 : angle === 'high' ? 0.15 : 0;
     const viewH = FRAME.h / zoom;
     const angleT = tall === 1 ? undefined : `translate(0 ${feet}) scale(1 ${tall}) translate(0 ${-feet})`;
     const behindNode = spec.behind ? (typeof spec.behind === 'function' ? spec.behind(t, len) : spec.behind) : null;
@@ -379,9 +565,15 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       throw new Error(`extra takes SVG, but got a piece description {p: "${(pieceLike as { p: string }).p}", ...}. A piece of furniture or decor goes in the place: place('name', { add: [{ p: "${(pieceLike as { p: string }).p}", id: "...", at: { u, w } }] }), and shot({ place }) uses that. For an object that sits on a piece use shot({ props: [{ on: "<piece id>", node: <g>...</g> }] }).`);
     }
     const jolt = shake ? { x: Math.sin(t * 2.7) * shake, y: Math.cos(t * 3.1) * shake * 0.6 } : { x: 0, y: 0 };
+    const parallaxX = -panX * zoom * 1.8 - (base.x - 900) * 0.1;
+    const fgZoomK = 1 + Math.max(0, (zoom / Math.max(0.4, base.zoom) - 1) * 1.4);
+    const fgSeed = Math.round(pl.tokens.wall.charCodeAt(1) + people.length * 7 + (viewNow === 'reverse' ? 3 : viewNow === 'left' ? 1 : viewNow === 'right' ? 2 : 0));
+    const fgSideHint: 'left' | 'right' = otsActive ? (otsActive.side === 'left' ? 'right' : 'left') : base.x > 920 ? 'left' : 'right';
+    const povHoldSpec = povOwner >= 0 && people[povOwner] ? holdOf(people[povOwner]!.hold) : undefined;
+    const povHeldNode = povHoldSpec ? (povHoldSpec.node ?? held(povHoldSpec.what as string, povHoldSpec)) : undefined;
     return (
       <g>
-      <g transform={camT(base.x + jolt.x / zoom, base.y + lift * viewH + jolt.y / zoom, zoom)}>
+      <g transform={camT(base.x + panX + jolt.x / zoom, base.y + panY + lift * viewH + jolt.y / zoom, zoom)}>
       <g transform={angleT}>
         <Stage ground={pl.ground} t={t} focus={focus}>
           <g filter={shellFilter}>
@@ -390,6 +582,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           {pl.items(t)}
           {behindNode ? <StageItem depth={0.001}>{behindNode}</StageItem> : null}
           {people.flatMap((p, pi) => {
+            if ((isPov && pi === povOwner) || (otsActive && pi === otsActive.otherIdx)) return [];
             // seated on the floor plan with no piece under them: a stool, so nobody sits on thin air (the-er, 2026-11-11)
             if (!p.on && p.stance === 'sit') {
               const at = whereOf(p, pi);
@@ -405,6 +598,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
           })}
           {people.map((p, i) => {
+            if ((isPov && i === povOwner) || (otsActive && i === otsActive.otherIdx)) return null;
             const { who, on, from, dur, stance, rimId, vfx } = p;
             // worn things and an animal's head join whatever the shot drew itself in headGear / torsoGear
             const yawNow = yawAt(i);
@@ -488,7 +682,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         </Stage>
       </g>
       </g>
-      {/* screen space: the title, stamp, tag and overlay must not follow the camera (prof, 2026-11-11: title off-centre and cut in 9:16) */}
+      {/* screen space: foreground depth amorces, OTS shoulder, POV hands, and diegetic cards */}
+      {spec.foreground && spec.foreground !== 'none' ? <ForegroundAmorce spec={spec.foreground} tokens={pl.tokens} sideHint={fgSideHint} parallaxX={parallaxX} zoomK={fgZoomK} seed={fgSeed} /> : null}
+      {otsActive && people[otsActive.otherIdx] ? <OtsAmorce who={people[otsActive.otherIdx]!.who} side={otsActive.side} shiftX={parallaxX * 0.4} t={t} /> : null}
+      {isPov ? <PovHands who={povOwner >= 0 ? people[povOwner]?.who : undefined} heldNode={povHeldNode} shiftX={parallaxX * 0.3} t={t} /> : null}
       {spec.burst ? <ShockBurst {...spec.burst} t={t} /> : null}
       {spec.stamp ? <StampCard {...spec.stamp} t={t} /> : null}
       {spec.tag ? <ValueTag {...spec.tag} t={t} /> : null}
@@ -542,7 +739,9 @@ const wrapText = (text: string, max: number): string[] => {
   return lines.length ? lines : [''];
 };
 
-const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number }> = ({ spec, t, W, H }) => {
+let phoneSeq = 0;
+
+const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number; uid: number }> = ({ spec, t, W, H, uid }) => {
   const accent = spec.accent ?? '#3E7BFA';
   const font = 'system-ui, -apple-system, Segoe UI, sans-serif';
   const fs = W * 0.052;
@@ -584,7 +783,7 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
     return (
       <g>
         <rect width={W} height={H} fill="#1B2440" />
-        <rect width={W} height={H} fill="url(#phoneLockGlow)" />
+        <rect width={W} height={H} fill={`url(#phoneLockGlow-${uid})`} />
         {status}
         <text x={W / 2} y={H * 0.21} textAnchor="middle" fontSize={fs * 4.2} fontWeight={300} fill="#F4F6FA" fontFamily={font}>{spec.time ?? '21:47'}</text>
         {banner}
@@ -662,12 +861,12 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
   return (
     <g>
       <defs>
-        <clipPath id="phoneChatClip">
+        <clipPath id={`phoneChatClip-${uid}`}>
           <rect x={0} y={headerH} width={W} height={H - headerH - inputH} />
         </clipPath>
       </defs>
       <rect width={W} height={H} fill="#10141C" />
-      <g clipPath="url(#phoneChatClip)">
+      <g clipPath={`url(#phoneChatClip-${uid})`}>
         {blocks.map(({ m, lines, h }, i) => {
           const mine = m.from === 'me';
           const k = ease01((t - m.at) / 6);
@@ -703,6 +902,7 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
 
 /** A full-frame phone insert: `export const S5 = phoneShot({ name: 'Camille', messages: [{ at: 36, text: 'Tu me manques' }] })`. */
 export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
+  const uid = ++phoneSeq;
   const Back = spec.back ? shot({ place: spec.back, cam: 'wide', move: 'still' }) : null;
   const PhoneComp: React.FC<ShotProps> = ({ t, len }) => {
     const k = len > 0 ? clamp(t / len, 0, 1) : 0;
@@ -728,7 +928,7 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
         )}
         <rect x={-2000} y={-2000} width={6000} height={6000} fill="#000" opacity={0.35} />
         <defs>
-          <radialGradient id="phoneLockGlow" cx="0.5" cy="0.3" r="0.8">
+          <radialGradient id={`phoneLockGlow-${uid}`} cx="0.5" cy="0.3" r="0.8">
             <stop offset="0" stopColor="#5A4E9A" stopOpacity={0.9} />
             <stop offset="1" stopColor="#1B2440" stopOpacity={0} />
           </radialGradient>
@@ -738,7 +938,7 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
           <rect x={cx - W / 2} y={cy - H / 2} width={W} height={H} rx={W * 0.12} fill={spec.case ?? '#1F2430'} />
           <svg x={cx - W / 2 + bezel} y={cy - H / 2 + bezel} width={W - bezel * 2} height={H - bezel * 2} viewBox={`0 0 ${W - bezel * 2} ${H - bezel * 2}`}>
             <rect width={W - bezel * 2} height={H - bezel * 2} rx={W * 0.09} fill="#10141C" />
-            <PhoneScreenUI spec={spec} t={t} W={W - bezel * 2} H={H - bezel * 2} />
+            <PhoneScreenUI spec={spec} t={t} W={W - bezel * 2} H={H - bezel * 2} uid={uid} />
           </svg>
           <rect x={cx - W * 0.12} y={cy - H / 2 + bezel * 1.6} width={W * 0.24} height={bezel * 1.1} rx={bezel * 0.55} fill="#05070A" />
           {skin ? (

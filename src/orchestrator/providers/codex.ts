@@ -9,6 +9,19 @@ export const CODEX_DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
+/** Strict hostname check so Codex OAuth tokens are never sent to external hosts via unanchored URL substrings. */
+export function isAllowedCodexBase(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const h = u.hostname.toLowerCase();
+    if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return true;
+    return u.protocol === 'https:' && (h === 'chatgpt.com' || h.endsWith('.chatgpt.com'));
+  } catch {
+    return false;
+  }
+}
+
 export type CodexAuthData = {
   accessToken: string;
   refreshToken?: string;
@@ -72,55 +85,68 @@ function readCodexAuth(authPath: string): CodexAuthData {
   };
 }
 
+const inflightRefreshByPath = new Map<string, Promise<CodexAuthData>>();
+
 async function refreshCodexAuth(auth: CodexAuthData, tokenUrl = CODEX_OAUTH_TOKEN_URL): Promise<CodexAuthData> {
   if (!auth.refreshToken) return auth;
-  const form = new URLSearchParams({
-    grant_type: 'refresh_token',
-    client_id: CODEX_OAUTH_CLIENT_ID,
-    refresh_token: auth.refreshToken,
-  });
-  const res = await fetch(tokenUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: form.toString(),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Codex OAuth token refresh failed (${res.status}): ${body.slice(0, 400)}`);
-  }
-  const updated = (await res.json()) as Record<string, any>;
-  const nextAccess = String(updated.access_token ?? '');
-  if (!nextAccess) throw new Error('Codex OAuth token refresh returned no access_token');
-  const nextRefresh = updated.refresh_token ? String(updated.refresh_token) : auth.refreshToken;
+  const inflightKey = `${auth.authPath}|${tokenUrl}`;
+  const existing = inflightRefreshByPath.get(inflightKey);
+  if (existing) return existing;
 
-  const nextRaw = { ...auth.raw };
-  if (nextRaw.tokens && typeof nextRaw.tokens === 'object') {
-    nextRaw.tokens = {
-      ...nextRaw.tokens,
-      access_token: nextAccess,
-      ...(nextRefresh ? { refresh_token: nextRefresh } : {}),
-      ...(updated.id_token ? { id_token: updated.id_token } : {}),
+  const task = (async (): Promise<CodexAuthData> => {
+    const form = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CODEX_OAUTH_CLIENT_ID,
+      refresh_token: auth.refreshToken!,
+    });
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Codex OAuth token refresh failed (${res.status}): ${body.slice(0, 400)}`);
+    }
+    const updated = (await res.json()) as Record<string, any>;
+    const nextAccess = String(updated.access_token ?? '');
+    if (!nextAccess) throw new Error('Codex OAuth token refresh returned no access_token');
+    const nextRefresh = updated.refresh_token ? String(updated.refresh_token) : auth.refreshToken;
+
+    const nextRaw = { ...auth.raw };
+    if (nextRaw.tokens && typeof nextRaw.tokens === 'object') {
+      nextRaw.tokens = {
+        ...nextRaw.tokens,
+        access_token: nextAccess,
+        ...(nextRefresh ? { refresh_token: nextRefresh } : {}),
+        ...(updated.id_token ? { id_token: updated.id_token } : {}),
+      };
+    } else {
+      nextRaw.access_token = nextAccess;
+      if (nextRefresh) nextRaw.refresh_token = nextRefresh;
+    }
+    nextRaw.last_refresh = new Date().toISOString();
+
+    try {
+      const tmp = `${auth.authPath}.tmp.${process.pid}.${Date.now()}`;
+      fs.writeFileSync(tmp, JSON.stringify(nextRaw, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, auth.authPath);
+    } catch {
+      // Read-only mount fallback: keep refreshed token in memory for this request
+    }
+
+    return {
+      ...auth,
+      accessToken: nextAccess,
+      refreshToken: nextRefresh,
+      raw: nextRaw,
     };
-  } else {
-    nextRaw.access_token = nextAccess;
-    if (nextRefresh) nextRaw.refresh_token = nextRefresh;
-  }
-  nextRaw.last_refresh = new Date().toISOString();
+  })().finally(() => {
+    inflightRefreshByPath.delete(inflightKey);
+  });
 
-  try {
-    const tmp = `${auth.authPath}.tmp.${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(nextRaw, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, auth.authPath);
-  } catch {
-    // Read-only mount fallback: keep refreshed token in memory for this request
-  }
-
-  return {
-    ...auth,
-    accessToken: nextAccess,
-    refreshToken: nextRefresh,
-    raw: nextRaw,
-  };
+  inflightRefreshByPath.set(inflightKey, task);
+  return task;
 }
 
 export async function loadValidCodexAuth(
@@ -226,7 +252,7 @@ export function codexProvider(cfg: {
   label?: string;
 }): Provider {
   const rawBase = (cfg.baseURL || CODEX_DEFAULT_BASE_URL).replace(/\/+$/, '');
-  const base = /chatgpt\.com|localhost|127\.0\.0\.1/.test(rawBase) ? rawBase : CODEX_DEFAULT_BASE_URL;
+  const base = isAllowedCodexBase(rawBase) ? rawBase : CODEX_DEFAULT_BASE_URL;
   const authPath = cfg.authPath || defaultCodexAuthPath();
   const { model: normalizedModel } = normalizeCodexModel(cfg.model);
 

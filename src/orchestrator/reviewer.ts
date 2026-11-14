@@ -83,7 +83,7 @@ Vérifie particulièrement ces 9 points critiques :
    - Un plan qui tient plus de 6 s sans évènement casse le rythme.
    - Les personnages sont-ils presque tous de face (les « Mesures automatiques » donnent le nombre de plans orientés) ? Deux personnes qui se parlent doivent se faire face (yaw opposés), pas regarder la caméra.
    - Un groupe de 3 doit être étagé en profondeur.
-   - Les cadrages varient-ils ? Une amorce floue (Foreground) donne-t-elle de la profondeur dans environ un plan sur trois ?
+   - Les points de vue et cadrages varient-ils réellement (champ / contrechamp avec \`view: 'reverse'\`, perspectives diagonales/latérales \`view: '3/4-left' | '3/4-right' | 'left' | 'right'\`, amorce épaule \`cam: 'ots'\` ou vue subjective \`cam: 'pov'\`, sous-zones \`zone\`, plongée/contre-plongée \`angle: 'low' | 'high'\`, amorce floue \`foreground\` / \`Foreground\` / \`cam: 'deep'\`, et coupures vers un lieu secondaire quand le récit change d'espace) ? Les silhouettes d'amorce floues en bord de cadre (\`cam: 'ots'\`, \`foreground\`) et les mains en bas d'écran (\`cam: 'pov'\`) sont des effets cinématographiques intentionnels, jamais des défauts.
 7. **Lisibilité du lieu** : le lieu se reconnaît-il sans la voix ? Les éléments du décor d'origine sans rapport avec l'histoire (démo « 7 × 8 », rideaux et ciel de crépuscule dans une scène de jour) sont des défauts.
 8. **Lumière, contraste, profondeur** : le visage est-il l'élément le plus lumineux de sa zone ? Pas de membre sombre sur mur sombre ?
 9. **Cohérence d'un même lieu** : même disposition, mêmes accessoires, mêmes couleurs d'un plan à l'autre.
@@ -263,7 +263,7 @@ export function accentMetrics(shotsInput: string | EpisodeShotsBundle): string {
     if (/\b(phoneShot|tabletopShot)\s*\(/.test(body)) macroInserts++;
     if (/\b(stamp|tag|title|burst)\s*:|<(StampCard|ValueTag|HookTitle|ShockBurst)\b/.test(body)) stampsTags++;
     if (/\bvfx\s*:\s*\[|<(HeadVfx|FocusRings|Sparkle)\b/.test(body)) headVfx++;
-    if (/\bbeats\s*:\s*\[[^\]]*\b(cam|shake|angle)\s*:/.test(body)) camBeats++;
+    if (/\bbeats\s*:\s*\[[^\]]*\b(cam|shake|angle|view|zone)\s*:/.test(body)) camBeats++;
   }
   return `dynamisme & accents : ${macroInserts} insert(s) macro (phoneShot/tabletopShot) · ${stampsTags} accent(s) écran (stamp/tag/title/burst) · ${headVfx} plan(s) avec micro-VFX personnage · ${camBeats} plan(s) avec changement de cadrage interne (camBeat)`;
 }
@@ -297,8 +297,8 @@ export function staticMetrics(shotsInput: string | EpisodeShotsBundle): string {
     if (acts.length && acts.every((a) => a === 'idle')) idleOnly++;
     for (const a of new Set(acts)) if (a && a !== 'idle') actShots.set(a, (actShots.get(a) ?? 0) + 1);
     const yaws = [...body.matchAll(/\byaw\s*[:=]\s*\{?\s*(-?\d*\.?\d+)/g)].map((m) => Math.abs(Number(m[1])));
-    if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{/.test(body)) oriented++;
-    if (/<Foreground\b|\bforeground\s*:/.test(body)) blur++;
+    if (yaws.some((y) => y >= 0.3) || /\b(tableSit|walkPose|carSit|bedSit)\(|<Duo\b|\bduo\s*:\s*\{|\blook\s*:\s*\d|\bview\s*:\s*['"](3\/4-left|3\/4-right|left|right)['"]/.test(body)) oriented++;
+    if (/<Foreground\b|\bforeground\s*:\s*(?!['"]none['"])|\bcam\s*:\s*['"]ots['"]/.test(body)) blur++;
     else if (/\bfocus\s*[=:]|blur16/.test(body)) focus++;
     if ((body.match(/<(Hero|Staged|Person)\b|\bwho\s*[:=]/g) ?? []).length >= 3) group3++;
   }
@@ -782,7 +782,7 @@ export async function reviewStageCards(provider: Provider, projectRoot: string, 
   if (fs.existsSync(marker)) return null;
   if (shots.some((s) => shotCoded(epDir, String(s.id)))) return null;
   const script = (Array.isArray(ep.script) ? ep.script : []).map((b: any) => String(b?.text ?? '')).join(' ').slice(0, 9_000);
-  const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
+  const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre et même point de vue ; un dialogue entier filmé face au même mur sans contrechamp (view: "reverse") ; un changement de lieu dans le texte qui reste coincé dans l'ancien décor ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
   const user = `## Script\n${script}\n\n## Fiches (format ${ep.aspect ?? '16:9'}, ${shots.length} plans)\n${cards.slice(0, 20_000)}`;
   let issues: { shot: string; problem: string; fix: string }[] = [];
   try {

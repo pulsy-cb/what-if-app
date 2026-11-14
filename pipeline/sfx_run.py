@@ -71,6 +71,8 @@ def resolve_cue(cue: Any, words: list[dict], fps: int, segments: list[dict], sho
             seen += 1
             if seen == nth:
                 return max(0, int(round(float(w.get("s", 0)) * fps)) + off)
+    if s and s not in {"0", "f:0", "s:0"}:
+        print(f"[sfx] warning: unresolved cue '{cue}' -> f:0", file=sys.stderr)
     return 0
 
 
@@ -112,16 +114,20 @@ def loudness(path: Path) -> tuple[float, float]:
     return f(i), f(p)
 
 
-def find_library_clip(lib_dir: Path, name: str, prompt: str, secs: float) -> Path | None:
+def find_library_clip(lib_dir: Path, name: str, prompt: str, secs: float, allow_fuzzy: bool = True) -> Path | None:
     h = hashlib.sha1(f"{prompt}|{secs}".encode()).hexdigest()[:8]
     exact = lib_dir / f"{name}-{h}.mp3"
     if exact.is_file():
         return exact
-    # Prefix match on clip name (e.g. "pop-*.mp3", "music-*.mp3")
-    prefix_matches = sorted(lib_dir.glob(f"{name}-*.mp3"))
-    if prefix_matches:
-        return prefix_matches[0]
-    # Keyword match against cached library names
+    # Prefix match on clip name ONLY when prompt is empty or matches the built-in LIBRARY_CLIPS prompt
+    builtin = LIBRARY_CLIPS.get(name)
+    if not prompt or (builtin and prompt.strip() == str(builtin[0]).strip()):
+        prefix_matches = sorted(lib_dir.glob(f"{name}-*.mp3"))
+        if prefix_matches:
+            return prefix_matches[0]
+    if not allow_fuzzy:
+        return None
+    # Keyword match against cached library names (offline fallback when ElevenLabs is unavailable)
     lower = f"{name} {prompt}".lower()
     synonyms = {
         "music": ["music", "bed", "loop", "bgm"],
@@ -316,7 +322,9 @@ def main(argv: list[str]) -> int:
         secs = float(spec[1]) if isinstance(spec, list) and len(spec) > 1 else 1.0
         h = hashlib.sha1(f"{prompt}|{secs}".encode()).hexdigest()[:8]
         exact = lib_dir / f"{name}-{h}.mp3"
-        direct_prefix = sorted(lib_dir.glob(f"{name}-*.mp3"))
+        builtin_spec = LIBRARY_CLIPS.get(name)
+        is_builtin_prompt = not prompt or (builtin_spec is not None and prompt.strip() == str(builtin_spec[0]).strip())
+        direct_prefix = sorted(lib_dir.glob(f"{name}-*.mp3")) if is_builtin_prompt else []
         p: Path | None = exact if exact.is_file() else (direct_prefix[0] if direct_prefix else None)
         if p is None and api_key and not dry:
             p = generate_missing_elevenlabs_clip(lib_dir, name, prompt, secs, api_key)

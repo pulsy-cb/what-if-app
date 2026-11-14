@@ -219,16 +219,16 @@ def make_app(project: pathlib.Path):
 
             logs: list[str] = []
 
-            def run(cmd: list[str], label: str) -> int:
+            def run(cmd: list[str], label: str, timeout_sec: int = 180) -> int:
                 t = time.perf_counter()
-                proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace")
+                proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_sec)
                 out["timings"][label] = round(time.perf_counter() - t, 3)
                 tail = (proc.stdout or "") + (proc.stderr or "")
                 logs.append(f"$ {' '.join(cmd)}\n{tail[-6000:]}")
                 return proc.returncode
 
             if typecheck:
-                rc = run(["npx", "tsc", "--noEmit"], "typecheck")
+                rc = run(["npx", "tsc", "--noEmit"], "typecheck", 180)
                 out["typecheck_ok"] = rc == 0
                 out["typecheck_log"] = logs[-1][-4000:]
                 if rc != 0 and mode == "check":
@@ -248,7 +248,8 @@ def make_app(project: pathlib.Path):
             if shots_filter:
                 cmd += ["--shots", shots_filter]
             t = time.perf_counter()
-            proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace")
+            node_timeout = max(600, min(2200, int(timeout_ms / 1000) * 12))
+            proc = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=node_timeout)
             out["timings"]["node"] = round(time.perf_counter() - t, 3)
             stdout_lines = (proc.stdout or "").splitlines()
             non_prog = [ln for ln in stdout_lines if not ln.startswith("PROGRESS_JSON:")]
@@ -327,7 +328,7 @@ def mux_local_audio(project: pathlib.Path, slug: str, silent_video: pathlib.Path
             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
             "-shortest", str(target),
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=300)
         return
 
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(silent_video)]
@@ -350,7 +351,16 @@ def mux_local_audio(project: pathlib.Path, slug: str, silent_video: pathlib.Path
         "-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
         "-shortest", str(target),
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, timeout=300)
+
+
+def _get_call_result(call: object, timeout_sec: int = 2400) -> dict:
+    """Safely await a Modal FunctionCall so transient gRPC/worker exceptions trigger retries instead of crashing."""
+    try:
+        res = call.get(timeout=timeout_sec)  # type: ignore[attr-defined]
+        return res if isinstance(res, dict) else {"ok": False, "log": f"unexpected result: {type(res).__name__}"}
+    except Exception as exc:
+        return {"ok": False, "returncode": -1, "log": f"{type(exc).__name__}: {exc}"}
 
 
 # ------------------------------------------------------------------ CLI
@@ -467,9 +477,9 @@ def main(argv: list[str]) -> int:
                         ]
                         done_count = len(chunks) - len(pending)
                         for idx, a, b, cp, call in spawned:
-                            res = call.get(timeout=2400)
+                            res = _get_call_result(call, timeout_sec=2400)
                             if not res.get("ok") or not res.get("video"):
-                                # Retry once on transient worker failure
+                                # Retry once on transient worker or gRPC failure
                                 retry_call = render.spawn(
                                     payload,
                                     args.slug,
@@ -482,7 +492,7 @@ def main(argv: list[str]) -> int:
                                     typecheck=False,
                                     strip_audio=True,
                                 )
-                                res = retry_call.get(timeout=2400)
+                                res = _get_call_result(retry_call, timeout_sec=2400)
                             if not res.get("ok") or not res.get("video"):
                                 elapsed = round(time.perf_counter() - t0, 1)
                                 result(
@@ -519,6 +529,7 @@ def main(argv: list[str]) -> int:
                         "-map", "0:v:0", "-c:v", "copy", str(silent_joined),
                     ],
                     check=True,
+                    timeout=300,
                 )
                 target = pathlib.Path(args.out) if args.out else out_dir / f"{args.slug}-raw.mp4"
                 mux_local_audio(project, args.slug, silent_joined, target)
@@ -555,7 +566,21 @@ def main(argv: list[str]) -> int:
                 typecheck=args.typecheck,
                 strip_audio=True,
             )
-            res = call.get(timeout=2400)
+            res = _get_call_result(call, timeout_sec=2400)
+            if not res.get("ok") and args.mode in ("stills", "video"):
+                retry_call = render.spawn(
+                    payload,
+                    args.slug,
+                    mode=args.mode,
+                    scale=args.scale,
+                    frames=args.frames,
+                    shots_filter=",".join(all_shots),
+                    concurrency=concurrency,
+                    crf=args.crf,
+                    typecheck=args.typecheck,
+                    strip_audio=True,
+                )
+                res = _get_call_result(retry_call, timeout_sec=2400)
     elapsed = round(time.perf_counter() - t0, 1)
 
     if not res.get("ok"):

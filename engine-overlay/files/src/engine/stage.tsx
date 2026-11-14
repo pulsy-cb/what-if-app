@@ -295,7 +295,7 @@ export const Duo: React.FC<{ a: DuoSide; b: DuoSide; action: DuoAction; from?: n
   const { ground, t } = React.useContext(StageCtx);
   if (t === undefined) throw new Error('<Duo> needs the clock: write <Stage t={t} ...>');
   const f = Math.max(0, t - from);
-  const p = Math.min(1, f / (dur ?? DUO_DUR[action]));
+  const p = Math.min(1, f / Math.max(1, dur ?? DUO_DUR[action]));
   const setup = (s: DuoSide, other: DuoSide) => {
     const spot = spotOf(s.at, ground);
     const there = spotOf(other.at, ground);

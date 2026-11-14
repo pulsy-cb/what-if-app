@@ -132,8 +132,11 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
       });
 
       if (!res.toolCalls.length && (res.truncatedToolCall || res.finishReason === 'length' || !res.text.trim())) {
-        // An empty reply or a tool call cut off by max_tokens ("length"): do not pollute the DB with an empty
-        // assistant row; nudge the model to write large files (like shots.tsx with 15-36 shots) in smaller batches.
+        // Save partial text if the model wrote real text before hitting max_tokens without tool calls
+        if (res.finishReason === 'length' && !res.truncatedToolCall && res.text.trim()) {
+          const partialId = db.addMessage(threadId, 'assistant', res.text);
+          bus.emit(threadId, 'assistant_message', { id: partialId, text: res.text, toolCalls: [] });
+        }
         emptyTurns++;
         const note = res.truncatedToolCall
           ? `[orchestrateur] L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Pour écrire shots.tsx sur un épisode long, écris d'abord l'en-tête et les 6-8 premiers plans avec write_file ({ path, content }), puis ajoute les plans suivants par lots de 6-8 avec write_file ({ path, content, append: true }). Reprends immédiatement.`
@@ -261,7 +264,36 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           }
         }
       } else {
-        for (const call of res.toolCalls) {
+        const flushSkippedToolCalls = (fromIdx: number, reason: string) => {
+          for (let j = fromIdx; j < res.toolCalls.length; j++) {
+            const rem = res.toolCalls[j]!;
+            const skipped: ToolResult = { ok: false, summary: reason };
+            db.addMessage(threadId, 'tool', toolMessageContent(skipped), {
+              toolCallId: rem.id,
+              name: rem.name,
+              ok: false,
+              artifacts: [],
+              credits: 0,
+            });
+            bus.emit(threadId, 'tool_result', {
+              id: rem.id,
+              name: rem.name,
+              ok: false,
+              summary: skipped.summary,
+              artifacts: [],
+              credits: 0,
+              durationMs: 0,
+            });
+          }
+        };
+
+        for (let callIdx = 0; callIdx < res.toolCalls.length; callIdx++) {
+          const call = res.toolCalls[callIdx]!;
+          if (signal.aborted) {
+            flushSkippedToolCalls(callIdx, 'skipped (turn stopped)');
+            finishTurn(step + 1, true);
+            return;
+          }
           const tool = registry.get(call.name);
           const started = Date.now();
           bus.emit(threadId, 'tool_call', {
@@ -352,6 +384,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             const n = (expensiveFails.get(key) ?? 0) + 1;
             expensiveFails.set(key, n);
             if (n >= (stage === 'stills' ? 3 : 2)) {
+              flushSkippedToolCalls(callIdx + 1, 'skipped (turn stopped after repeated failure)');
               const stop =
                 `[orchestrateur] « ${stage} » a échoué ${n} fois avec la même cause (${cause}). Je m'arrête au lieu de relancer : ` +
                 `corrige la cause (ou signale-la à l'utilisateur) avant de relancer ${stage}.`;
@@ -381,6 +414,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               heldNotes.push(loopNote);
               bus.emit(threadId, 'notice', { text: loopNote });
               if (consecutiveFails >= 5) {
+                flushSkippedToolCalls(callIdx + 1, 'skipped (turn stopped after repeated failure)');
                 for (const n of heldNotes) db.addMessage(threadId, 'user', n);
                 const firstLine = (result.summary ?? '').split('\n')[0] ?? 'erreur répétée';
                 const stopMsg = `Arrêt : l'outil "${call.name}" a échoué ${consecutiveFails} fois de suite avec des arguments identiques (${firstLine}).`;
@@ -406,7 +440,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             if (a.kind === 'image' && IMAGE_PATH.test(a.path)) producedImages.push(a.path);
           }
 
-          if (result.ok && ['edit_shot', 'write_file', 'edit_file'].includes(call.name)) renderAsksRefused = 0;
+          const isEpEdit = call.name === 'edit_shot' || /^src\/episodes\//.test(String(call.args?.path ?? ''));
+          if (result.ok && isEpEdit && ['edit_shot', 'write_file', 'edit_file'].includes(call.name)) renderAsksRefused = 0;
           if (!result.ok && call.name === 'whatif_run' && String(call.args?.step ?? '') === 'render' && /the independent reviewer refused this board/.test(String(result.summary ?? ''))) {
             renderAsksRefused++;
             const renderSlug = String(call.args?.episode ?? '').trim();
@@ -516,12 +551,14 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
                 });
                 heldNotes.push(feedback);
               } catch (revErr) {
-                clearReviewBlock(project.root, epSlug);
+                if (!signal.aborted) {
+                  clearReviewBlock(project.root, epSlug);
+                }
                 bus.emit(threadId, 'tool_result', {
                   id: revId,
                   name: 'reviewer',
-                  ok: true,
-                  summary: `Reviewer skipped (${errText(revErr)})`,
+                  ok: !signal.aborted,
+                  summary: signal.aborted ? 'Reviewer aborted (turn stopped)' : `Reviewer skipped (${errText(revErr)})`,
                   artifacts: [],
                   credits: 0,
                   durationMs: Date.now() - revStart,
@@ -547,9 +584,14 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
     finishTurn(config.maxSteps, false, true);
   } catch (e) {
     const message = `Erreur: ${errText(e)}`;
-    const id = db.addMessage(threadId, 'assistant', message);
-    bus.emit(threadId, 'error', { message });
-    bus.emit(threadId, 'assistant_message', { id, text: message });
-    finishTurn(0, signal.aborted, false);
+    try {
+      const id = db.addMessage(threadId, 'assistant', message);
+      bus.emit(threadId, 'error', { message });
+      bus.emit(threadId, 'assistant_message', { id, text: message });
+      finishTurn(0, signal.aborted, false);
+    } catch {
+      bus.emit(threadId, 'error', { message });
+      bus.emit(threadId, 'turn_end', { steps: 0, aborted: signal.aborted, limitReached: false, elapsedMs: 0, totalProjectMs: 0 });
+    }
   }
 }

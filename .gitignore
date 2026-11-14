@@ -5,6 +5,8 @@ secrets/
 .env
 .env.*
 !.env.example
+providers.json
+!providers.example.json
 *.log
 __pycache__/
 

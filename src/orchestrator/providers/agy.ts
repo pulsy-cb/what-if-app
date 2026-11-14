@@ -129,11 +129,13 @@ export async function listAgyModels(opts?: {
       resolve({ models: parseAgyModelsOutput(stdout), error: `agy models timeout (${timeoutMs}ms)` });
     }, timeoutMs);
 
-    child.stdout?.on('data', (c: Buffer) => {
-      stdout += c.toString('utf8');
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (c: string) => {
+      stdout += c;
     });
-    child.stderr?.on('data', (c: Buffer) => {
-      stderr += c.toString('utf8');
+    child.stderr?.on('data', (c: string) => {
+      stderr += c;
     });
     child.on('error', (err) => {
       if (settled) return;
@@ -297,6 +299,17 @@ export function agyProvider(opts: AgyOptions): Provider {
       }
 
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-agy-'));
+      let cleanedTmp = false;
+      const cleanupTmp = () => {
+        if (cleanedTmp) return;
+        cleanedTmp = true;
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+      };
+
       try {
         const { cliPrompt } = buildAgyPrompt(req.messages, req.tools, tmpDir);
         const args = ['--disable-slash-commands', '--model', modelId, '--output-format', 'stream-json'];
@@ -313,14 +326,32 @@ export function agyProvider(opts: AgyOptions): Provider {
 
         return await new Promise<ChatResult>((resolve, reject) => {
           let settled = false;
+          let killTimer: ReturnType<typeof setTimeout> | null = null;
+          const terminateChild = () => {
+            try {
+              child.kill('SIGTERM');
+            } catch {
+              /* ignore */
+            }
+            killTimer = setTimeout(() => {
+              try {
+                child.kill('SIGKILL');
+              } catch {
+                /* ignore */
+              }
+            }, 3_000);
+            killTimer.unref?.();
+          };
           const finishErr = (err: Error) => {
             if (settled) return;
             settled = true;
+            clearTimeout(turnTimer);
             reject(err);
           };
           const finishOk = (res: ChatResult) => {
             if (settled) return;
             settled = true;
+            clearTimeout(turnTimer);
             resolve(res);
           };
 
@@ -329,9 +360,17 @@ export function agyProvider(opts: AgyOptions): Provider {
             stdio: ['ignore', 'pipe', 'pipe'],
             env,
           });
+          child.stdout.setEncoding('utf8');
+          child.stderr.setEncoding('utf8');
+
+          const turnTimeoutMs = 15 * 60_000;
+          const turnTimer = setTimeout(() => {
+            terminateChild();
+            finishErr(new Error(`agy (${modelId}) timeout (${turnTimeoutMs / 1000}s)`));
+          }, turnTimeoutMs);
 
           const onAbort = () => {
-            child.kill('SIGTERM');
+            terminateChild();
             finishErr(new Error('aborted'));
           };
           if (req.signal?.aborted) {
@@ -347,7 +386,7 @@ export function agyProvider(opts: AgyOptions): Provider {
 
           const checkAuthPrompt = (chunkStr: string) => {
             if (/Authentication required\. Please visit the URL to log in/i.test(chunkStr)) {
-              child.kill('SIGTERM');
+              terminateChild();
               finishErr(
                 new Error(
                   `Session Google Antigravity (agy) non connectée dans cet environnement : lance « docker compose exec studio agy acp --login » (en Docker) ou « agy acp --login » (sur l'hôte) une seule fois pour authentifier ton compte Google.`,
@@ -374,8 +413,7 @@ export function agyProvider(opts: AgyOptions): Provider {
             }
           };
 
-          child.stdout.on('data', (chunk: Buffer) => {
-            const str = chunk.toString('utf8');
+          child.stdout.on('data', (str: string) => {
             if (checkAuthPrompt(str)) return;
             stdoutBuf += str;
             let nl: number;
@@ -386,19 +424,22 @@ export function agyProvider(opts: AgyOptions): Provider {
             }
           });
 
-          child.stderr.on('data', (chunk: Buffer) => {
-            const str = chunk.toString('utf8');
+          child.stderr.on('data', (str: string) => {
             if (checkAuthPrompt(str)) return;
             stderrBuf += str;
           });
 
           child.on('error', (err) => {
+            if (killTimer) clearTimeout(killTimer);
             req.signal?.removeEventListener('abort', onAbort);
+            cleanupTmp();
             finishErr(err);
           });
 
           child.on('close', (code) => {
+            if (killTimer) clearTimeout(killTimer);
             req.signal?.removeEventListener('abort', onAbort);
+            cleanupTmp();
             if (settled) return;
             if (stdoutBuf.trim()) handleLine(stdoutBuf);
 
@@ -476,8 +517,9 @@ export function agyProvider(opts: AgyOptions): Provider {
             });
           });
         });
-      } finally {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (err) {
+        cleanupTmp();
+        throw err;
       }
     },
   };

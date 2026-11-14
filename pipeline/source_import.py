@@ -79,8 +79,12 @@ def make_title_lines(raw_title: str) -> List[str]:
 
 
 def usable(proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """`source_transcript` is the English transcript reused as a proposal: never the French narration."""
-    return [p for p in proposals if (p.get("prompt_type") or "") != "source_transcript"]
+    """`source_transcript` and `transcript_fallback` are English transcripts: never valid French narration."""
+    return [
+        p
+        for p in proposals
+        if (p.get("prompt_type") or "") not in ("source_transcript", "transcript_fallback")
+    ]
 
 
 def pick(proposals: List[Dict[str, Any]], wanted: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -187,41 +191,21 @@ def main(argv: List[str]) -> int:
             except NouveauError as e:
                 last_err = e
                 print(f"[source] translate/generate with {cand_model} failed ({e}); trying next model...", file=sys.stderr)
-        if not proposals and last_err is not None:
-            print(f"[source] all translation models failed ({last_err}); falling back to transcript", file=sys.stderr)
-            try:
-                segs = nv.transcript(str(video_id), lang="en")
-                if isinstance(segs, dict):
-                    segs = segs.get("transcript") or segs.get("segments") or []
-                en_text = " ".join(
-                    str(s.get("text") or "").strip()
-                    for s in (segs or [])
-                    if isinstance(s, dict) and str(s.get("text") or "").strip()
-                )
-                if en_text:
-                    proposals = [
-                        {
-                            "id": None,
-                            "prompt_type": "transcript_fallback",
-                            "title": title,
-                            "model_name": "deepgram-en",
-                            "translation": en_text,
-                        }
-                    ]
-            except Exception:
-                pass
-            if not proposals:
-                proj.result(ok=False, error=f"translation failed: {last_err}", videoId=video_id)
-                return 5
+        if not usable(proposals) and last_err is not None:
+            proj.result(
+                ok=False,
+                error=f"French translation failed across all candidate models ({last_err}); refusing to import English transcript as French script.",
+                videoId=video_id,
+            )
+            return 5
 
     pool = usable(proposals)
-    chosen = pick(pool or proposals, want)
+    chosen = pick(pool, want)
     fell_back = False
     if chosen is None and want:
-        # nouveau may only have a plain translation for this video: a wanted *kind* is a preference,
-        # not a requirement — an episode without a source is worse than a non-hooky one.
-        # The one the user selected on :8005 comes first: it is the text they edited and voiced.
-        chosen = pick(pool or proposals, None) or ((pool or proposals)[0] if (pool or proposals) else None)
+        # nouveau may only have a plain French translation for this video: a wanted *kind* is a preference,
+        # not a requirement — but NEVER fall back to `proposals` (which may contain English `source_transcript`).
+        chosen = pick(pool, None) or (pool[0] if pool else None)
         fell_back = chosen is not None
     if chosen is None:
         proj.result(ok=False, error="no French proposal available", videoId=video_id,

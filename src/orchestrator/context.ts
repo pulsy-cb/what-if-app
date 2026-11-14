@@ -36,11 +36,10 @@ commands for a human to paste: you call the tools.
    - **CRITICAL RULE FOR \`:8005\` VIDEOS**: **NEVER rewrite, summarize, or shorten the server's French translation proposal!**
      Episodes from \`:8005\` can be 30 seconds, 90 seconds, or several minutes long. Keep the complete French narration
      from \`source.fr.md\` in \`episode.json.script\` (the pipeline audit rejects any shortened script!). Only set
-     \`"defaultSet"\` to describe the story's setting and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
+     \`"defaultSet"\` to a short \`place()\` recipe slug (\`"living"\`, \`"hospital"\`, \`"street"\`, \`"office"\`, \`"bedroom"\`, \`"restaurant"\`, etc. — put rich prose descriptions in \`DIRECTOR.md\`, never a whole sentence in \`"defaultSet"\`) and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
 1. Standalone episodes (ONLY when there is NO \`:8005\` source video id):
    Write \`episode.json\` following the 7-beat What If formula (cold-open demos, French premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question).
-   **Location rule (\`set\`)**: every episode has its own world — describe the actual place on \`"defaultSet"\` and/or each beat's \`"set"\`
-   (e.g. a bespoke bistro, a subway car, a lab, a rooftop, a courtroom, a bedroom, or any custom location). Never use \`<Classroom>\` unless the story is about school!
+   **Location rule (\`set\`)**: every episode has its own world — put a clean set slug on \`"defaultSet"\` and on each beat's \`"set"\` when the scene shifts space (\`"living"\`, \`"corridor"\`, \`"street"\`, \`"vehicle"\`, \`"hospital"\`, \`"rooftop"\`, \`"bedroom"\`, etc.). Never use \`<Classroom>\` unless the story is about school!
 2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
    video id (Fish Audio remains available with \`provider: "fish"\`). \`source\` and \`voice\` **automatically analyze the French phrasing, POV (\`first\` vs \`third\`), and grammatical agreements** of the script (1st-person feminine vs masculine agreements like *"je me suis allongée / j'étais pas assez inquiète"*, plus 3rd-person female-protagonist stories centered on *"elle"*) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). **Gender-verified reuse of \`:8005\` audio**: \`whatif_run { step: "voice" }\` checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\` and reuses an existing file ONLY when it is a user upload (\`"upload"\`) or already matches the detected target voice (\`Léa\` vs \`Hugo\`); if \`:8005\` had an old TTS with the wrong gender, \`voice\` automatically regenerates with the right narrator! Just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\`; to override manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\`: the script's
    words with the *measured* Deepgram times (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
@@ -143,10 +142,10 @@ function swapBlock(text: string, from: string, to: string, replacement: string):
 /** The prompt for a project whose engine has shot(): same pipeline, but the shots are described, not drawn with Hero and poseAt. */
 export function modernSystemPrompt(): string {
   let p = SYSTEM_PROMPT;
-  p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Le lieu**: une recette \`place()\` (catalogue, ambiance et palette propres à cette histoire) ou des pièces à toi, en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
+  p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Les lieux (multi-espaces & profondeur)**: définis le lieu principal avec \`place()\` (recette du catalogue, ambiance \`mood\` et \`palette\` propres à cette histoire) PLUS 1 ou 2 lieux secondaires/cutaways dans \`shared.tsx\` dès que le récit évoque un couloir, une entrée, la rue, une voiture, une autre pièce ou un flashback, pour ne jamais enfermer tout l'épisode devant un seul mur. Compose en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
    - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (t-shirt anglais \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
 `);
-  p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus**: passe l'objet à \`handRProp\` / \`handLProp\` ; il suit la main. Un objet posé va dans un slot ou dans \`extra\`. Jamais d'objet flottant loin des mains.
+  p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus et posés**: passe \`hold: '<object>'\` (ou \`hold: { node: <g>…</g> }\`) sur la personne, et \`props: [{ on: '<piece id>', node: held('<object>') }]\` pour un objet posé sur un meuble. Jamais d'objet flottant loin des mains.
 `);
   p = p.replace('with imports, `makeLook` cast, shared custom set components, and reusable props', 'with imports, the cast(), the place() constants, and reusable props');
   p = swapBlock(p, '   - **Custom Characters', '   - **Clock `t`', `   - **Write the shots with \`shot({...})\`** (see the shot() section): place, cam, people with an act and a face, and **beats on the words** of each shot's line (their frames are pinned under "When each word is said"). A hand-written <Stage> or camT shot is the way out for what shot() cannot do; both mix in one episode.
@@ -578,9 +577,11 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
         .map((s) => {
           const id = String(s.id);
           const epS = epShotsMap.get(id);
+          const rawVw = epS?.stage?.view ?? epS?.view;
+          const vw = rawVw && rawVw !== 'front' ? (rawVw === 'reverse' ? 'rev' : String(rawVw)) : '';
           const acc = epS?.accent ? `[${epS.accent}]` : '';
           const lk = editLookMap.get(id) ? `{${editLookMap.get(id)}}` : '';
-          return `${id} ${s.len}f ${String(epS?.size ?? s.size ?? '')} ${acc}${lk}`.replace(/\s+/g, ' ').trim();
+          return `${id} ${s.len}f ${String(epS?.size ?? s.size ?? '')} ${vw} ${acc}${lk}`.replace(/\s+/g, ' ').trim();
         })
         .join(' · ')}`,
     );
@@ -599,6 +600,9 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
         const note = epS.note ?? '';
         const lenNum = Number(s.len || 60);
         const extras: string[] = [];
+        const wantView = epS?.stage?.view ?? epS?.view;
+        if (wantView && wantView !== 'front') extras.push(`view="${wantView}"`);
+        if (epS.move) extras.push(`move="${epS.move}"`);
         if (epS.accent) extras.push(`accent="${epS.accent}"`);
         if (editLookMap.get(id)) extras.push(`look="${editLookMap.get(id)}"`);
         if (lenNum > 90 && !String(size).includes('insert')) extras.push(`camBeatRequired(>90f)`);
@@ -736,19 +740,47 @@ export function buildMessages(opts: BuildOptions): ChatMessage[] {
     kept.unshift(msg);
   }
 
-  // Never start the kept window with orphan `tool` messages whose preceding `assistant` (with tool_calls) was dropped
-  while (kept.length > 0 && kept[0]!.role === 'tool') {
+  // Never start the kept window with orphan `tool` or `assistant` messages when older messages were compacted
+  while (kept.length > 0 && (kept[0]!.role === 'tool' || (dropped > 0 && kept[0]!.role === 'assistant'))) {
     kept.shift();
     dropped++;
   }
-  // Ensure every assistant tool_call in `kept` has its matching tool results, and vice-versa
+  // Ensure every assistant tool_call in `kept` has its matching tool result (even if an earlier turn crashed or aborted mid-batch),
+  // and drop any orphan `tool` message whose assistant call is absent.
   const validCallIds = new Set<string>();
+  const presentToolIds = new Set<string>();
   for (const m of kept) {
     if (m.role === 'assistant' && m.toolCalls) {
       for (const tc of m.toolCalls) validCallIds.add(tc.id);
+    } else if (m.role === 'tool' && m.toolCallId) {
+      presentToolIds.add(m.toolCallId);
     }
   }
-  const sanitized = kept.filter((m) => m.role !== 'tool' || validCallIds.has(m.toolCallId));
+  const filtered = kept.filter((m) => m.role !== 'tool' || validCallIds.has(m.toolCallId));
+  const sanitized: ChatMessage[] = [];
+  for (let i = 0; i < filtered.length; i++) {
+    const m = filtered[i]!;
+    sanitized.push(m);
+    if (m.role === 'assistant' && m.toolCalls?.length) {
+      const missingCalls = m.toolCalls.filter((tc) => !presentToolIds.has(tc.id));
+      if (missingCalls.length > 0) {
+        // Advance past any existing tool messages belonging to this assistant turn first, then append synthetic results
+        while (i + 1 < filtered.length && filtered[i + 1]!.role === 'tool') {
+          i++;
+          sanitized.push(filtered[i]!);
+        }
+        for (const mc of missingCalls) {
+          presentToolIds.add(mc.id);
+          sanitized.push({
+            role: 'tool',
+            toolCallId: mc.id,
+            name: mc.name,
+            content: 'ERROR\n(tool call interrupted before completion)',
+          });
+        }
+      }
+    }
+  }
 
   const out = [...head];
   if (dropped > 0) {

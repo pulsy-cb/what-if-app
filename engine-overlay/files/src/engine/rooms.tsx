@@ -13,6 +13,9 @@ import type { Ground } from './stage';
 // need, or list your own pieces, or add a piece of your own with `draw`.
 
 export const ROOM = makeRoom({ x: 900, y: 470 }, { x0: 300, x1: 1500, y0: 130, y1: 720 }, 3.2);
+export const ROOM_3Q_L = makeRoom({ x: 580, y: 465 }, { x0: 460, x1: 1580, y0: 130, y1: 720 }, 3.2);
+export const ROOM_3Q_R = makeRoom({ x: 1220, y: 465 }, { x0: 220, x1: 1340, y0: 130, y1: 720 }, 3.2);
+export type PlaceView = 'front' | 'reverse' | 'left' | 'right' | '3/4-left' | '3/4-right';
 
 type Solid = { front: string; top: string; side: string };
 export type RoomTokens = {
@@ -197,6 +200,7 @@ export type Recipe = {
   lights?: { u: number; w: number }[];
   pieces: PieceSpec[];
   /** what hangs on the opposite wall, seen in the reverse view (view: 'reverse') */ front?: PieceSpec[];
+  /** what hangs on the side walls when seen in 90-degree side views (view: 'left' | 'right') */ leftWall?: PieceSpec[]; rightWall?: PieceSpec[];
   /** an open-air place: sky and ground, no walls or ceiling */ outdoor?: boolean;
   /** this recipe's own colours, before the episode's palette */ palette?: Partial<RoomTokens>;
 };
@@ -478,6 +482,7 @@ export type PlaceOpts = {
   /** replace all pieces */ pieces?: PieceSpec[];
   /** what goes on the board, screen or table, by piece id: { board: <g>…</g> } */ slots?: Record<string, React.ReactNode>;
   /** what hangs on the opposite wall, seen in the reverse view; replaces the recipe's */ front?: PieceSpec[];
+  /** what hangs on the left or right side walls in view: 'left' | 'right' */ leftWall?: PieceSpec[]; rightWall?: PieceSpec[];
   lights?: { u: number; w: number }[];
 };
 type Resolved = PieceSpec & { name: string; id: string; def: PieceDef; u: number; w: number; len: number; deep: number };
@@ -490,9 +495,13 @@ export type Placed = {
   has: (id: string) => boolean;
   /** true when someone sitting at piece `id` needs a stool under them */ wantsStool: (id: string) => boolean;
   /** the world point a hand goes to on piece `id` (its top, or the middle of a wall piece) */ pointOf: (id: string) => { x: number; y: number };
+  /** camera anchor for a sub-zone or piece of this room (e.g. 'window', 'door', 'sofa', 'counter', 'left', 'right') */
+  zoneOf: (zone: string) => { x: number; y: number; zoom: number } | null;
+  /** the same place seen from any supported camera perspective */
+  viewOf: (view: PlaceView) => Placed;
   tokens: RoomTokens;
   outdoor: boolean;
-  view: 'front' | 'reverse';
+  view: PlaceView;
   /** the same place seen from the other end of the room: the opposite wall, the furniture mirrored */ reverse: Placed;
 };
 
@@ -539,10 +548,40 @@ const finderOf = (resolved: Resolved[]) => (id: string, i = 0): { piece: Resolve
   return undefined;
 };
 
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const wrapYaw = (y: number): number => {
+  let v = ((y + 2) % 4 + 4) % 4 - 2;
+  if (v === -2 && y > 0) v = 2;
+  return v;
+};
+
 /** The same spot seen from the other end of the room: left and right swap, near and far swap. */
 export const mirrorSpot = (at: { u: number; w: number }): { u: number; w: number } => ({ u: 1 - at.u, w: Math.min(0.95, 1 - at.w) });
 /** A person's yaw seen from the other end of the room: a face becomes a back, screen-right becomes screen-left. */
 export const mirrorYaw = (yaw: number): number => (yaw >= 0 ? -(2 - yaw) : 2 + yaw);
+
+/** Floor spot transformed into any camera perspective (`front`, `reverse`, `left`, `right`, `3/4-left`, `3/4-right`). */
+export const spotForView = (at: { u: number; w: number }, view: PlaceView): { u: number; w: number } => {
+  if (view === 'reverse') return mirrorSpot(at);
+  if (view === 'left') return { u: clamp01(1 - at.w), w: Math.min(0.95, clamp01(at.u)) };
+  if (view === 'right') return { u: clamp01(at.w), w: Math.min(0.95, clamp01(1 - at.u)) };
+  return at;
+};
+
+/** Person yaw transformed into any camera perspective. */
+export const yawForView = (yaw: number | undefined, view: PlaceView): number | undefined => {
+  if (yaw === undefined) {
+    if (view === '3/4-left') return 0.24;
+    if (view === '3/4-right') return -0.24;
+    return undefined;
+  }
+  if (view === 'reverse') return mirrorYaw(yaw);
+  if (view === 'left') return wrapYaw(yaw - 1);
+  if (view === 'right') return wrapYaw(yaw + 1);
+  if (view === '3/4-left') return wrapYaw(yaw + 0.24);
+  if (view === '3/4-right') return wrapYaw(yaw - 0.24);
+  return yaw;
+};
 
 /** Build a place from a recipe name (see PLACES) and your changes. */
 export const place = (name: string, opts: PlaceOpts = {}): Placed => {
@@ -571,6 +610,10 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
   // the reverse view: floor pieces seen from the other end (those right behind the camera drop out), and the opposite wall
   const mirrorFace = (f: unknown): string | undefined =>
     f === 'right' ? 'left' : f === 'left' ? 'right' : f === 'back' ? 'front' : f === 'front' ? 'back' : undefined;
+  const rotateLeftFace = (f: unknown): string | undefined =>
+    f === 'front' ? 'left' : f === 'back' ? 'right' : f === 'left' ? 'back' : f === 'right' ? 'front' : undefined;
+  const rotateRightFace = (f: unknown): string | undefined =>
+    f === 'front' ? 'right' : f === 'back' ? 'left' : f === 'right' ? 'back' : f === 'left' ? 'front' : undefined;
   const reverseList = [
     ...frontList
       .filter((x) => x.def.kind !== 'wall')
@@ -583,14 +626,44 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.9),
     ...keep(opts.front ?? base.front ?? [{ p: 'door', at: { u: 0.45 } }]).map(resolve),
   ];
-  const r = ROOM;
+  const leftList = [
+    ...frontList
+      .filter((x) => x.def.kind !== 'wall')
+      .map((x) => ({
+        ...x,
+        u: clamp01(1 - x.w - x.deep),
+        w: x.def.kind === 'flat' ? Math.max(0, x.u) : x.u,
+        len: x.deep,
+        deep: x.len,
+        opt: x.name === 'chair' ? { ...(x.opt ?? {}), face: rotateLeftFace(x.opt?.face ?? 'front') } : x.opt,
+      }))
+      .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.92),
+    ...keep(opts.leftWall ?? base.leftWall ?? [{ p: 'frame', at: { u: 0.42 }, opt: { art: 1 } }]).map(resolve),
+  ];
+  const rightList = [
+    ...frontList
+      .filter((x) => x.def.kind !== 'wall')
+      .map((x) => ({
+        ...x,
+        u: clamp01(x.w),
+        w: x.def.kind === 'flat' ? Math.max(0, 1 - x.u - x.len) : 1 - x.u - x.len,
+        len: x.deep,
+        deep: x.len,
+        opt: x.name === 'chair' ? { ...(x.opt ?? {}), face: rotateRightFace(x.opt?.face ?? 'front') } : x.opt,
+      }))
+      .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.92),
+    ...keep(opts.rightWall ?? base.rightWall ?? [{ p: 'frame', at: { u: 0.46 }, opt: { art: 2 } }]).map(resolve),
+  ];
   const lights = opts.lights ?? base.lights ?? (outdoor ? [] : [{ u: 0.5, w: 0.4 }]);
+  const roomFor = (view: PlaceView): Room =>
+    view === '3/4-left' ? ROOM_3Q_L : view === '3/4-right' ? ROOM_3Q_R : ROOM;
 
-  const build = (resolved: Resolved[], lamps: { u: number; w: number }[], view: 'front' | 'reverse'): Placed => {
+  const build = (resolved: Resolved[], lamps: { u: number; w: number }[], view: PlaceView): Placed => {
+    const r = roomFor(view);
     const ctx = (x: Resolved, t: number): DrawCtx => ({ r, T, t, u: x.u, w: x.w, len: x.len, deep: x.deep, color: x.color, opt: x.opt ?? {}, slot: opts.slots?.[x.id] });
     const walls = (t: number) => resolved.filter((x) => x.def.kind === 'wall').map((x, i) => <g key={`w${i}`}>{x.def.draw(ctx(x, t))}</g>);
     const flats = (t: number) => resolved.filter((x) => x.def.kind === 'flat').map((x, i) => <g key={`f${i}`}>{x.def.draw(ctx(x, t))}</g>);
-    const skyId = `sky${name}${view}`;
+    const skyId = `sky${name}${view.replace(/[^a-z0-9]/gi, '')}`;
     const Shell: Placed['Shell'] = ({ t, id = 'pl' }) =>
       outdoor ? (
         <g>
@@ -633,7 +706,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
         </StageItem>
       ));
     const findPiece = finderOf(resolved);
-    // seats always come from the front layout: a shot in the reverse view mirrors the people itself
+    // seats always come from the front layout: a shot in the reverse/side view transforms the people itself
     const frontSeat = (id: string, i = 0) => {
       const found = findFront(id, i);
       if (!found) throw new Error(missingPieceMessage(id, frontList as never, 'place'));
@@ -645,6 +718,30 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       const face = findFront(id)?.piece.opt?.face;
       return face === 'right' ? 0.75 : face === 'left' ? -0.75 : undefined;
     };
+    const zoneOf = (zone: string): { x: number; y: number; zoom: number } | null => {
+      const z = zone.trim().toLowerCase();
+      const named: Record<string, { u: number; w: number; v: number; zoom: number }> = {
+        left: { u: 0.24, w: 0.36, v: 0.62, zoom: 1.22 },
+        'corner-left': { u: 0.16, w: 0.2, v: 0.58, zoom: 1.3 },
+        right: { u: 0.76, w: 0.36, v: 0.62, zoom: 1.22 },
+        'corner-right': { u: 0.84, w: 0.2, v: 0.58, zoom: 1.3 },
+        back: { u: 0.5, w: 0.14, v: 0.56, zoom: 1.2 },
+        entry: { u: 0.5, w: 0.62, v: 0.68, zoom: 1.12 },
+      };
+      if (named[z]) {
+        const n = named[z]!;
+        const p = r.P(n.u, n.v, n.w);
+        return { x: p.x, y: p.y, zoom: n.zoom };
+      }
+      const x = findPiece(zone)?.piece ?? resolved.find((item) => item.name.toLowerCase() === z);
+      if (!x) return null;
+      if (x.def.kind !== 'floor') {
+        const p = r.P(x.u + x.len / 2, 0.5, 0.08);
+        return { x: p.x, y: p.y, zoom: 1.3 };
+      }
+      const p = r.P(x.u + x.len / 2, 0.64, x.w + x.deep / 2);
+      return { x: p.x, y: p.y, zoom: 1.26 };
+    };
     return {
       ground: roomGround(r),
       Shell,
@@ -655,21 +752,34 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       wantsStool: (id) => !!findFront(id)?.piece.def.stool || /^stool[1-4]?$/i.test(id),
       pointOf: (id) => {
         const x = findPiece(id)?.piece;
-        if (!x) throw new Error(missingPieceMessage(id, resolved as never, view === 'reverse' ? 'reverse view' : 'place'));
+        if (!x) throw new Error(missingPieceMessage(id, resolved as never, view === 'front' ? 'place' : `${view} view`));
         if (x.def.kind !== 'floor') return r.P(x.u + x.len / 2, 0.45, 0);
         return r.P(x.u + x.len / 2, x.def.top ?? 0.8, x.w + x.deep / 2);
       },
+      zoneOf,
+      viewOf,
       tokens: T,
       outdoor,
       view,
       get reverse(): Placed {
-        return reversePlaced();
+        return viewOf('reverse');
       },
     };
   };
-  let rev: Placed | null = null;
+  const cache = new Map<PlaceView, Placed>();
   const findFront = finderOf(frontList);
-  const front = build(frontList, lights, 'front');
-  const reversePlaced = (): Placed => (rev ??= build(reverseList, lights.map(mirrorSpot), 'reverse'));
-  return front;
+  const viewOf = (view: PlaceView): Placed => {
+    const hit = cache.get(view);
+    if (hit) return hit;
+    const list =
+      view === 'reverse' ? reverseList :
+      view === 'left' ? leftList :
+      view === 'right' ? rightList :
+      frontList;
+    const viewLamps = lights.map((l) => spotForView(l, view));
+    const built = build(list, viewLamps, view);
+    cache.set(view, built);
+    return built;
+  };
+  return viewOf('front');
 };

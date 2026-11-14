@@ -8,6 +8,13 @@ import type { Tool } from './types.js';
  * object on screen: nobody had decided what each picture shows. The card is that decision; the audit then checks the
  * code against it and the Reviewer judges the picture against it.
  */
+export const VALID_STAGE_VIEWS = ['front', 'reverse', 'left', 'right', '3/4-left', '3/4-right'] as const;
+export type StageView = (typeof VALID_STAGE_VIEWS)[number];
+export const VALID_STAGE_CAMS = ['establishing', 'wide', 'medium', 'close', 'deep', 'ots', 'pov'] as const;
+export type StageCam = (typeof VALID_STAGE_CAMS)[number];
+export const VALID_STAGE_FOREGROUNDS = ['auto', 'plant', 'doorframe', 'lamp', 'chair', 'curtain', 'none'] as const;
+export type StageForeground = (typeof VALID_STAGE_FOREGROUNDS)[number];
+
 export type StageCard = {
   see: string;
   /** the one thing the eye goes to: a person, an object, a hand on a desk */
@@ -15,6 +22,10 @@ export type StageCard = {
   people: { who: string; where: string; does: string }[];
   objects: string[];
   angle?: 'level' | 'low' | 'high';
+  view?: StageView;
+  cam?: StageCam;
+  zone?: string;
+  foreground?: StageForeground;
   moves?: boolean;
   change?: string;
 };
@@ -57,6 +68,10 @@ export function stageCardProblems(card: any, shot: { id: string; size?: string; 
   if (String(card.subject ?? '').trim().length < 3) out.push(`${id}.subject is missing: the ONE thing the eye goes to in this picture (a face, a bag being emptied, a hand on a desk)`);
   if (!Array.isArray(card.objects) || card.objects.some((o: unknown) => typeof o !== 'string' || !o.trim())) out.push(`${id}.objects must be an array of names (empty when nothing is held or shown)`);
   if (card.angle !== undefined && !['level', 'low', 'high'].includes(card.angle)) out.push(`${id}.angle must be "level", "low" or "high" (the engine has no other camera angle)`);
+  if (card.view !== undefined && !VALID_STAGE_VIEWS.includes(card.view)) out.push(`${id}.view must be one of ${VALID_STAGE_VIEWS.join(', ')}`);
+  if (card.cam !== undefined && !VALID_STAGE_CAMS.includes(card.cam)) out.push(`${id}.cam must be one of ${VALID_STAGE_CAMS.join(', ')}`);
+  if (card.foreground !== undefined && !VALID_STAGE_FOREGROUNDS.includes(card.foreground)) out.push(`${id}.foreground must be one of ${VALID_STAGE_FOREGROUNDS.join(', ')}`);
+  if (card.zone !== undefined && (typeof card.zone !== 'string' || !card.zone.trim())) out.push(`${id}.zone must be a non-empty piece id or room zone ('window', 'door', 'sofa', 'left', 'right')`);
   if (card.moves !== undefined && typeof card.moves !== 'boolean') out.push(`${id}.moves must be true or false`);
   const size = String(shot.size ?? '').toLowerCase();
   const empty = !(people ?? []).length;
@@ -123,23 +138,47 @@ export const handledObjects = (objects: unknown): string[] => (Array.isArray(obj
 const NARRATOR = /^(NARR|NARRATOR|NARRATEUR|NARRATRICE|VOIX|VOICE|VOIX_OFF)$/;
 
 /**
- * An angle decided on the card and forgotten in the code (53 refusals, 2026-11-13) is written into the shot instead of
- * refused: `shot({` becomes `shot({ angle: 'high',`. Only modular shots made of one shot() call; returns the ids changed.
+ * An angle, reverse view, or camera move decided on the card / shotlist and forgotten in the code is written into the shot
+ * instead of refused: `shot({` becomes `shot({ angle: 'high',`. Only modular shots made of one shot() call; returns the ids changed.
  */
 export function applyCardAngles(episodeDir: string, shots: any[]): string[] {
   const done: string[] = [];
   for (const s of Array.isArray(shots) ? shots : []) {
-    const angle = s?.stage?.angle;
-    if (angle !== 'low' && angle !== 'high') continue;
-    const file = path.join(episodeDir, 'shots', `${String(s.id)}.tsx`);
+    const file = path.join(episodeDir, 'shots', `${String(s?.id ?? '')}.tsx`);
     let src = '';
     try {
       src = fs.readFileSync(file, 'utf8');
     } catch {
       continue;
     }
-    if (/\bangle\s*:/.test(src) || (src.match(/\bshot\(\{/g) ?? []).length !== 1) continue;
-    fs.writeFileSync(file, src.replace(/\bshot\(\{/, `shot({ angle: '${angle}',`));
+    if ((src.match(/\bshot\(\{/g) ?? []).length !== 1) continue;
+    const fields: string[] = [];
+    const angle = s?.stage?.angle;
+    if ((angle === 'low' || angle === 'high') && !/\bangle\s*:/.test(src)) {
+      fields.push(`angle: '${angle}'`);
+    }
+    const wantView = s?.stage?.view ?? s?.view;
+    if (wantView && wantView !== 'front' && VALID_STAGE_VIEWS.includes(wantView) && s?.stage?.view !== 'front' && !/\bview\s*:/.test(src)) {
+      fields.push(`view: '${wantView}'`);
+    }
+    const wantCam = s?.stage?.cam;
+    if (wantCam && VALID_STAGE_CAMS.includes(wantCam) && !/\bcam\s*:/.test(src)) {
+      fields.push(`cam: '${wantCam}'`);
+    }
+    const wantZone = typeof s?.stage?.zone === 'string' ? s.stage.zone.trim() : '';
+    if (wantZone && /^[a-z0-9_-]{2,24}$/i.test(wantZone) && !/\bzone\s*:/.test(src)) {
+      fields.push(`zone: '${wantZone}'`);
+    }
+    const wantFg = s?.stage?.foreground;
+    if (wantFg && wantFg !== 'none' && VALID_STAGE_FOREGROUNDS.includes(wantFg) && !/\bforeground\s*:/.test(src)) {
+      fields.push(`foreground: '${wantFg}'`);
+    }
+    const wantMove = s?.move;
+    if ((wantMove === 'pull' || wantMove === 'pan' || wantMove === 'still' || wantMove === 'track' || wantMove === 'whip') && !/\bmove\s*:/.test(src)) {
+      fields.push(`move: '${wantMove}'`);
+    }
+    if (!fields.length) continue;
+    fs.writeFileSync(file, src.replace(/\bshot\(\{/, `shot({ ${fields.join(', ')},`));
     done.push(String(s.id));
   }
   return done;
@@ -162,7 +201,7 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
       two.push(String(s.id));
       const ws = [...body.matchAll(/\bw\s*:\s*(\d*\.?\d+)/g)].map((m) => Number(m[1]));
       const spread = ws.length >= 2 ? Math.max(...ws) - Math.min(...ws) : 0;
-      if (!/cam\s*:\s*['"]deep['"]/.test(body) && spread < 0.25) flat.push(String(s.id));
+      if (!/cam\s*:\s*['"](deep|ots)['"]/.test(body) && spread < 0.25) flat.push(String(s.id));
     }
     if (two.length >= 4 && two.length - flat.length < Math.ceil(two.length / 3)) {
       out.push(`${two.length - flat.length}/${two.length} shots with two people or more use depth (need ${Math.ceil(two.length / 3)}): in 9:16 people side by side leave the lower third empty. On some of ${flat.slice(0, 8).join(', ')} use cam: 'deep' with one person near (w 0.85-0.95) and the other behind, about 0.2 in u apart`);
@@ -187,6 +226,16 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
       out.push(`${id}: the card asks for a ${card.angle} angle but the code has no angle: '${card.angle}'`);
     }
+    if (card.view && card.view !== 'front' && !/\b(tabletopShot|phoneShot)\s*\(/.test(body)) {
+      const escaped = card.view.replace('/', '\\/');
+      if (!new RegExp(`\\bview\\s*:\\s*['"]${escaped}['"]`).test(body)) {
+        out.push(
+          card.view === 'reverse'
+            ? `${id}: the card asks for a reverse angle (contrechamp) but the code has no view: 'reverse'`
+            : `${id}: the card asks for view '${card.view}' but the code has no view: '${card.view}'`,
+        );
+      }
+    }
     const acts = [...body.matchAll(/\bact\s*[:=]\s*\{?\s*['"]([\w-]+)['"]/g)].map((m) => m[1]);
     const inert = /\bshot\(\{/.test(body) && (card.people ?? []).length > 0 && acts.every((a) => a === 'idle') && !/\bact\s*:\s*(\{|[A-Z_]+\b)|\bhold\s*:|\breach\s*:|\bwalkTo\s*:|\bpose\s*:|\bduo\s*:/.test(body);
     if (inert) {
@@ -194,6 +243,94 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
       out.push(`${id}: the card says ${p0.who} "${p0.does}" but nobody does anything (idle): choose the action that shows it — lean, rummage, slam, give, read, point, shrug, facepalm, shout, push, pick-up, phone, type… — or make it: act: { dur: 16, armR: { a: [[0, 14], [1, 90]], b: 10 } }`);
     }
     if (card.moves && !REAL_MOVE.test(body)) out.push(`${id}: the card says someone moves across the room but nobody has walkTo: { u, w }`);
+  }
+
+  // Episode-wide anti-monotony checks (active on full staged episodes >= 8 shots):
+  // 1) Never repeat the exact same POV (place + cam + view + angle + zone) 3 character shots in a row
+  // 2) Require champ / contrechamp or alternate room perspective when >= 6 shots sit in one room with multi-person dialogue
+  // 3) Cap any single camera move (`push`, `still`, etc.) at <= 70% of character shots when moves are declared
+  if (withCards && shots.length >= 8) {
+    type PovEntry = { id: string; isShot: boolean; place: string; cam: string; view: string; angle: string; zone: string; explicitMove: string; resolvedMove: string; whoCount: number; hasAltPerspective: boolean };
+    const povs: PovEntry[] = shots.map((s) => {
+      const id = String(s.id);
+      const body = bodies[id] ?? '';
+      const isShot = /\bshot\(\{/.test(body) && !/\b(phoneShot|tabletopShot)\s*\(/.test(body);
+      const place = /\bplace\s*:\s*([A-Za-z0-9_]+)/.exec(body)?.[1] ?? '';
+      const cam = /\bcam\s*:\s*['"]([\w-]+)['"]/.exec(body)?.[1] ?? (/\bcam\s*:\s*\{/.test(body) ? 'custom' : 'wide');
+      const view = /\bview\s*:\s*['"](front|reverse|left|right|3\/4-left|3\/4-right)['"]/.exec(body)?.[1] ?? 'front';
+      const angle = /\bangle\s*:\s*['"](low|high|level)['"]/.exec(body)?.[1] ?? 'level';
+      const zone = /\bzone\s*:\s*['"]([\w-]+)['"]/.exec(body)?.[1] ?? '';
+      const explicitMove = /\bmove\s*:\s*['"]([\w-]+)['"]/.exec(body)?.[1] ?? '';
+      const resolvedMove = explicitMove || String(s?.move ?? 'push');
+      const whoCount = (body.match(/\bwho\s*:/g) ?? []).length;
+      const hasAltPerspective =
+        /\bview\s*:\s*['"](reverse|left|right|3\/4-left|3\/4-right)['"]/.test(body) ||
+        cam === 'ots' ||
+        cam === 'pov';
+      return { id, isShot, place, cam, view, angle, zone, explicitMove, resolvedMove, whoCount, hasAltPerspective };
+    });
+
+    let triadWarnings = 0;
+    for (let i = 2; i < povs.length && triadWarnings < 2; i++) {
+      const a = povs[i - 2]!;
+      const b = povs[i - 1]!;
+      const c = povs[i]!;
+      if (
+        a.isShot &&
+        b.isShot &&
+        c.isShot &&
+        a.place &&
+        a.cam !== 'custom' &&
+        a.place === b.place &&
+        b.place === c.place &&
+        a.cam === b.cam &&
+        b.cam === c.cam &&
+        a.view === b.view &&
+        b.view === c.view &&
+        a.angle === b.angle &&
+        b.angle === c.angle &&
+        a.zone === b.zone &&
+        b.zone === c.zone
+      ) {
+        out.push(
+          `${a.id}, ${b.id}, ${c.id} repeat the exact same POV (${a.place}, cam '${a.cam}', view '${a.view}', angle '${a.angle}') three times in a row: break monotony with view: 'reverse' | '3/4-left' | '3/4-right', cam: 'ots' | 'close' | 'wide', zone, a low/high angle, or a phoneShot/tabletopShot/secondary place`,
+        );
+        triadWarnings++;
+        i += 2;
+      }
+    }
+
+    const byPlace = new Map<string, PovEntry[]>();
+    for (const p of povs) {
+      if (!p.isShot || !p.place) continue;
+      byPlace.set(p.place, [...(byPlace.get(p.place) ?? []), p]);
+    }
+    const anyAlt = povs.some((p) => p.hasAltPerspective);
+    if (!anyAlt) {
+      for (const [plName, list] of byPlace) {
+        const twoPlus = list.filter((p) => p.whoCount >= 2);
+        if (list.length >= 6 && twoPlus.length >= 3) {
+          const sample = list.slice(1, 7).map((p) => p.id).join(', ');
+          out.push(
+            `0/${list.length} shots in ${plName} use view: 'reverse' (contrechamp) or alternate perspectives ('3/4-left', 'left', cam: 'ots'): in a multi-person scene, add view: 'reverse' or cam: 'ots' on at least 2 reaction/counter-shots (e.g. among ${sample}) so the camera does not stare at the same wall all episode`,
+          );
+          break;
+        }
+      }
+    }
+
+    const shotEntries = povs.filter((p) => p.isShot);
+    const hasMoveSignals = shotEntries.filter((p) => p.explicitMove !== '').length >= 6 || shots.some((s) => Boolean(s?.move));
+    if (hasMoveSignals && shotEntries.length >= 8) {
+      const moveCounts = new Map<string, number>();
+      for (const p of shotEntries) moveCounts.set(p.resolvedMove, (moveCounts.get(p.resolvedMove) ?? 0) + 1);
+      const topMove = [...moveCounts.entries()].sort((x, y) => y[1] - x[1])[0];
+      if (topMove && topMove[1] > Math.ceil(shotEntries.length * 0.7)) {
+        out.push(
+          `move: '${topMove[0]}' is used in ${topMove[1]}/${shotEntries.length} character shots (> 70%): vary camera motion across 'push', 'pull', 'pan', 'track', 'whip', and 'still'`,
+        );
+      }
+    }
   }
   return out;
 }
@@ -205,7 +342,9 @@ export function formatStageCards(shots: any[], ids?: string[]): string {
     .map((s) => {
       const c = s.stage as StageCard;
       const who = (c.people ?? []).map((p) => `${p.who} (${p.where}): ${p.does}`).join(' ; ') || 'nobody';
-      const extra = [c.objects?.length ? `objects: ${c.objects.join(', ')}` : '', c.angle && c.angle !== 'level' ? `angle: ${c.angle}` : '', c.moves ? 'someone crosses the room' : ''].filter(Boolean).join(' · ');
+      const vw = c.view ?? s.view;
+      const rev = vw && vw !== 'front' ? `view: ${vw}` : '';
+      const extra = [c.objects?.length ? `objects: ${c.objects.join(', ')}` : '', c.cam ? `cam: ${c.cam}` : '', c.zone ? `zone: ${c.zone}` : '', c.foreground && c.foreground !== 'none' ? `foreground: ${c.foreground}` : '', c.angle && c.angle !== 'level' ? `angle: ${c.angle}` : '', rev, c.moves ? 'someone crosses the room' : ''].filter(Boolean).join(' · ');
       return `${s.id} [${s.size ?? ''}] ${c.see}${c.subject ? ` — sujet : ${c.subject}` : ''}\n   ${who}${extra ? `\n   ${extra}` : ''}`;
     })
     .join('\n');
@@ -238,6 +377,10 @@ export const stageShots: Tool = {
             },
             objects: { type: 'array', items: { type: 'string' }, description: 'ONLY what a person holds or handles in this shot (phone, bag, letter). Furniture and set (chair, stairs, TV) go in `see`, not here' },
             angle: { type: 'string', enum: ['level', 'low', 'high'] },
+            view: { type: 'string', enum: [...VALID_STAGE_VIEWS], description: "room perspective: 'front', 'reverse' (contrechamp), '3/4-left', '3/4-right', 'left', or 'right'" },
+            cam: { type: 'string', enum: [...VALID_STAGE_CAMS], description: "optional shot framing override such as 'ots' (over-the-shoulder), 'pov' (first-person), or 'deep'" },
+            zone: { type: 'string', description: "optional piece id or room sub-zone ('window', 'door', 'sofa', 'counter', 'left', 'right') to anchor framing" },
+            foreground: { type: 'string', enum: [...VALID_STAGE_FOREGROUNDS], description: "optional blurred foreground silhouette with camera parallax ('auto', 'plant', 'doorframe', 'lamp', 'chair', 'curtain')" },
             moves: { type: 'boolean', description: 'true when someone walks across the room in this shot' },
             change: { type: 'string', description: 'what differs from the previous shot' },
           },
