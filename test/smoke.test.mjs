@@ -4366,6 +4366,26 @@ test('7669887273659305246-1 & post-final rerun fixes: tabletop/phone angle exemp
   }
 });
 
+test('CSRF Origin: the configured public tunnel origin passes, while an unlisted origin stays blocked', async () => {
+  const previous = process.env.WHATIF_ALLOWED_ORIGINS;
+  process.env.WHATIF_ALLOWED_ORIGINS = 'https://chart-llc-intense-pay.trycloudflare.com';
+  const { dir, app } = tmpApp();
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  try {
+    const allowed = await fetch(`${base}/api/health`, { headers: { origin: 'https://chart-llc-intense-pay.trycloudflare.com' } });
+    assert.equal(allowed.status, 200);
+    const denied = await fetch(`${base}/api/health`, { headers: { origin: 'https://evil.example' } });
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { error: 'cross-origin request blocked' });
+  } finally {
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.WHATIF_ALLOWED_ORIGINS;
+    else process.env.WHATIF_ALLOWED_ORIGINS = previous;
+  }
+});
+
 test('security hardening (C1-C4): malformed URL 400, CSRF Origin 403, .env block, Range 416/206, C2 path normalization, symlink escape, shell policy, SSR VM sandbox & API key origin guard', async () => {
   const http = await import('node:http');
   const { dir, app } = tmpApp();

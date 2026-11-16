@@ -74,6 +74,7 @@ export type App = {
 };
 
 export function createApp(config: Config = loadConfig()): App {
+  const allowedOrigins = new Set(config.allowedOrigins ?? []);
   const db = new Db(config.dbPath);
   // Expire any stale pending approvals left over from a previous crashed/restarted server process
   try {
@@ -113,6 +114,7 @@ export function createApp(config: Config = loadConfig()): App {
       const reqHostname = (reqHost ?? '').trim().toLowerCase().replace(/:\d+$/, '');
       if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1') return true;
       if (cfgHost !== '0.0.0.0' && cfgHost !== '::' && h === cfgHost) return true;
+      if (allowedOrigins.has(u.origin)) return true;
       if ((cfgHost === '0.0.0.0' || cfgHost === '::') && reqHostname && h === reqHostname) return true;
       return false;
     } catch {

@@ -3,6 +3,8 @@ import path from 'node:path';
 
 export type Config = {
   host: string;
+  /** Exact additional browser origins, e.g. the current public tunnel; local origins remain allowed. */
+  allowedOrigins: string[];
   port: number;
   dataRoot: string;
   dbPath: string;
@@ -47,6 +49,23 @@ function intEnv(raw: string | undefined, fallback: number, min = 0): number {
   return Math.max(min, Math.trunc(n));
 }
 
+function parseAllowedOrigins(raw: string | undefined): string[] {
+  const origins = new Set<string>();
+  for (const candidate of raw?.split(',') ?? []) {
+    const value = candidate.trim();
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol)) continue;
+      if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) continue;
+      origins.add(url.origin);
+    } catch {
+      // Ignore malformed entries; a bad allowlist must never broaden access.
+    }
+  }
+  return [...origins];
+}
+
 export function loadConfig(): Config {
   const here = path.dirname(new URL(import.meta.url).pathname);
   const packageRoot = path.resolve(here, '..', '..');
@@ -55,6 +74,7 @@ export function loadConfig(): Config {
   fs.mkdirSync(dataRoot, { recursive: true });
   return {
     host: process.env.WHATIF_HOST?.trim() || '127.0.0.1',
+    allowedOrigins: parseAllowedOrigins(process.env.WHATIF_ALLOWED_ORIGINS),
     port: intEnv(process.env.WHATIF_PORT, 3000, 0),
     dataRoot,
     dbPath,
