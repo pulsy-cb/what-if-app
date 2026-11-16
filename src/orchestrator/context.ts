@@ -159,7 +159,7 @@ function swapBlock(text: string, from: string, to: string, replacement: string):
 export function modernSystemPrompt(): string {
   let p = SYSTEM_PROMPT;
   p = swapBlock(p, '   - **1. Architecture des décors', '   - **3. Découpage', `   - **1. Les lieux (multi-espaces & profondeur)**: définis le lieu principal avec \`place()\` (recette du catalogue, ambiance \`mood\` et \`palette\` propres à cette histoire) PLUS 1 ou 2 lieux secondaires/cutaways dans \`shared.tsx\` dès que le récit évoque un couloir, une entrée, la rue, une voiture, une autre pièce ou un flashback, pour ne jamais enfermer tout l'épisode devant un seul mur. Compose en 3 couches de profondeur : mur du fond, mobilier et personnages, premier plan. Si le catalogue n'a pas ce qu'il faut, tu construis (voir le guide shot()).
-   - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (mascotte \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\` / \`I\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\` / \`she\`/\`he\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
+   - **2. Casting sur mesure, cohérence d'âge/famille & chronologie (\`cast()\`)**: crée chaque personnage sur mesure pour l'histoire (\`seed\`, \`body: 'adult' | 'teen' | 'child' | 'elder'\` selon l'âge réel, \`kind\`, \`skin\` explicite et cohérente au sein d'une même famille biologique, \`hair: { style, color }\`, \`outfit\` distinct) — n'utilise PAS \`as: 'heroine'\` par défaut (mascotte \`"her"\` hors sujet). Si \`narratorPov === "first"\` (\`je\` / \`I\`), aligne le genre du protagoniste sur \`episode.json.voice.narratorGender\` ; si \`narratorPov === "third"\` (\`elle\`/\`il\` / \`she\`/\`he\`), mets uniquement en scène les personnages de l'histoire sans inventer de narrateur en plus. Passe \`who: CHAR\` sur \`phoneShot\` / \`tabletopShot\` pour accorder la peau et la manche des mains en gros plan. **Présence & objet-clé** : ne place jamais un défunt ou absent debout vivant dans le présent (utilise un cadre photo ou un flashback \`look: "memory"\`), et ne fais porter/tenir l'objet-clé qu'au moment exact où le récit le dit.
 `);
   p = swapBlock(p, '     - **Prise et tenue d', '6. **Step 5b', `     - **Objets tenus et posés**: passe \`hold: '<object>'\` (ou \`hold: { node: <g>…</g> }\`) sur la personne, et \`props: [{ on: '<piece id>', node: held('<object>') }]\` pour un objet posé sur un meuble. Jamais d'objet flottant loin des mains.
 `);
@@ -574,7 +574,7 @@ export function episodePin(projectRoot: string, history?: MessageRow[]): string 
       lockLines.push(`- Voice: ${vName} (${vGen}, pov=${vPov}). ${povHint}`);
     }
     lockLines.push(
-      `- Build custom characters per story (explicit skin, age-appropriate body 'adult' vs 'teen', hair, outfit — avoid default as: 'heroine'); pass who: CHAR on phoneShot/tabletopShot hands; keep deceased/absent people in photos or look="memory" flashbacks.`,
+      `- Build custom characters per story (explicit skin, age-appropriate body 'adult' | 'teen' | 'child' | 'elder', hair, outfit — avoid default as: 'heroine'); pass who: CHAR on phoneShot/tabletopShot hands; keep deceased/absent people in photos or look="memory" flashbacks.`,
     );
     parts.push(`### Language, narrator & casting lock\n${lockLines.join('\n')}`);
   }
@@ -672,26 +672,24 @@ function compactToolCalls(calls: ToolCall[] | undefined, age: number): ToolCall[
     if (c.name === 'write_file' && typeof c.args?.content === 'string' && c.args.content.length > 1_200) {
       const allLines = c.args.content.split('\n');
       const lines = allLines.length;
-      const head = allLines.slice(0, 6).join('\n');
-      const tail = allLines.slice(-4).join('\n');
+      // One plain line, nothing that looks like a file: with the first and last lines kept around a comment, models
+      // copied the comment as the body of a new call (15 edit_shot calls refused, 2026-11-14)
       return {
         ...c,
         args: {
           ...c.args,
-          content: `${head}\n/* [compacted: ${lines} lines (${c.args.content.length} chars) already on disk — always pass real TypeScript code in write_file] */\n${tail}`,
+          content: `[compacted: ${lines} lines (${c.args.content.length} chars) were written to disk by this call. System note, not file content: read_file the path to see it]`,
         },
       };
     }
     if (c.name === 'edit_shot' && typeof c.args?.code === 'string' && c.args.code.length > 1_200) {
       const allLines = c.args.code.split('\n');
       const lines = allLines.length;
-      const head = allLines.slice(0, 5).join('\n');
-      const tail = allLines.slice(-3).join('\n');
       return {
         ...c,
         args: {
           ...c.args,
-          code: `${head}\n/* [compacted: ${lines} lines (${c.args.code.length} chars) already on disk — always pass real TypeScript code in edit_shot] */\n${tail}`,
+          code: `[compacted: ${lines} lines (${c.args.code.length} chars) were written to disk by this call. System note, not code: read_file the shot to see it]`,
         },
       };
     }

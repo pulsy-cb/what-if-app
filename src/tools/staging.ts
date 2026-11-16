@@ -293,31 +293,15 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
         b.zone === c.zone
       ) {
         out.push(
-          `${a.id}, ${b.id}, ${c.id} repeat the exact same POV (${a.place}, cam '${a.cam}', view '${a.view}', angle '${a.angle}') three times in a row: break monotony with view: 'reverse' | '3/4-left' | '3/4-right', cam: 'ots' | 'close' | 'wide', zone, a low/high angle, or a phoneShot/tabletopShot/secondary place`,
+          `${a.id}, ${b.id}, ${c.id} repeat the exact same POV (${a.place}, cam '${a.cam}', view '${a.view}', angle '${a.angle}') three times in a row: break monotony with view: '3/4-left' | '3/4-right', cam: 'ots' | 'close' | 'wide', zone, a low/high angle, or a phoneShot/tabletopShot/secondary place`,
         );
         triadWarnings++;
         i += 2;
       }
     }
 
-    const byPlace = new Map<string, PovEntry[]>();
-    for (const p of povs) {
-      if (!p.isShot || !p.place) continue;
-      byPlace.set(p.place, [...(byPlace.get(p.place) ?? []), p]);
-    }
-    const anyAlt = povs.some((p) => p.hasAltPerspective);
-    if (!anyAlt) {
-      for (const [plName, list] of byPlace) {
-        const twoPlus = list.filter((p) => p.whoCount >= 2);
-        if (list.length >= 6 && twoPlus.length >= 3) {
-          const sample = list.slice(1, 7).map((p) => p.id).join(', ');
-          out.push(
-            `0/${list.length} shots in ${plName} use view: 'reverse' (contrechamp) or alternate perspectives ('3/4-left', 'left', cam: 'ots'): in a multi-person scene, add view: 'reverse' or cam: 'ots' on at least 2 reaction/counter-shots (e.g. among ${sample}) so the camera does not stare at the same wall all episode`,
-          );
-          break;
-        }
-      }
-    }
+    // No rule asks for a reverse shot any more: demanded by this check and handed out by the shot list, `view: 'reverse'`
+    // gave the back of a head in 43 shots of 6 projects (audit 2026-11-16). Three identical points of view in a row stay refused.
 
     const shotEntries = povs.filter((p) => p.isShot);
     const hasMoveSignals = shotEntries.filter((p) => p.explicitMove !== '').length >= 6 || shots.some((s) => Boolean(s?.move));

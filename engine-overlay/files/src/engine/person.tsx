@@ -16,7 +16,7 @@ import type { Character } from './cast';
 
 // The shapes read from the rig, declared here (not imported) so this file compiles against every engine copy.
 type Limb = { a: number; b: number };
-type HandKind = 'open' | 'point';
+type HandKind = 'open' | 'point' | 'fist' | 'palm' | 'thumb';
 type Expr = 'neutral' | 'happy' | 'smug' | 'shock' | 'worried' | 'oops' | 'cool' | 'dizzy' | 'tired';
 export type PersonLook = {
   skin: string; skinShade: string; hand: string; jacket: string; jacketShade: string; accent: string; limb: string; line: string;
@@ -27,6 +27,9 @@ export type PersonPose = {
   x: number; y: number; scale: number; facing: 1 | -1; tilt: number; spin: number; headTilt: number; armL: Limb; armR: Limb; legL: Limb; legR: Limb;
   expr: string; blink: number; look: number; glasses: number; yaw: number; squash: number; handL: string; handR: string; sway: number;
   talk?: number; glint?: number; glintColor?: string;
+  /** both arms over the torso */ armsFront?: boolean;
+  /** the arms are drawn over the head too (a hand on the face, on the mouth, on the hair) */ armsOver?: boolean;
+  /** the brows of another face than `expr` */ brow?: string;
 };
 type P = { x: number; y: number };
 const HEAD = { x: 0, y: -176, r: 62 };
@@ -40,10 +43,13 @@ export type Body = {
   /** width of the arms and of the legs */ arm: number; leg: number;
   /** how it moves, relative to an adult */ amp?: number; tempo?: number;
 };
-export type BodyId = 'adult' | 'teen';
+export type BodyId = 'adult' | 'teen' | 'child' | 'elder';
 export const BODIES: Record<BodyId, Body> = {
   adult: { head: 1, chest: 1, torso: 1, belly: 0, shoulder: { x: 42, y: -108 }, hip: 17, upperArm: 62, foreArm: 58, thigh: 72, shin: 68, arm: 11, leg: 12 },
   teen: { head: 0.98, chest: 0.88, torso: 0.93, belly: 0, shoulder: { x: 37, y: -100 }, hip: 15, upperArm: 58, foreArm: 54, thigh: 66, shin: 62, arm: 10, leg: 11, amp: 1.1, tempo: 1.08 },
+  // a child of 6 to 10: a big head on a short body, quick. An elder: an adult a little heavier and slower
+  child: { head: 0.94, chest: 0.74, torso: 0.76, belly: 0, shoulder: { x: 31, y: -82 }, hip: 13, upperArm: 44, foreArm: 41, thigh: 46, shin: 44, arm: 9, leg: 10, amp: 1.2, tempo: 1.16 },
+  elder: { head: 1, chest: 1.03, torso: 0.97, belly: 9, shoulder: { x: 41, y: -104 }, hip: 17, upperArm: 60, foreArm: 56, thigh: 68, shin: 64, arm: 11, leg: 12, amp: 0.8, tempo: 0.84 },
 };
 /** Your own proportions from a base body: defineBody('adult', { chest: 1.25, belly: 16, arm: 14, leg: 15 }). */
 export const defineBody = (base: BodyId, over: Partial<Body>): Body => ({ ...BODIES[base], ...over });
@@ -227,7 +233,13 @@ export const grabOf = (
   return { arm, pose: armPose, propPos, handPos, side: effSide };
 };
 
+const TEAR = '#7CC4F2';
+// how far the upper lid comes down, and how it leans, for the expressions added on 2026-11-16
+const LIDS: Record<string, number> = { sad: 0.32, angry: 0.24, furious: 0.16, determined: 0.14, disgust: 0.42, shy: 0.18 };
+const LID_SLANT: Record<string, number> = { sad: -4, angry: 5, furious: 6, determined: 3 };
+
 const Face: React.FC<{
+  brow?: string;
   expr: string;
   blink: number;
   look: number;
@@ -241,18 +253,37 @@ const Face: React.FC<{
   browW?: number;
   /** iris colours, screen-left eye then screen-right eye */
   iris?: [string, string];
-}> = ({ expr, blink, look, glasses, yaw = 0, ink = C.ink, glint = 0, glintColor = '#8FF0FF', talk = 0, eyeR, browW = 5, iris }) => {
+}> = ({ expr, brow, blink, look, glasses, yaw = 0, ink = C.ink, glint = 0, glintColor = '#8FF0FF', talk = 0, eyeR, browW = 5, iris }) => {
   const ex = look * 7;
   const ay = Math.min(1, Math.abs(yaw));
   const farHidden = ay > 0.72;
   const farSide = yaw > 0 ? -1 : 1; // facing screen-right hides the screen-left eye
   const eyeY = HEAD.y - 4;
   // heavy lids: half shut when smug or cool, more than half when tired (with dark rings under the eyes)
-  const lid = expr === 'smug' || expr === 'cool' ? 0.45 : expr === 'tired' ? 0.58 : 0;
+  const lid = expr === 'smug' || expr === 'cool' ? 0.45 : expr === 'tired' ? 0.58 : LIDS[expr] ?? 0;
+  // the lid follows the brow: inner end low when angry, high when sad
+  const slant = LID_SLANT[expr] ?? 0;
   const open = Math.max(0.08, 1 - Math.max(blink, lid));
   const eye = (cx: number) => {
     if (farHidden && Math.sign(cx) === farSide) return null;
-    if (expr === 'happy') return <path d={`M ${cx - 10} ${eyeY + 3} Q ${cx} ${eyeY - 9} ${cx + 10} ${eyeY + 3}`} stroke={ink} strokeWidth={6} fill="none" strokeLinecap="round" />;
+    const inner = cx < 0 ? 1 : -1;
+    if (expr === 'cry')
+      return (
+        <g>
+          <path d={`M ${cx - 11} ${eyeY - 3} Q ${cx} ${eyeY + 8} ${cx + 11} ${eyeY - 3}`} stroke={ink} strokeWidth={6} fill="none" strokeLinecap="round" />
+          <path d={`M ${cx - 5} ${eyeY + 9} L ${cx - 6} ${eyeY + 34} Q ${cx} ${eyeY + 44} ${cx + 6} ${eyeY + 34} L ${cx + 5} ${eyeY + 9} Z`} fill={TEAR} opacity={0.92} />
+        </g>
+      );
+    if ((expr === 'scared' || expr === 'terrified') && blink < 0.95) {
+      const big2 = expr === 'terrified' ? 1.12 : 1;
+      return (
+        <g>
+          <ellipse cx={cx} cy={eyeY - 1} rx={11 * big2} ry={13 * big2} fill="#FFFFFF" stroke={ink} strokeWidth={4} />
+          <circle cx={cx + ex * 0.6} cy={eyeY} r={expr === 'terrified' ? 3.2 : 4.4} fill={ink} />
+        </g>
+      );
+    }
+    if (expr === 'happy' || expr === 'laugh') return <path d={`M ${cx - 10} ${eyeY + 3} Q ${cx} ${eyeY - 9} ${cx + 10} ${eyeY + 3}`} stroke={ink} strokeWidth={6} fill="none" strokeLinecap="round" />;
     if (expr === 'oops') return <path d={`M ${cx - 9} ${eyeY - 6} L ${cx + 4} ${eyeY} L ${cx - 9} ${eyeY + 6}`} transform={cx > 0 ? `translate(${2 * cx},0) scale(-1,1)` : undefined} stroke={ink} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />;
     if (expr === 'dizzy') return <g stroke={ink} strokeWidth={5} strokeLinecap="round"><path d={`M ${cx - 7} ${eyeY - 7} L ${cx + 7} ${eyeY + 7} M ${cx + 7} ${eyeY - 7} L ${cx - 7} ${eyeY + 7}`} /></g>;
     // shut (a blink's middle frame, or asleep): the closed lid's curve, with the tired rings kept
@@ -274,7 +305,7 @@ const Face: React.FC<{
         {iris && open > 0.35 ? <circle cx={cx + ex} cy={eyeY + (lid ? 3 : 0) + 0.5} r={Math.min(rx, ry) * 0.3} fill={ink} /> : null}
         {iris && open > 0.35 && !big ? <circle cx={cx + ex + rx * 0.35} cy={eyeY - ry * 0.35} r={1.8} fill="#fff" /> : null}
         {big && open > 0.5 ? <circle cx={cx + ex + 3.5} cy={eyeY - 4} r={3.4} fill="#fff" /> : null}
-        {lid ? <path d={expr === 'tired' ? `M ${cx - 13} ${eyeY - 1} Q ${cx} ${eyeY - 5} ${cx + 13} ${eyeY - 1}` : `M ${cx - 12} ${eyeY - 4} L ${cx + 12} ${eyeY - 2}`} stroke={ink} strokeWidth={4} strokeLinecap="round" fill="none" /> : null}
+        {lid ? <path d={expr === 'tired' ? `M ${cx - 13} ${eyeY - 1} Q ${cx} ${eyeY - 5} ${cx + 13} ${eyeY - 1}` : slant ? `M ${cx - 13 * inner} ${eyeY - 4 - slant} L ${cx + 13 * inner} ${eyeY - 3 + slant}` : `M ${cx - 12} ${eyeY - 4} L ${cx + 12} ${eyeY - 2}`} stroke={ink} strokeWidth={4} strokeLinecap="round" fill="none" /> : null}
         {expr === 'tired' ? <path d={`M ${cx - 12} ${eyeY + 14} Q ${cx} ${eyeY + 21} ${cx + 12} ${eyeY + 14}`} stroke="#8C7AA6" strokeWidth={4.5} fill="none" strokeLinecap="round" opacity={0.85} /> : null}
       </g>
     );
@@ -289,6 +320,17 @@ const Face: React.FC<{
     cool: '',
     dizzy: '',
     tired: `M -33 ${eyeY - 17} Q -22 ${eyeY - 21} -11 ${eyeY - 19} M 11 ${eyeY - 19} Q 22 ${eyeY - 21} 33 ${eyeY - 17}`,
+    // inner ends up: sorrow, fear. Inner ends down: anger, resolve
+    sad: `M -34 ${eyeY - 15} L -12 ${eyeY - 27} M 12 ${eyeY - 27} L 34 ${eyeY - 15}`,
+    cry: `M -34 ${eyeY - 16} Q -22 ${eyeY - 30} -11 ${eyeY - 27} M 11 ${eyeY - 27} Q 22 ${eyeY - 30} 34 ${eyeY - 16}`,
+    angry: `M -35 ${eyeY - 27} L -10 ${eyeY - 15} M 10 ${eyeY - 15} L 35 ${eyeY - 27}`,
+    furious: `M -36 ${eyeY - 29} L -9 ${eyeY - 12} M 9 ${eyeY - 12} L 36 ${eyeY - 29}`,
+    determined: `M -34 ${eyeY - 23} L -11 ${eyeY - 17} M 11 ${eyeY - 17} L 34 ${eyeY - 23}`,
+    scared: `M -33 ${eyeY - 24} L -13 ${eyeY - 33} M 13 ${eyeY - 33} L 33 ${eyeY - 24}`,
+    terrified: `M -34 ${eyeY - 26} L -13 ${eyeY - 38} M 13 ${eyeY - 38} L 34 ${eyeY - 26}`,
+    disgust: `M -34 ${eyeY - 24} L -11 ${eyeY - 15} M 12 ${eyeY - 24} Q 22 ${eyeY - 29} 33 ${eyeY - 22}`,
+    shy: `M -32 ${eyeY - 19} L -13 ${eyeY - 24} M 13 ${eyeY - 24} L 32 ${eyeY - 19}`,
+    laugh: `M -33 ${eyeY - 22} Q -21 ${eyeY - 30} -10 ${eyeY - 23} M 10 ${eyeY - 23} Q 21 ${eyeY - 30} 33 ${eyeY - 22}`,
   };
   const mY = HEAD.y + 28;
   const mouthOpen = Math.max(0, Math.min(1, talk));
@@ -302,6 +344,16 @@ const Face: React.FC<{
     cool: <path d={`M -12 ${mY + 2} Q 4 ${mY + 8} 16 ${mY - 6}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" />,
     dizzy: <path d={`M -14 ${mY + 4} Q -7 ${mY - 4} 0 ${mY + 4} Q 7 ${mY + 12} 14 ${mY + 4}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" />,
     tired: <path d={`M -11 ${mY + 4} Q 0 ${mY} 11 ${mY + 4}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" />,
+    sad: <path d={`M -15 ${mY + 9} Q 0 ${mY - 5} 15 ${mY + 9}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" />,
+    cry: <g><path d={`M -17 ${mY + 13} Q -14 ${mY - 8} 0 ${mY - 8} Q 14 ${mY - 8} 17 ${mY + 13} Q 0 ${mY + 6} -17 ${mY + 13} Z`} fill={ink} /><path d={`M -9 ${mY + 8} Q 0 ${mY + 2} 9 ${mY + 8}`} stroke="#E06A6A" strokeWidth={4} fill="none" strokeLinecap="round" /></g>,
+    angry: <path d={`M -15 ${mY + 8} Q 0 ${mY - 3} 15 ${mY + 8}`} stroke={ink} strokeWidth={6} fill="none" strokeLinecap="round" />,
+    furious: <g><path d={`M -19 ${mY - 5} L 19 ${mY - 5} L 15 ${mY + 13} L -15 ${mY + 13} Z`} fill={ink} strokeLinejoin="round" stroke={ink} strokeWidth={4} /><path d={`M -15 ${mY - 2} L 15 ${mY - 2} L 13 ${mY + 4} L -13 ${mY + 4} Z`} fill="#FFFFFF" /><path d={`M -5 ${mY - 2} L -5 ${mY + 4} M 5 ${mY - 2} L 5 ${mY + 4}`} stroke={ink} strokeWidth={2} /></g>,
+    determined: <path d={`M -13 ${mY + 4} L 6 ${mY + 4} Q 12 ${mY + 4} 14 ${mY}`} stroke={ink} strokeWidth={5.5} fill="none" strokeLinecap="round" />,
+    scared: <path d={`M -15 ${mY + 5} l 5 -6 l 5 6 l 5 -6 l 5 6 l 5 -6`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" />,
+    terrified: <g><path d={`M -13 ${mY - 6} Q 0 ${mY - 12} 13 ${mY - 6} L 15 ${mY + 16} Q 0 ${mY + 24} -15 ${mY + 16} Z`} fill={ink} /><path d={`M -8 ${mY + 13} Q 0 ${mY + 6} 8 ${mY + 13}`} stroke="#E06A6A" strokeWidth={4} fill="none" strokeLinecap="round" /></g>,
+    disgust: <g><path d={`M -15 ${mY + 7} Q -8 ${mY - 4} -1 ${mY + 4} Q 6 ${mY + 11} 15 ${mY + 1}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" /><path d={`M 1 ${mY + 7} q 2 11 8 9 q 5 -2 3 -11 Z`} fill="#E06A6A" stroke={ink} strokeWidth={3} strokeLinejoin="round" /></g>,
+    shy: <path d={`M -9 ${mY + 3} Q -3 ${mY + 8} 2 ${mY + 3} Q 6 ${mY - 1} 10 ${mY + 4}`} stroke={ink} strokeWidth={5} fill="none" strokeLinecap="round" />,
+    laugh: <g><path d={`M -23 ${mY - 8} Q 0 ${mY + 34} 23 ${mY - 8} Z`} fill={ink} /><path d={`M -17 ${mY - 5} L 17 ${mY - 5} Q 0 ${mY + 3} -17 ${mY - 5} Z`} fill="#FFFFFF" /><path d={`M -9 ${mY + 13} Q 0 ${mY + 5} 9 ${mY + 13} Q 0 ${mY + 21} -9 ${mY + 13} Z`} fill="#E06A6A" /></g>,
   };
   const talkingMouth =
     mouthOpen > 0.16 && expr !== 'oops' ? (
@@ -310,15 +362,20 @@ const Face: React.FC<{
         {mouthOpen > 0.42 ? <ellipse cx={0} cy={mY + 5 + mouthOpen * 3} rx={5 + mouthOpen * 3} ry={2.5 + mouthOpen * 2.5} fill="#E06A6A" /> : null}
       </g>
     ) : (
-      mouth[expr]
+      mouth[expr] ?? mouth.neutral
     );
   return (
     <g transform={`translate(${yaw * 30} 0) scale(${1 - 0.28 * ay} 1)`}>
       {eye(-21)}
       {eye(21)}
-      {brows[expr] ? <path d={brows[expr]} stroke={ink} strokeWidth={browW} fill="none" strokeLinecap="round" /> : null}
+      {brows[brow ?? expr] ? <path d={brows[brow ?? expr]} stroke={ink} strokeWidth={browW} fill="none" strokeLinecap="round" /> : null}
       {talkingMouth}
-      {expr === 'shock' || expr === 'oops' ? <path d={`M 52 ${HEAD.y - 30} q 6 10 0 16 q -6 -6 0 -16 Z`} fill="#8FD3FF" /> : null}
+      {expr === 'shock' || expr === 'oops' || expr === 'scared' || expr === 'terrified' ? <path d={`M 52 ${HEAD.y - 30} q 6 10 0 16 q -6 -6 0 -16 Z`} fill="#8FD3FF" /> : null}
+      {/* what a mouth and two eyes cannot say alone: red cheeks, a vein of anger, the cold lines of dread, a tear of laughter */}
+      {expr === 'shy' ? <g fill="#F08A8A" opacity={0.6}><ellipse cx={-33} cy={eyeY + 20} rx={11} ry={6.5} /><ellipse cx={33} cy={eyeY + 20} rx={11} ry={6.5} /></g> : null}
+      {expr === 'furious' ? <path d={`M 40 ${HEAD.y - 50} l 9 5 l -5 9 M 52 ${HEAD.y - 47} l -9 5 l 5 9`} stroke="#E5484D" strokeWidth={5} fill="none" strokeLinecap="round" strokeLinejoin="round" /> : null}
+      {expr === 'terrified' ? <path d={`M -14 ${HEAD.y - 52} l 0 16 M -3 ${HEAD.y - 55} l 0 20 M 8 ${HEAD.y - 52} l 0 16`} stroke="#6E8FC9" strokeWidth={4} strokeLinecap="round" opacity={0.8} /> : null}
+      {expr === 'laugh' ? <path d={`M 34 ${eyeY + 4} q 7 9 1 14 q -6 -4 -1 -14 Z`} fill={TEAR} /> : null}
       {/* a power lighting the eyes: a soft halo, a bright iris, a white catchlight (none while the lids are shut) */}
       {glint > 0.01 && blink < 0.95
         ? [-21, 21].map((cx) =>
@@ -437,6 +494,7 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
         </g>
       ) : null}
       <Face
+        brow={pose.brow}
         expr={pose.expr}
         blink={pose.blink}
         look={pose.look}
@@ -553,18 +611,42 @@ export const Person: React.FC<{
       </g>
     );
   };
-  const shoe = (o: { root: P; mid: P; end: P }) => (
-    <g>
-      {c?.feet.id === 'boots' ? <rect x={o.end.x - 12} y={o.end.y - 26} width={24} height={30} rx={6} fill={L.shoe} stroke={L.line} strokeWidth={4} /> : null}
-      <ellipse cx={o.end.x + forward(pose) * 9} cy={o.end.y + 4} rx={22} ry={11} fill={L.shoe} stroke={L.line} strokeWidth={4} />
-    </g>
-  );
+  // A foot follows its shin: toes up when the leg lies out in front (sitting on the ground), the foot laid back behind
+  // a folded knee (kneeling), a little heel-and-toe in a walk. It used to be one flat shape whatever the leg did, and
+  // seen from the front both feet slid to the same side. Facing the viewer, the feet open outward a little instead.
+  const shoe = (o: { root: P; mid: P; end: P }, side: 1 | -1 = 1) => {
+    const f = forward(pose);
+    const turned = Math.min(1, Math.abs(pose.yaw) / 0.45);
+    const shin = (Math.atan2(o.end.x - o.mid.x, o.end.y - o.mid.y) * 180) / Math.PI;
+    const back = Math.max(0, Math.min(1, (-f * shin) / 90));
+    const turn = (-shin + f * 90 * back) * turned + side * 9 * (1 - turned);
+    return (
+      <g transform={`translate(${o.end.x} ${o.end.y}) rotate(${turn})`}>
+        {c?.feet.id === 'boots' ? <rect x={-12} y={-26} width={24} height={30} rx={6} fill={L.shoe} stroke={L.line} strokeWidth={4} /> : null}
+        <ellipse cx={f * 9 * turned + side * 5 * (1 - turned)} cy={4} rx={22 - 3 * (1 - turned)} ry={11} fill={L.shoe} stroke={L.line} strokeWidth={4} />
+      </g>
+    );
+  };
   // a mitten along the forearm: the palm, the thumb toward the body, two knuckle marks; or a pointing fist
   const hand = (o: { mid: P; end: P }, side: 1 | -1, kind: HandKind, prop?: React.ReactNode) => {
     const ang = (Math.atan2(o.end.x - o.mid.x, o.end.y - o.mid.y) * 180) / Math.PI;
     return (
       <g transform={`translate(${o.end.x} ${o.end.y}) rotate(${-ang})`}>
-        {kind === 'point' ? (
+        {kind === 'fist' || kind === 'thumb' ? (
+          <g>
+            {/* a closed fist; 'thumb' lifts the thumb out of it, away from the forearm's axis */}
+            {kind === 'thumb' ? <rect x={side * -15} y={-12} width={9} height={22} rx={4.5} fill={L.hand} stroke={L.line} strokeWidth={3.5} transform={`rotate(${side * 18} ${side * -10} 6)`} /> : null}
+            <rect x={-12} y={-3} width={24} height={24} rx={9} fill={L.hand} stroke={L.line} strokeWidth={4} />
+            <path d="M -6 13 L -6 19 M 0 14 L 0 20 M 6 13 L 6 19" stroke={L.line} strokeWidth={2} opacity={0.5} strokeLinecap="round" />
+          </g>
+        ) : kind === 'palm' ? (
+          <g>
+            {/* an open palm shown flat: four fingers and the thumb apart */}
+            {[-9, -3, 3, 9].map((x) => <rect key={x} x={x - 2.8} y={14} width={5.6} height={15 - Math.abs(x) * 0.35} rx={2.8} fill={L.hand} stroke={L.line} strokeWidth={3} />)}
+            <ellipse cx={side * 13} cy={7} rx={4.5} ry={9} transform={`rotate(${side * -40} ${side * 13} 7)`} fill={L.hand} stroke={L.line} strokeWidth={3.5} />
+            <rect x={-12} y={-3} width={24} height={22} rx={8} fill={L.hand} stroke={L.line} strokeWidth={4} />
+          </g>
+        ) : kind === 'point' ? (
           <g>
             <rect x={-4} y={10} width={8} height={24} rx={4} fill={L.hand} stroke={L.line} strokeWidth={3.5} />
             <path d="M -11 -2 Q -14 14 -6 18 L 7 18 Q 14 14 11 -2 Z" fill={L.hand} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
@@ -644,17 +726,19 @@ export const Person: React.FC<{
   // The far arm of a turned body hangs behind the torso: its hand used to stick out under the jacket, a pale blob between
   // the legs (seen on every three-quarter adult, 2026-11-12). Behind the body and empty, it is not drawn.
   const farHandHidden = (o: { end: P }, prop?: React.ReactNode): boolean => !prop && Math.abs(pose.yaw) > 0.2 && Math.abs(o.end.x) < b.shoulder.x * 0.8;
+  const farArmFront = pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>;
+  const nearArm = pose.yaw < 0 ? <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</> : <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>;
   return (
     <g>
       {shadow > 0 ? <ellipse cx={pose.x} cy={pose.y + legLen * pose.scale + 10} rx={70 * pose.scale} ry={12 * pose.scale} fill="#000" opacity={0.25 * shadow} /> : null}
       <g transform={`translate(${pose.x} ${pose.y}) scale(${pose.scale}) rotate(${pose.spin} 0 -90)`} filter={`url(#${rimId})`}>
         <g transform={`translate(0 ${legLen}) scale(${1 + 0.6 * pose.squash} ${1 - pose.squash}) translate(0 ${-legLen})`}>
           {/* the far side is drawn first, so a turned body overlaps itself the right way */}
-          {pose.yaw < 0 ? <>{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR)}{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL)}</> : <>{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL)}{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR)}</>}
+          {pose.yaw < 0 ? <>{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR, 1)}{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL, -1)}</> : <>{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL, -1)}{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR, 1)}</>}
           {c?.legs.id === 'skirt' ? <Skirt knees={[j.legL.mid, j.legR.mid]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
           {/* a long dress falls to just above the ankles, and still follows the legs when the person sits */}
           {c?.legs.id === 'dress' ? <Skirt knees={[{ x: lerp(j.legL.mid.x, j.legL.end.x, 0.82) - 8, y: lerp(j.legL.mid.y, j.legL.end.y, 0.82) }, { x: lerp(j.legR.mid.x, j.legR.end.x, 0.82) + 8, y: lerp(j.legR.mid.y, j.legR.end.y, 0.82) }]} color={c.legs.color} shade={c.legs.shade} line={L.line} hip={b.hip} /> : null}
-          {pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{farHandHidden(j.armR, handRProp) ? null : hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{farHandHidden(j.armL, handLProp) ? null : hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
+          {pose.armsFront ? null : pose.yaw < 0 ? <>{limb(j.armR, b.arm, true, armPaint)}{farHandHidden(j.armR, handRProp) ? null : hand(j.armR, -1, pose.handR as HandKind, handRProp)}</> : <>{limb(j.armL, b.arm, true, armPaint)}{farHandHidden(j.armL, handLProp) ? null : hand(j.armL, 1, pose.handL as HandKind, handLProp)}</>}
           {torso}
           {(() => {
             // thighs pointing at the camera are seen end-on: a short lap from knee to knee, over the top of the shins
@@ -669,7 +753,9 @@ export const Person: React.FC<{
             const fill = c && (c.legs.id === 'skirt' || c.legs.id === 'dress') ? c.legs.color : legPaint?.cap ?? legPaint?.limb ?? L.limb;
             return <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx={w * 0.5} fill={fill} stroke={L.line} strokeWidth={4} opacity={Math.min(1, lap * 1.4)} />;
           })()}
-          {pose.yaw < 0 ? <>{limb(j.armL, b.arm, true, armPaint)}{hand(j.armL, 1, pose.handL as HandKind, handLProp)}</> : <>{limb(j.armR, b.arm, true, armPaint)}{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>}
+          {/* crossed arms, hands on hips: the far arm too is in front of the body (it was hidden: the gesture read as idle) */}
+          {pose.armsFront && !pose.armsOver ? farArmFront : null}
+          {pose.armsOver ? null : nearArm}
           <g transform={`${headShift}${headSize}`}>
           {L.extra === 'hood' ? (
             <g transform={`rotate(${pose.tilt}) rotate(${pose.headTilt * 0.5} 0 ${HEAD.y + 40})`}>
@@ -702,6 +788,8 @@ export const Person: React.FC<{
               </g>
             ) : null}
           </g>
+          {/* a hand on the face is in front of the face: facepalm used to slide behind the head */}
+          {pose.armsOver ? <>{pose.armsFront ? farArmFront : null}{nearArm}</> : null}
           {children}
         </g>
       </g>

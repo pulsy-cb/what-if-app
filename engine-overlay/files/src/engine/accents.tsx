@@ -67,10 +67,14 @@ export type StampSpec = {
   hold?: number;
   pos?: ScreenAnchor;
   accent?: string;
+  /** a named colour for the accent bar and the second line */
+  tone?: 'amber' | 'red' | 'teal' | 'ink';
 };
+const STAMP_TONES: Record<string, string> = { amber: '#F2A33A', red: '#E5484D', teal: '#2BB3A3', ink: '#C9CCD6' };
 
 /** Diegetic time/place/chapter stamp card (16:9 & 9:16 safe). Never use for voice captions. */
-export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at = 2, hold, pos = 'top-left', accent = LIVE, t }) => {
+export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at = 2, hold, pos = 'top-left', accent: accentIn, tone, t }) => {
+  const accent = accentIn ?? (tone ? STAMP_TONES[tone] : undefined) ?? LIVE;
   const dt = t - at;
   if (dt < 0) return null;
   if (hold !== undefined && dt > hold + 10) return null;
@@ -109,6 +113,8 @@ export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at =
 export type ValueTagSpec = {
   /** Static label ("15 000 €", "REFUSÉ", "03:14") OR omit when using `count` */
   text?: string;
+  /** a short second line under the pill ("FACTURE", "PAR MOIS") */
+  sub?: string;
   /** Animated live counter: `{ from: 0, to: 15000, suffix: ' €', dur: 28 }` */
   count?: { from: number; to: number; prefix?: string; suffix?: string; decimals?: number; dur?: number };
   /** Optional animated verdict mark drawn after `markAt` frames from `at` */
@@ -125,6 +131,7 @@ export type ValueTagSpec = {
 /** Animated number / price / verdict pill with optional live counter and check/cross mark (16:9 & 9:16 safe). */
 export const ValueTag: React.FC<ValueTagSpec & { t: number }> = ({
   text,
+  sub,
   count,
   mark,
   markAt = 10,
@@ -167,6 +174,12 @@ export const ValueTag: React.FC<ValueTagSpec & { t: number }> = ({
       <text x={textX} y={17} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={fs} fill={accent}>
         {display}
       </text>
+      {sub ? (
+        <g>
+          <rect x={-Math.min(w, sub.length * 17 + 44) / 2} y={50} width={Math.min(w, sub.length * 17 + 44)} height={40} rx={20} fill={PILL} opacity={0.84} />
+          <text y={78} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={PORTRAIT ? 24 : 26} fill={CREAM} letterSpacing={2}>{sub}</text>
+        </g>
+      ) : null}
       {mark && m > 0 ? (
         <g transform={`translate(${w / 2 - 48} 0)`}>
           {mark === 'x' ? (

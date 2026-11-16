@@ -7,20 +7,20 @@ import React from 'react';
 const INK = '#1F1B2E';
 const SW = 4;
 
-export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle';
-export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box', 'tray', 'plate', 'bottle'];
+export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle' | 'bucket' | 'glass' | 'mic';
+export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box', 'tray', 'plate', 'bottle', 'bucket', 'glass', 'mic'];
 export type HeldOpts = { color?: string; scale?: number };
 
 const DEFAULTS: Record<HeldName, string> = {
   phone: '#2B2F3A', handset: '#E7DCC2', bag: '#2F4A78', paper: '#F6F1E4', crumpled: '#F1ECDD', cup: '#F3EEE2',
   keys: '#C9A546', book: '#A8443B', pen: '#2D5FA8', folder: '#D8B45A', box: '#B98A56',
-  tray: '#A9AFB8', plate: '#F3EEE2', bottle: '#4E8F6A',
+  tray: '#A9AFB8', plate: '#F3EEE2', bottle: '#4E8F6A', bucket: '#8A97A6', glass: '#CFE3EE', mic: '#2B2F3A',
 };
 
 /** Things that stay level whatever the arm does: a tray held like a phone stood on its edge (custom run, 2026-11-13). */
-export const HELD_LEVEL: readonly string[] = ['tray', 'plate', 'bottle'];
+export const HELD_LEVEL: readonly string[] = ['tray', 'plate', 'bottle', 'bucket', 'glass'];
 /** How far below the palm line each drawing ends: where it rests once put down. */
-const BOTTOM: Record<HeldName, number> = { phone: 34, handset: 52, bag: 94, paper: 50, crumpled: 34, cup: 40, keys: 60, book: 48, pen: 26, folder: 50, box: 52, tray: 16, plate: 14, bottle: 30 };
+const BOTTOM: Record<HeldName, number> = { phone: 34, handset: 52, bag: 94, paper: 50, crumpled: 34, cup: 40, keys: 60, book: 48, pen: 26, folder: 50, box: 52, tray: 16, plate: 14, bottle: 30, bucket: 44, glass: 26, mic: 30 };
 export const heldBottom = (name?: string): number => BOTTOM[name as HeldName] ?? 24;
 
 const draw: Record<HeldName, (c: string) => React.ReactNode> = {
@@ -106,6 +106,27 @@ const draw: Record<HeldName, (c: string) => React.ReactNode> = {
     <g>
       <path d="M -20 0 Q -20 -12 0 -12 Q 20 -12 20 0 Z" fill="#D9A45B" stroke={INK} strokeWidth={3} strokeLinejoin="round" />
       <path d="M -38 0 L 38 0 Q 30 12 14 12 L -14 12 Q -30 12 -38 0 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+    </g>
+  ),
+  // hung from its handle: the pail is below the hand
+  bucket: (c) => (
+    <g>
+      <path d="M -22 14 Q 0 -14 22 14" fill="none" stroke={INK} strokeWidth={4} strokeLinecap="round" />
+      <path d="M -24 12 L 24 12 L 18 44 L -18 44 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+      <ellipse cx={0} cy={12} rx={24} ry={5} fill="#00000030" stroke={INK} strokeWidth={3} />
+    </g>
+  ),
+  glass: (c) => (
+    <g>
+      <path d="M -11 -14 L 11 -14 L 8 26 L -8 26 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" opacity={0.92} />
+      <path d="M -9 2 L 9 2 L 7 23 L -7 23 Z" fill="#7FB8D8" opacity={0.7} />
+    </g>
+  ),
+  mic: (c) => (
+    <g>
+      <rect x={-5} y={-4} width={10} height={34} rx={4} fill={c} stroke={INK} strokeWidth={3} />
+      <circle cx={0} cy={-13} r={11} fill="#8A8F99" stroke={INK} strokeWidth={SW} />
+      <path d="M -7 -17 L 7 -17 M -9 -12 L 9 -12" stroke={INK} strokeWidth={1.5} opacity={0.5} />
     </g>
   ),
   // upright, held by its body: the neck goes up

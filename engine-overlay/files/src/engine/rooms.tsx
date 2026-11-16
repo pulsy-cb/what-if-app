@@ -313,7 +313,7 @@ Object.assign(PIECES, {
     draw: (c: DrawCtx) => { const s = tone(c.color ?? '#5A3A2E', c.T.wood); return <g>{shadow(c)}{box(c, [c.u, c.u + c.len], [0.7, 1], [c.w, c.w + c.deep], s, true)}</g>; } },
   'seat-row': { kind: 'floor', len: 0.6, deep: 0.05, top: 0.84, seats: (c: { u: number; w: number; len: number; deep: number }, i: number) => ({ u: c.u + 0.04 + (i % Math.max(1, Math.round(c.len / 0.08))) * 0.08, w: c.w + c.deep / 2 + 0.01 }),
     draw: (c: DrawCtx) => { const s = tone(c.color ?? '#7A1F2E', c.T.fabric); const n = Math.max(1, Math.round(c.len / 0.08)); return (
-      <g>{Array.from({ length: n }, (_, i) => { const u = c.u + i * 0.08; return <g key={i}>{box(c, [u + 0.008, u + 0.072], [0.84, 0.9], [c.w, c.w + c.deep], s)}{box(c, [u + 0.008, u + 0.072], [0.66, 0.86], [c.w, c.w + 0.01], s)}</g>; })}</g>
+      <g>{Array.from({ length: n }, (_, i) => { const u = c.u + i * 0.08; return <g key={i}>{box(c, [u + 0.008, u + 0.072], [0.84, 0.9], [c.w, c.w + c.deep], s)}{box(c, [u + 0.008, u + 0.072], [0.765, 0.86], [c.w, c.w + 0.01], s)}</g>; })}</g>
     ); } },
   'round-table': { kind: 'floor', len: 0.14, deep: 0.1, stool: true, top: 0.82, seats: (c: { u: number; w: number; len: number; deep: number }, i: number) => ({ u: c.u + c.len * (i % 2 ? 0.9 : 0.1), w: c.w + c.deep + 0.02 }),
     draw: (c: DrawCtx) => { const mid = c.r.P(c.u + c.len / 2, 0.82, c.w + c.deep / 2); const foot = c.r.P(c.u + c.len / 2, 1, c.w + c.deep / 2); const rx = (backX(c.r, c.u + c.len) - backX(c.r, c.u)) * c.r.s(c.w + c.deep / 2) / 2; const cloth = c.color ?? '#F4EFE6'; return (
@@ -465,6 +465,68 @@ Object.assign(PLACES, {
     pieces: [{ p: 'counter', id: 'counter', at: { u: 0.04, w: 0 }, len: 0.56 }, { p: 'window', at: { u: 0.7 }, len: 0.22 }, { p: 'table', id: 't1', at: { u: 0.18, w: 0.42 }, len: 0.24, deep: 0.1 }, { p: 'table', id: 't2', at: { u: 0.56, w: 0.42 }, len: 0.24, deep: 0.1 }],
     front: [{ p: 'door', at: { u: 0.45 } }, { p: 'pinboard', at: { u: 0.1 } }] },
 });
+// ---------------------------------------- 2026-11-16: the places the agents kept faking
+// Toilets were made from a corridor, a gym from the auditorium, a bar from the restaurant, a car from the street.
+type SeatBox = { u: number; w: number; len: number; deep: number };
+Object.assign(PIECES, {
+  // a toilet cubicle seen with its door open: two partitions, the bowl and its tank. on: 'stall1' sits someone on it
+  stall: { kind: 'floor', len: 0.17, deep: 0.2, w: 0, top: 0.86, seats: (c: SeatBox) => ({ u: c.u + c.len / 2, w: c.w + c.deep * 0.5 }),
+    draw: (c: DrawCtx) => { const s = tone(c.color ?? '#7F9CA8', c.T.wood); const white = tone('#F1F1EC', c.T.wood); return (
+      <g>{box(c, [c.u, c.u + 0.008], [0.3, 0.97], [c.w, c.w + c.deep], s)}
+        {box(c, [c.u + c.len * 0.3, c.u + c.len * 0.7], [0.64, 0.86], [c.w + 0.004, c.w + 0.03], white)}
+        {box(c, [c.u + c.len * 0.28, c.u + c.len * 0.72], [0.86, 1], [c.w + 0.03, c.w + c.deep * 0.62], white, true)}
+        {box(c, [c.u + c.len - 0.008, c.u + c.len], [0.3, 0.97], [c.w, c.w + c.deep], s)}</g>
+    ); } },
+  sink: { kind: 'floor', len: 0.12, deep: 0.06, w: 0, top: 0.72,
+    draw: (c: DrawCtx) => { const white = tone(c.color ?? '#F1F1EC', c.T.wood); const p = c.r.P(c.u + c.len / 2, 0.66, c.w + 0.01); const k = c.r.s(c.w); return (
+      <g>{box(c, [c.u + c.len * 0.38, c.u + c.len * 0.62], [0.78, 1], [c.w + 0.01, c.w + c.deep - 0.01], white)}{box(c, [c.u, c.u + c.len], [0.72, 0.79], [c.w, c.w + c.deep], white, true)}
+        <path d={`M ${p.x} ${p.y + 22 * k} L ${p.x} ${p.y} Q ${p.x} ${p.y - 12 * k} ${p.x + 16 * k} ${p.y - 8 * k}`} stroke="#9AA3AD" strokeWidth={7 * k} fill="none" strokeLinecap="round" /></g>
+    ); } },
+  // tiered benches along a wall of a gym: on: 'bleachers', seat 0..4
+  bleachers: { kind: 'floor', len: 0.5, deep: 0.18, w: 0, top: 0.84, seats: (c: SeatBox, i: number) => ({ u: c.u + 0.07 + (i % 5) * ((c.len - 0.14) / 4), w: c.w + c.deep + 0.01 }),
+    draw: (c: DrawCtx) => { const s = tone(c.color ?? '#B98A56', c.T.wood); const d = c.deep / 3; return (
+      <g>{shadow(c)}{box(c, [c.u, c.u + c.len], [0.64, 1], [c.w, c.w + d], s, true)}{box(c, [c.u, c.u + c.len], [0.76, 1], [c.w + d, c.w + 2 * d], s, true)}{box(c, [c.u, c.u + c.len], [0.88, 1], [c.w + 2 * d, c.w + c.deep], s, true)}</g>
+    ); } },
+  'bar-stool': { kind: 'floor', len: 0.045, deep: 0.04, top: 0.76, seats: (c: SeatBox) => ({ u: c.u + c.len / 2, w: c.w + c.deep / 2 + 0.01 }),
+    draw: (c: DrawCtx) => { const s = tone(c.color ?? '#2B2B33', c.T.fabric); const m = tone('#8A8F99', c.T.wood); return (
+      <g>{shadow(c)}{box(c, [c.u + c.len * 0.42, c.u + c.len * 0.58], [0.79, 1], [c.w + c.deep * 0.42, c.w + c.deep * 0.58], m)}{box(c, [c.u, c.u + c.len], [0.76, 0.79], [c.w, c.w + c.deep], s, true)}</g>
+    ); } },
+  // a car seat seen from the side, facing screen-right: on: 'driver'
+  'car-seat': { kind: 'floor', len: 0.1, deep: 0.12, top: 0.84, seats: (c: SeatBox) => ({ u: c.u + c.len * 0.6, w: c.w + c.deep / 2 }),
+    draw: (c: DrawCtx) => { const s = tone(c.color ?? '#3A3F4C', c.T.fabric); return (
+      <g>{shadow(c)}{box(c, [c.u + 0.012, c.u + c.len], [0.84, 0.93], [c.w, c.w + c.deep], s, true)}{box(c, [c.u, c.u + 0.022], [0.52, 0.93], [c.w, c.w + c.deep], s, true)}{box(c, [c.u + 0.002, c.u + 0.02], [0.44, 0.52], [c.w + c.deep * 0.25, c.w + c.deep * 0.75], s, true)}</g>
+    ); } },
+  dashboard: { kind: 'floor', len: 0.1, deep: 0.3, top: 0.7,
+    draw: (c: DrawCtx) => { const s = tone(c.color ?? '#23262E', c.T.wood); const p = c.r.P(c.u - 0.02, 0.68, c.w + c.deep * 0.3); const k = c.r.s(c.w + c.deep * 0.3); return (
+      <g>{box(c, [c.u, c.u + c.len], [0.72, 1], [c.w, c.w + c.deep], s, true)}<ellipse cx={p.x} cy={p.y} rx={16 * k} ry={46 * k} fill="none" stroke="#14161B" strokeWidth={11 * k} /></g>
+    ); } },
+  // on the back wall
+  hoop: { kind: 'wall', len: 0.12, deep: 0, draw: (c: DrawCtx) => { const { x0, x1 } = back(c); const y = backY(c.r, 0.16); const w = x1 - x0; const h = w * 0.66; return (
+      <g><rect x={x0} y={y} width={w} height={h} rx={6} fill="#F4F2EC" stroke="#3A3A40" strokeWidth={6} /><rect x={x0 + w * 0.32} y={y + h * 0.38} width={w * 0.36} height={h * 0.42} fill="none" stroke="#E0573E" strokeWidth={6} />
+        <ellipse cx={x0 + w / 2} cy={y + h + 6} rx={w * 0.26} ry={9} fill="none" stroke="#E0573E" strokeWidth={7} />
+        <path d={`M ${x0 + w * 0.26} ${y + h + 8} L ${x0 + w * 0.36} ${y + h + 62} L ${x0 + w * 0.64} ${y + h + 62} L ${x0 + w * 0.74} ${y + h + 8} M ${x0 + w * 0.42} ${y + h + 12} L ${x0 + w * 0.46} ${y + h + 62} M ${x0 + w * 0.58} ${y + h + 12} L ${x0 + w * 0.54} ${y + h + 62}`} stroke="#FFFFFF" strokeWidth={3} fill="none" opacity={0.85} /></g>
+    ); } },
+  'court-lines': { kind: 'flat', len: 0.9, deep: 0.8, draw: (c: DrawCtx) => { const Q = (pts: [number, number][]) => pts.map(([u, w]) => { const p = c.r.P(u, 1, w); return `${p.x},${p.y}`; }).join(' '); return (
+      <g fill="none" stroke="#FFFFFF" strokeWidth={5} opacity={0.75}><polygon points={Q([[0.05, 0.08], [0.95, 0.08], [0.95, 0.9], [0.05, 0.9]])} /><polygon points={Q([[0.38, 0.08], [0.62, 0.08], [0.62, 0.4], [0.38, 0.4]])} /><polyline points={Q([[0.05, 0.62], [0.95, 0.62]])} /></g>
+    ); } },
+});
+Object.assign(PLACES, {
+  bathroom: { mood: 'day', floor: 'tiles', palette: { wall: '#CFE0E4', side: '#B8CDD3', floor: '#9FB2B8' }, lights: [{ u: 0.3, w: 0.3 }, { u: 0.7, w: 0.3 }],
+    pieces: [{ p: 'mirror', at: { u: 0.05 }, len: 0.12 }, { p: 'mirror', at: { u: 0.22 }, len: 0.12 }, { p: 'sink', id: 'sink1', at: { u: 0.05, w: 0 } }, { p: 'sink', id: 'sink2', at: { u: 0.22, w: 0 } },
+      { p: 'stall', id: 'stall1', at: { u: 0.44, w: 0 } }, { p: 'stall', id: 'stall2', at: { u: 0.62, w: 0 } }, { p: 'stall', id: 'stall3', at: { u: 0.8, w: 0 } }, { p: 'bin', at: { u: 0.36, w: 0.12 } }],
+    front: [{ p: 'door', at: { u: 0.45 } }, { p: 'mirror', at: { u: 0.12 } }], leftWall: [{ p: 'door', at: { u: 0.4 } }], rightWall: [{ p: 'window', at: { u: 0.4 }, len: 0.2, opt: { curtains: false } }] },
+  gym: { mood: 'day', floor: 'boards', palette: { wall: '#DDD6C4', side: '#C9C1AE', floor: '#C89A5C', floorLine: '#B5874C' }, lights: [{ u: 0.3, w: 0.3 }, { u: 0.7, w: 0.3 }],
+    pieces: [{ p: 'court-lines', at: { u: 0.05, w: 0.08 } }, { p: 'hoop', at: { u: 0.44 } }, { p: 'window', at: { u: 0.74 }, len: 0.18, opt: { curtains: false } }, { p: 'bleachers', id: 'bleachers', at: { u: 0.02, w: 0 }, len: 0.36 }, { p: 'bench', id: 'bench', at: { u: 0.72, w: 0.14 }, len: 0.2 }],
+    front: [{ p: 'door', at: { u: 0.2 } }, { p: 'hoop', at: { u: 0.5 } }, { p: 'pinboard', at: { u: 0.74 } }], leftWall: [{ p: 'door', at: { u: 0.45 } }], rightWall: [{ p: 'window', at: { u: 0.3 }, len: 0.3, opt: { curtains: false } }] },
+  bar: { mood: 'dusk', floor: 'boards', palette: { wall: '#4A3440', side: '#3C2A34', floor: '#5A4033' }, lights: [{ u: 0.3, w: 0.2 }, { u: 0.62, w: 0.2 }],
+    pieces: [{ p: 'wall-shelf', at: { u: 0.1 } }, { p: 'wall-shelf', at: { u: 0.34 } }, { p: 'wall-shelf', at: { u: 0.58 } }, { p: 'counter', id: 'bar', at: { u: 0.06, w: 0.08 }, len: 0.66 },
+      { p: 'bar-stool', id: 's1', at: { u: 0.16, w: 0.24 } }, { p: 'bar-stool', id: 's2', at: { u: 0.34, w: 0.24 } }, { p: 'bar-stool', id: 's3', at: { u: 0.52, w: 0.24 } }, { p: 'table', id: 't1', at: { u: 0.74, w: 0.44 }, len: 0.18, deep: 0.1 }, { p: 'plant', at: { u: 0.92, w: 0.14 } }],
+    front: [{ p: 'door', at: { u: 0.2 } }, { p: 'window', at: { u: 0.55 }, len: 0.3 }], leftWall: [{ p: 'frame', at: { u: 0.3 }, opt: { art: 1 } }, { p: 'frame', at: { u: 0.6 }, opt: { art: 2 } }], rightWall: [{ p: 'door', at: { u: 0.5 } }] },
+  // the inside of a car seen from the passenger side: the driver faces screen-right
+  car: { mood: 'day', floor: 'tiles', palette: { wall: '#3A4150', side: '#2E3440', floor: '#23262E', ceiling: '#2A2E38', floorLine: '#23262E' }, lights: [],
+    pieces: [{ p: 'window', at: { u: 0.1 }, len: 0.3, opt: { curtains: false } }, { p: 'window', at: { u: 0.5 }, len: 0.3, opt: { curtains: false } }, { p: 'car-seat', id: 'back', at: { u: 0.2, w: 0.3 } }, { p: 'car-seat', id: 'driver', at: { u: 0.52, w: 0.3 } }, { p: 'dashboard', at: { u: 0.8, w: 0.18 } }],
+    front: [{ p: 'window', at: { u: 0.1 }, len: 0.3, opt: { curtains: false } }, { p: 'window', at: { u: 0.5 }, len: 0.3, opt: { curtains: false } }], leftWall: [{ p: 'window', at: { u: 0.25 }, len: 0.5, opt: { curtains: false } }], rightWall: [{ p: 'window', at: { u: 0.25 }, len: 0.5, opt: { curtains: false } }] },
+});
 // the reverse views of the first recipes: what was behind the camera
 Object.assign(PLACES.classroom!, { front: [{ p: 'door', at: { u: 0.12 } }, { p: 'pinboard', at: { u: 0.34 } }, { p: 'window', at: { u: 0.62 }, len: 0.26 }] });
 Object.assign(PLACES.bedroom!, { front: [{ p: 'door', at: { u: 0.62 } }, { p: 'frame', at: { u: 0.2 }, opt: { art: 0 } }, { p: 'mirror', at: { u: 0.4 } }] });
@@ -568,12 +630,22 @@ export const spotForView = (at: { u: number; w: number }, view: PlaceView): { u:
   return at;
 };
 
-/** Person yaw transformed into any camera perspective. */
-export const yawForView = (yaw: number | undefined, view: PlaceView): number | undefined => {
+/**
+ * Person yaw in any camera perspective. A yaw is written the way the picture is read: 0 faces the viewer, 0.4 looks
+ * toward screen-right, 1.6 is a back. So a person standing still keeps a visible face from the opposite wall or a side
+ * wall: the first runs with views turned 54 framed people in 252 into the back of a head, 43 of them by `reverse`
+ * (2026-11-16). Seen from the other end, left and right swap, so the yaw changes side. Someone who walks is turned
+ * with the room (`walking`), or they would slide sideways.
+ */
+export const yawForView = (yaw: number | undefined, view: PlaceView, walking = false): number | undefined => {
   if (yaw === undefined) {
     if (view === '3/4-left') return 0.24;
     if (view === '3/4-right') return -0.24;
     return undefined;
+  }
+  if (!walking) {
+    if (view === 'reverse') return -yaw;
+    if (view === 'left' || view === 'right') return yaw;
   }
   if (view === 'reverse') return mirrorYaw(yaw);
   if (view === 'left') return wrapYaw(yaw - 1);
@@ -638,7 +710,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
         opt: x.name === 'chair' ? { ...(x.opt ?? {}), face: rotateLeftFace(x.opt?.face ?? 'front') } : x.opt,
       }))
       .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.92),
-    ...keep(opts.leftWall ?? base.leftWall ?? [{ p: 'frame', at: { u: 0.42 }, opt: { art: 1 } }]).map(resolve),
+    ...keep(opts.leftWall ?? base.leftWall ?? [{ p: 'window', at: { u: 0.18 }, len: 0.26 }, { p: 'frame', at: { u: 0.62 }, opt: { art: 1 } }, { p: 'frame', at: { u: 0.78 }, opt: { art: 2 } }]).map(resolve),
   ];
   const rightList = [
     ...frontList
@@ -652,7 +724,7 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
         opt: x.name === 'chair' ? { ...(x.opt ?? {}), face: rotateRightFace(x.opt?.face ?? 'front') } : x.opt,
       }))
       .filter((x) => x.def.kind === 'flat' || x.w + x.deep <= 0.92),
-    ...keep(opts.rightWall ?? base.rightWall ?? [{ p: 'frame', at: { u: 0.46 }, opt: { art: 2 } }]).map(resolve),
+    ...keep(opts.rightWall ?? base.rightWall ?? [{ p: 'door', at: { u: 0.14 } }, { p: 'frame', at: { u: 0.46 }, opt: { art: 2 } }, { p: 'clock', at: { u: 0.74 } }]).map(resolve),
   ];
   const lights = opts.lights ?? base.lights ?? (outdoor ? [] : [{ u: 0.5, w: 0.4 }]);
   const roomFor = (view: PlaceView): Room =>

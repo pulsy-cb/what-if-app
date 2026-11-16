@@ -155,8 +155,10 @@ const repoMap: Tool = {
     },
   },
   async run(input: { maxFiles?: number; filter?: string }, ctx) {
-    const files = walk(ctx.projectRoot, { maxFiles: input.maxFiles ?? 300 });
-    const selected = input.filter ? files.filter((f) => f.includes(input.filter!)) : files;
+    // the cap applies to what is listed, after the filter: capping the walk first answered "Episodes: none yet" on a
+    // finished project ({ maxFiles: 3, filter: 'PROJECT.md' }), and the agent took the episode for done (2026-11-13)
+    const files = walk(ctx.projectRoot, { maxFiles: 5000 });
+    const selected = (input.filter ? files.filter((f) => f.includes(input.filter!)) : files).slice(0, Math.max(1, input.maxFiles ?? 300));
     const lines: string[] = [];
     let chars = 0;
     for (const rel of selected) {

@@ -10,6 +10,8 @@ type Limb = { a: number; b: number };
 export type ActBits = {
   armL?: Limb; armR?: Limb; legL?: Limb; legR?: Limb; tilt?: number; headTilt?: number; squash?: number; look?: number; blink?: number;
   expr?: string; talk?: number; handL?: string; handR?: string; sway?: number; yaw?: number;
+  /** both arms are drawn over the torso (crossed arms, hands on hips): turned, the far arm is otherwise hidden behind the body */ armsFront?: boolean;
+  /** the arms are drawn over the head too (a hand on the face) */ armsOver?: boolean;
   /** height of the feet above the ground, in body units */ lift?: number;
 };
 /** How a body moves: amplitude and speed relative to an adult. */
@@ -47,6 +49,10 @@ export const STANCES = {
   sit: { legL: { a: 78, b: -78 }, legR: { a: 74, b: -74 } },
   kneel: { legL: { a: 8, b: -100 }, legR: { a: 4, b: -100 } },
   crouch: { legL: { a: 66, b: -108 }, legR: { a: 62, b: -104 } },
+  /** sitting on the ground, legs out in front */
+  floor: { legL: { a: 84, b: -4 }, legR: { a: 76, b: -12 } },
+  /** lying down (on the ground, or on a bed with on: 'bed'): Staged turns the whole body */
+  lie: { legL: { a: 4, b: -4 }, legR: { a: -4, b: -10 } },
 } satisfies Record<string, ActBits>;
 export type Stance = keyof typeof STANCES;
 
@@ -62,14 +68,25 @@ const GESTURE_TABLE = {
   point: (w: number) => ({ armR: { a: 68 + w * 6, b: 34 }, armL: { a: 16, b: 14 }, handR: 'point', headTilt: 2 }),
   hold: (w: number) => ({ armR: { a: 38 + w * 4, b: 58 }, armL: { a: 28, b: 48 } }),
   phone: (w: number) => ({ armR: { a: 40 + w * 2, b: 96 }, armL: { a: 34 + w * 2, b: 92 }, headTilt: 10 }),
-  'cross-arms': (w: number) => ({ armL: { a: -12, b: -70 }, armR: { a: -12, b: -68 }, headTilt: -2 + w }),
-  'hands-hips': (w: number) => ({ armL: { a: 19, b: -55 }, armR: { a: 19, b: -55 }, headTilt: w }),
+  'cross-arms': (w: number) => ({ armL: { a: -12, b: -70 }, armR: { a: -12, b: -68 }, headTilt: -2 + w, armsFront: true }),
+  'hands-hips': (w: number) => ({ armL: { a: 19, b: -55 }, armR: { a: 19, b: -55 }, headTilt: w, armsFront: true }),
+  // the phone at the ear (hold: 'phone' puts it in that hand); `phone` is looking at the screen
+  call: (w: number, m: number) => ({ armR: { a: 100 + w * 2, b: 102 }, armL: { a: 14, b: 12 }, headTilt: 5, talk: m }),
   pockets: (w: number) => ({ armL: { a: 8, b: -24 }, armR: { a: 8, b: -24 }, headTilt: w }),
   cheer: (w: number) => ({ armL: { a: 142 + w * 8, b: 18 }, armR: { a: 142 - w * 8, b: 18 }, squash: -0.04 + w * 0.02 }),
   wave: (w: number, _m: number, w2: number) => ({ armR: { a: 132 + w * 14, b: 42 + w2 * 18 }, armL: { a: 16, b: 12 }, headTilt: 4 }),
   type: (w: number) => ({ armL: { a: 36 + w * 5, b: 62 - w * 6 }, armR: { a: 36 - w * 5, b: 62 + w * 6 }, headTilt: 6 }),
   eat: (w: number) => ({ armR: { a: 76 + w * 28, b: 84 + w * 22 }, armL: { a: 28, b: 48 }, headTilt: w * 4 }),
-  facepalm: (w: number) => ({ armR: { a: 122 + w * 2, b: 120 }, armL: { a: 12, b: 10 }, headTilt: 12 }),
+  facepalm: (w: number) => ({ armR: { a: 122 + w * 2, b: 120 }, armL: { a: 12, b: 10 }, headTilt: 12, armsOver: true }),
+  // 2026-11-16: hands that say something (fist, palm, thumb), and both hands at work
+  'cover-mouth': (w: number) => ({ armR: { a: 80 + w, b: 150 }, armL: { a: 14, b: 12 }, headTilt: 3, armsOver: true }),
+  'hands-head': (w: number) => ({ armL: { a: 158 + w, b: 62 }, armR: { a: 158 - w, b: 62 }, headTilt: 8, armsFront: true, armsOver: true }),
+  'thumbs-up': (w: number) => ({ armR: { a: 58 + w * 3, b: 74 }, armL: { a: 14, b: 12 }, handR: 'thumb', headTilt: 2 }),
+  stop: (w: number) => ({ armR: { a: 82 + w * 2, b: 12 }, armL: { a: 14, b: 12 }, handR: 'palm', headTilt: -2 }),
+  fist: (w: number) => ({ armR: { a: 64 + w * 6, b: 108 }, armL: { a: 16, b: 14 }, handR: 'fist', handL: 'fist', headTilt: -3 }),
+  clap: (w: number) => ({ armL: { a: 58, b: 62 + w * 16 }, armR: { a: 58, b: 62 + w * 16 }, handL: 'palm', handR: 'palm', armsFront: true }),
+  // both arms open: a welcome, a "what do you want me to do", a plea
+  'open-arms': (w: number) => ({ armL: { a: 84 + w * 3, b: 52 }, armR: { a: 84 + w * 3, b: 56 }, headTilt: 6, armsFront: true }),
   shout: (w: number, m: number) => ({ armR: { a: 104 + w * 10, b: 52 }, armL: { a: 98 - w * 10, b: 50 }, headTilt: -4, talk: Math.min(1, m * 1.4) }),
   push: (w: number) => ({ armR: { a: 72 + w * 5, b: 8 }, armL: { a: 68 - w * 5, b: 10 }, squash: 0.02 }),
   nod: (_w: number, _m: number, _w2: number, t = 0) => ({ headTilt: Math.sin(t * 0.55) * 7, armL: { a: 16, b: 14 }, armR: { a: 18, b: 16 } }),
@@ -219,11 +236,13 @@ export type OwnActionSpec = {
   /** torso lean, degrees, toward the facing side */ tilt?: Keyed; headTilt?: Keyed; squash?: Keyed; lift?: Keyed; look?: Keyed;
   /** the mouth moves */ talk?: boolean; expr?: string; handL?: string; handR?: string;
   /** stand | sit | kneel | crouch while doing it */ stance?: Stance;
+  /** both arms drawn over the torso (a hug of oneself, arms crossed your own way) */ armsFront?: boolean;
+  /** the arms drawn over the head too (a hand on the face, on the hair) */ armsOver?: boolean;
 };
 const OWN: Record<string, OwnActionSpec> = {};
 const LIMBS = ['armL', 'armR', 'legL', 'legR'] as const;
 const NUMS = ['tilt', 'headTilt', 'squash', 'lift', 'look'] as const;
-const KNOWN_KEYS = new Set<string>(['dur', 'loop', 'talk', 'expr', 'handL', 'handR', 'stance', ...LIMBS, ...NUMS]);
+const KNOWN_KEYS = new Set<string>(['dur', 'loop', 'talk', 'expr', 'handL', 'handR', 'stance', 'armsFront', 'armsOver', ...LIMBS, ...NUMS]);
 const okKeyed = (v: unknown): boolean => typeof v === 'number' || (Array.isArray(v) && v.length > 0 && v.every((k) => Array.isArray(k) && k.length === 2 && k.every((n) => typeof n === 'number')));
 /** Add an action to the engine under a name. Returns the name, typed for `act`. A wrong shape fails here, with the reason. */
 export const defineAction = (name: string, spec: OwnActionSpec): ActName => {
@@ -254,6 +273,8 @@ const own = (spec: OwnActionSpec, t: number, opts: Ctx & { from?: number; dur?: 
   // an arm the action does not name hangs as in idle, not straight down behind the body
   const out: ActBits = { armL: { a: 14, b: 12 }, armR: { a: 14, b: 12 } };
   for (const l of LIMBS) { const v = spec[l]; if (v) out[l] = { a: keyed(v.a, p), b: keyed(v.b, p) }; }
+  if (spec.armsFront) out.armsFront = true;
+  if (spec.armsOver) out.armsOver = true;
   for (const n of NUMS) { const v = spec[n]; if (v !== undefined) out[n] = keyed(v, p) * (n === 'tilt' ? leanDir(yaw) : 1); }
   // Seen from the front a lean has no side to go to: the body sinks a little instead, so lean, rummage and slam still read.
   if (spec.tilt !== undefined) out.squash = (out.squash ?? 0) + Math.abs(keyed(spec.tilt, p)) * (1 - foldYaw(yaw)) * 0.0035;
@@ -282,6 +303,7 @@ export type ActName = Gesture | Clip | ActionAlias | OwnAction;
 export const ACTION_ALIASES = {
   kneel: 'idle', crouch: 'idle', yell: 'shout', scream: 'shout', 'face-palm': 'facepalm', shove: 'push', laugh: 'talk',
   'lean-on': 'lean', search: 'rummage', dig: 'rummage', hand: 'give', offer: 'give', bang: 'slam',
+  'phone-call': 'call', 'on-phone': 'call', calling: 'call', applaud: 'clap', plead: 'open-arms', beg: 'open-arms', welcome: 'open-arms', 'thumb-up': 'thumbs-up', 'hand-on-mouth': 'cover-mouth', gasp: 'cover-mouth',
 } as const;
 export type ActionAlias = keyof typeof ACTION_ALIASES;
 /** The stance an action word implies (act: 'kneel' kneels), or undefined. */

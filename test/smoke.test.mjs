@@ -3893,7 +3893,10 @@ test('character drawing: the far hand behind a turned body is not drawn, a lean 
   const torso = person.indexOf('{torso}', far);
   assert.ok(far > 0 && torso > far, 'the far arm is the one drawn before the torso');
   assert.equal((person.match(/farHandHidden\(j\.arm[LR], hand[LR]Prop\) \? null/g) ?? []).length, 2);
-  assert.ok(person.indexOf('{hand(j.armR, -1, pose.handR as HandKind, handRProp)}</>}', torso) > torso, 'the near hand is always drawn');
+  // the near arm is one piece now (it may also be drawn over the head): its hand has no "hidden" test, and it comes after the torso
+  const nearDef = /const nearArm = pose\.yaw < 0 \? <>\{limb\(j\.armL, b\.arm, true, armPaint\)\}\{hand\(j\.armL, 1, pose\.handL as HandKind, handLProp\)\}<\/> : <>\{limb\(j\.armR, b\.arm, true, armPaint\)\}\{hand\(j\.armR, -1, pose\.handR as HandKind, handRProp\)\}<\/>;/;
+  assert.match(person, nearDef, 'the near hand is always drawn');
+  assert.ok(person.indexOf('{pose.armsOver ? null : nearArm}', torso) > torso, 'after the torso');
 
   const ts = (await import('typescript')).default;
   const js = ts.transpileModule(fs.readFileSync(path.join(eng, 'actions.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -4151,16 +4154,16 @@ test('after the custom run: a coded shot keeps its card, render asked again clos
     assert.match(objects, new RegExp(`HELD_NAMES: HeldName\\[\\] = \\[[^\\]]*'${name}'`));
     assert.match(objects, new RegExp(`\\n  ${name}: \\(c\\) => \\(`), `${name} is drawn`);
   }
-  assert.match(objects, /HELD_LEVEL: readonly string\[\] = \['tray', 'plate', 'bottle'\]/);
+  assert.match(objects, /HELD_LEVEL: readonly string\[\] = \['tray', 'plate', 'bottle'/);
   const stageSrc = fs.readFileSync(path.join(eng, 'stage.tsx'), 'utf8');
-  assert.match(stageSrc, /carry\.level \? <g transform=\{`rotate\(\$\{armAngle\(full\)\} 0 10\)`\}>/, 'a level thing is turned back about the palm');
+  assert.match(stageSrc, /<g transform=\{`rotate\(\$\{\(carry\.level \? armAngle\(full\) : 0\) \+ tip\} 0 10\)`\}>/, 'a level thing is turned back about the palm');
   assert.match(stageSrc, /if \(!rel \|\| now < rel\.at\) \{/, 'in the hand until the release frame');
   assert.match(stageSrc, /const then = poseAtFrame\(rel\.at, rel\.spot \?\? spot\);\s+const start = handOf\(then\.full, side, b\);/, 'it starts from where the hand was at that frame');
   const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
   assert.match(shotSrc, /const handRProp = p\.handRProp \?\? \(!carry && holdSpec && holdSpec\.side !== 'L' \? heldNode : undefined\);/, 'no second copy in the hand');
   assert.match(shotSrc, /else if \(typeof rel\.to === 'string'\) to = pl\.pointOf\(rel\.to\);/);
   assert.match(shotSrc, /hold\.release needs the frame the thing leaves the hand/);
-  assert.match(shotSrc, /if \(holdSpec && \(level \|\| rel\)\) \{/, 'a plain hold goes the way it always did');
+  assert.match(shotSrc, /if \(holdSpec && \(level \|\| rel \|\| holdSpec\.pour\)\) \{/, 'a plain hold goes the way it always did');
   assert.match(shotSrc, /if \(spec\.screen === 'photo'\) \{/);
   assert.match(shotSrc, /screen\?: 'chat' \| 'lock' \| 'photo';/);
   const { SHOT_GUIDE: directorGuide } = await import('../dist/orchestrator/director-guide.js');
@@ -4649,8 +4652,12 @@ test('visual variety & anti-monotony: shotlist.py prose defaultSet + cutaways + 
     );
 
     // 2. Champ / contrechamp (`view: "reverse"`) and varied camera `move` (`push`, `pull`, `pan`, `still`)
-    const reverseShots = ep.shots.filter((s) => s.view === 'reverse');
-    assert.ok(reverseShots.length >= 2, `expected >= 2 reverse-angle shots, got ${reverseShots.length}`);
+    // since the audit of 2026-11-16 the shot list hands out no reverse or side view by itself (43 backs of heads in
+    // 6 projects): it varies the wall with the diagonal views, which keep the faces
+    const turned = ep.shots.filter((s) => ['reverse', 'left', 'right'].includes(s.view));
+    assert.deepEqual(turned.map((s) => s.id), [], 'no automatic reverse, left or right view');
+    const diagonal = ep.shots.filter((s) => s.view === '3/4-left' || s.view === '3/4-right');
+    assert.ok(diagonal.length >= 2, `expected >= 2 diagonal views, got ${diagonal.length}`);
     const distinctMoves = new Set(ep.shots.map((s) => s.move));
     assert.ok(distinctMoves.size >= 3, `expected >= 3 distinct camera moves, got ${[...distinctMoves].join(', ')}`);
     for (let i = 2; i < ep.shots.length; i++) {
@@ -4692,7 +4699,8 @@ test('visual variety & anti-monotony: shotlist.py prose defaultSet + cutaways + 
     );
     const monoProblems = stagingCodeProblems(eightShots, monotonousBodies, true, '16:9').join('\n');
     assert.match(monoProblems, /S1, S2, S3 repeat the exact same POV/);
-    assert.match(monoProblems, /0\/8 shots in LIVING use view: 'reverse'/);
+    assert.doesNotMatch(monoProblems, /use view: 'reverse'/, 'a reverse shot is never demanded');
+    assert.match(monoProblems, /break monotony with view: '3\/4-left' \| '3\/4-right'/);
 
     // Varying cam & adding view: 'reverse' clears all monotony warnings
     const variedCams = ['wide', 'medium', 'close', 'medium', 'wide', 'close', 'medium', 'close'];
@@ -4850,8 +4858,17 @@ test('2D engine evolution & pipeline hardening: 6 perspectives (3/4 & side walls
     // Side-wall 90-degree spot & yaw geometry
     assert.deepEqual(R.spotForView({ u: 0.2, w: 0.6 }, 'left'), { u: 0.4, w: 0.2 });
     assert.deepEqual(R.spotForView({ u: 0.2, w: 0.6 }, 'right'), { u: 0.6, w: 0.8 });
-    assert.equal(R.yawForView(0, 'left'), -1);
-    assert.equal(R.yawForView(0, 'right'), 1);
+    // a yaw is read on screen: someone standing still keeps their face in every view, and changes side in reverse
+    assert.equal(R.yawForView(0, 'left'), 0);
+    assert.equal(R.yawForView(0.4, 'right'), 0.4);
+    assert.equal(R.yawForView(0.4, 'reverse'), -0.4);
+    assert.equal(R.yawForView(1.6, 'reverse'), -1.6, 'a back that was asked for stays a back');
+    assert.ok(Math.abs(R.yawForView(0.4, 'reverse')) < 1, 'a face stays a face');
+    // someone walking is turned with the room, or they would slide sideways
+    assert.equal(R.yawForView(0, 'left', true), -1);
+    assert.equal(R.yawForView(0, 'right', true), 1);
+    assert.equal(R.yawForView(0.4, 'reverse', true), R.mirrorYaw(0.4));
+    assert.equal(R.yawForView(0.4, '3/4-left'), R.yawForView(0.4, '3/4-left', true), 'the diagonal views are unchanged');
 
     // Sub-zones inside a single room
     const zWin = LIVING.zoneOf('window');
@@ -5556,4 +5573,232 @@ print(json.dumps({
     if (srv) await new Promise((r) => srv.close(r));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('audit of 2026-11-16: repo_map lists episodes whatever the cap, a prop stands on a floor point, kneeling is framed, outdoor side views, stamp tone and tag sub, compaction leaves no fake code', async () => {
+  const { defaultRegistry } = await import('../dist/tools/index.js');
+  const { buildMessages } = await import('../dist/orchestrator/context.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-a1116-'));
+  try {
+    // --- repo_map: the cap is on what is listed, not on what is known
+    const ep = path.join(root, 'src', 'episodes', 'my-ep');
+    fs.mkdirSync(path.join(ep, 'shots'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'PROJECT.md'), '# p');
+    fs.writeFileSync(path.join(ep, 'episode.json'), '{}');
+    for (let i = 1; i <= 12; i++) fs.writeFileSync(path.join(ep, 'shots', `S${i}.tsx`), `export const S${i} = 1;`);
+    for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(root, `a${i}.md`), 'x');
+    const repoMap = defaultRegistry().get('repo_map');
+    const ctx = { projectRoot: root, log: () => {} };
+    const r1 = await repoMap.run({ maxFiles: 3, filter: 'PROJECT.md' }, ctx);
+    assert.match(r1.summary, /^1 files\. Episodes: my-ep\./);
+    const r2 = await repoMap.run({ maxFiles: 1, filter: 'src/episodes/my-ep' }, ctx);
+    assert.match(r2.summary, /^1 files\. Episodes: my-ep\./, 'the filter is applied before the cap');
+    const r3 = await repoMap.run({ maxFiles: 5 }, ctx);
+    assert.equal(r3.data.files.length, 5);
+    assert.deepEqual(r3.data.episodes, ['my-ep']);
+
+    // --- compaction: an old big call leaves one plain line, no head and tail of the file around a comment
+    const code = `import { shot } from '../../../engine';\n` + Array.from({ length: 40 }, (_, i) => `// line ${i} of a long shot that fills the history`).join('\n') + `\nexport const S3 = shot({});\n`;
+    const history = [{ id: 1, thread_id: 't', role: 'user', content: 'go', payload: null, created_at: '' }];
+    let id = 2;
+    const call = (name, args) => { const cid = `c${id}`; history.push({ id: id++, thread_id: 't', role: 'assistant', content: '', payload: JSON.stringify({ toolCalls: [{ id: cid, name, args }] }), created_at: '' }); history.push({ id: id++, thread_id: 't', role: 'tool', content: 'ok', payload: JSON.stringify({ toolCallId: cid, name, ok: true }), created_at: '' }); };
+    call('edit_shot', { episode: 'my-ep', id: 'S3', code });
+    for (let i = 0; i < 8; i++) call('read_file', { path: 'PROJECT.md' });
+    const old = buildMessages({ projectRoot: root, history, maxChars: 90_000 }).find((m) => m.role === 'assistant' && m.toolCalls?.[0]?.name === 'edit_shot');
+    const shown = String(old.toolCalls[0].args.code);
+    assert.match(shown, /^\[compacted: \d+ lines \(\d+ chars\) were written to disk by this call\. System note, not code/);
+    assert.doesNotMatch(shown, /import \{ shot \}|export const S3|\/\*/, 'nothing a model could copy as the body of a shot');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  // a prop on a piece or at a floor point; neither is a clear error, not "reading 'toLowerCase'"
+  assert.match(shotSrc, /if \(typeof pr\.on === 'string' && pr\.on\) at = pl\.pointOf\(pr\.on\);/);
+  assert.match(shotSrc, /else if \(pr\.at && typeof pr\.at\.u === 'number'/);
+  assert.match(shotSrc, /props\[\$\{i\}\] needs where it stands/);
+  // kneeling and crouching lower the frame as sitting does
+  assert.match(shotSrc, /subject\.stance === 'kneel' \? b\.shin \* 0\.9 : subject\.stance === 'crouch'/);
+  // outdoors a side view becomes the diagonal one
+  assert.match(shotSrc, /if \(spec\.place\.outdoor && \(viewNow === 'left' \|\| viewNow === 'right'\)\) viewNow = viewNow === 'left' \? '3\/4-left' : '3\/4-right';/);
+  assert.match(shotSrc, /flipYaw\(baseYaw\(p\), walkingNow\(p\)\)/);
+  // the guide and the engine agree on stamp.tone and tag.sub
+  const accents = fs.readFileSync(path.join(eng, 'accents.tsx'), 'utf8');
+  assert.match(accents, /tone\?: 'amber' \| 'red' \| 'teal' \| 'ink';/);
+  assert.match(accents, /a short second line under the pill[^\n]*\n  sub\?: string;/);
+  const { SHOT_GUIDE } = await import('../dist/orchestrator/director-guide.js');
+  assert.match(SHOT_GUIDE, /tone\?: 'amber' \| 'red' \| 'teal' \| 'ink'/);
+  assert.match(SHOT_GUIDE, /sub\?: 'FACTURE'/);
+  assert.match(SHOT_GUIDE, /`yaw` is always read on screen, in every view/);
+  assert.doesNotMatch(SHOT_GUIDE, /alternate `view: 'reverse'`/);
+  // seat rows: low backs, a row in front of people hides legs, not chests
+  assert.match(fs.readFileSync(path.join(eng, 'rooms.tsx'), 'utf8'), /\[0\.765, 0\.86\], \[c\.w, c\.w \+ 0\.01\], s\)/);
+  // the shot list and the audit no longer push a reverse shot
+  const shotlist = fs.readFileSync('pipeline/shotlist.py', 'utf8');
+  assert.doesNotMatch(shotlist, /shot_view = "reverse"|shot_view = "left" if/);
+});
+
+test('faces: sad, angry and scared are drawn faces of their own, each feeling has a strong form, an unknown name still has a mouth', async () => {
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  const person = fs.readFileSync(path.join(eng, 'person.tsx'), 'utf8');
+  const views = fs.readFileSync(path.join(eng, 'views.tsx'), 'utf8');
+  const names = /export const FACE_NAMES: DrawnExpr\[\] = \[([^\]]+)\]/.exec(shotSrc)[1].split(',').map((x) => x.trim().replace(/'/g, ''));
+  assert.equal(names.length, 19);
+  const added = ['sad', 'cry', 'angry', 'furious', 'scared', 'terrified', 'laugh', 'disgust', 'shy', 'determined'];
+  for (const n of added) assert.ok(names.includes(n), `${n} is a face`);
+  // no longer another word for worried or shock (108 faces out of 177 were one drawing, audit 2026-11-16)
+  const map = /const EXPR_MAP: Record<string, DrawnExpr> = \{([\s\S]*?)\n\};/.exec(shotSrc)[1];
+  for (const n of ['sad', 'angry', 'scared']) assert.doesNotMatch(map, new RegExp(`\\n  ${n}:`), `${n} is not an alias`);
+  assert.match(map, /crying: 'cry'/);
+  assert.match(map, /embarrassed: 'shy'/);
+  for (const m of map.matchAll(/: '([a-z]+)'/g)) assert.ok(names.includes(m[1]), `alias target ${m[1]} is a drawn face`);
+  // each new face has its brows and its mouth, facing the viewer and in profile
+  const frontBrows = /const brows: Record<string, string> = \{([\s\S]*?)\n  \};/.exec(person)[1];
+  const frontMouths = /const mouth: Record<string, React\.ReactNode> = \{([\s\S]*?)\n  \};/.exec(person)[1];
+  const profileMouths = /const MouthProfile[\s\S]*?\n\};/.exec(views)[0];
+  const profileBrows = /const browPath[\s\S]*?\n\};/.exec(views)[0];
+  for (const n of added) {
+    assert.match(frontBrows, new RegExp(`\\n    ${n}: `), `${n}: brows, front`);
+    assert.match(frontMouths, new RegExp(`\\n    ${n}: `), `${n}: mouth, front`);
+    assert.match(profileMouths, new RegExp(`case '${n}':`), `${n}: mouth, profile`);
+    assert.match(profileBrows, new RegExp(`case '${n}':`), `${n}: brows, profile`);
+  }
+  // two faces never share a mouth drawing
+  const mouthOf = (n) => new RegExp(`\\n    ${n}: (.*),(?:\\n|$)`).exec(frontMouths)[1];
+  assert.notEqual(mouthOf('sad'), mouthOf('worried'));
+  assert.notEqual(mouthOf('angry'), mouthOf('sad'));
+  assert.notEqual(mouthOf('scared'), mouthOf('shock'));
+  assert.notEqual(mouthOf('laugh'), mouthOf('happy'));
+  // a name the engine does not know keeps a mouth instead of a blank face
+  assert.match(person, /mouth\[expr\] \?\? mouth\.neutral/);
+  const { SHOT_GUIDE } = await import('../dist/orchestrator/director-guide.js');
+  for (const n of names) assert.match(SHOT_GUIDE.split('\n').find((l) => l.startsWith('- `face`:')), new RegExp(`\\b${n}\\b`), `the guide lists ${n}`);
+});
+
+test('the body: lying down and sitting on the ground, the phone at the ear, both arms over the torso, a child and an elder', async () => {
+  const ts = (await import('typescript')).default;
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-body-'));
+  try {
+    // actions.ts stands alone once its imports are stubbed: the values are checked, not only the words
+    const src = fs.readFileSync(path.join(eng, 'actions.ts'), 'utf8');
+    const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const imports = [...js.matchAll(/^import .* from '(\.\/[a-z-]+)';$/gm)].map((m) => m[1]);
+    for (const im of new Set(imports)) fs.writeFileSync(path.join(dir, `${im.slice(2)}.mjs`), "export const basePose = { armL: { a: 14, b: 12 }, armR: { a: 14, b: 12 }, legL: { a: 0, b: 0 }, legR: { a: 0, b: 0 } };\nexport const foldYaw = (y) => Math.min(1, Math.abs(y));\nexport const clamp = (v, a, b) => Math.max(a, Math.min(b, v));\nexport const ease01 = (v) => v;\nexport const talkAt = () => 0;\n");
+    fs.writeFileSync(path.join(dir, 'actions.mjs'), js.replace(/from '(\.\/[a-z-]+)';/g, "from '$1.mjs';"));
+    let A;
+    try { A = await import(path.join(dir, 'actions.mjs')); } catch { A = null; }
+    if (A) {
+      assert.ok('floor' in A.STANCES && 'lie' in A.STANCES);
+      assert.ok(A.STANCES.floor.legL.a > 70 && Math.abs(A.STANCES.floor.legL.b) < 20, 'on the ground the legs go out in front, knees almost straight');
+      assert.ok(A.GESTURES.includes('call'));
+      const cross = A.act('cross-arms', 10, {});
+      assert.equal(cross.armsFront, true);
+      assert.equal(A.act('hands-hips', 10, {}).armsFront, true);
+      assert.equal(A.act('idle', 10, {}).armsFront, undefined, 'only the gestures that need it');
+      const call = A.act('call', 10, {});
+      assert.ok(call.armR.a > 90 && call.armR.b > 90, 'the forearm folds up to the head');
+      assert.equal(A.act('phone-call', 10, {}).armR.b, call.armR.b, 'phone-call is another word for call');
+      const own = A.act(A.defineAction('self-hug', { armL: { a: 30, b: 100 }, armR: { a: 30, b: 100 }, armsFront: true }), 5, {});
+      assert.equal(own.armsFront, true, 'an action of your own may ask for it too');
+    }
+    assert.match(src, /\n  floor: \{ legL: /);
+    assert.match(src, /\n  lie: \{ legL: /);
+    assert.match(src, /\n  call: \(w: number, m: number\) => \(\{ armR: \{ a: 100 \+ w \* 2, b: 102 \}/);
+    assert.match(src, /'cross-arms': .*armsFront: true \}\),/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const person = fs.readFileSync(path.join(eng, 'person.tsx'), 'utf8');
+  assert.match(person, /export type BodyId = 'adult' \| 'teen' \| 'child' \| 'elder';/);
+  const num = (id, k) => Number(new RegExp(`\\n  ${id}: \\{[^\\n]*\\b${k}: ([0-9.]+)`).exec(person)[1]);
+  assert.ok(num('child', 'thigh') + num('child', 'shin') < (num('teen', 'thigh') + num('teen', 'shin')) * 0.8, 'a child is clearly shorter than a teen');
+  assert.ok(num('child', 'head') > 0.9, 'with a head almost as big');
+  assert.match(person, /\{pose\.armsFront \? null : pose\.yaw < 0 \?/, 'the far arm is not drawn behind the torso');
+  assert.match(person, /\{pose\.armsFront && !pose\.armsOver \? farArmFront : null\}/, 'it is drawn over it');
+  const stage = fs.readFileSync(path.join(eng, 'stage.tsx'), 'utf8');
+  assert.match(stage, /if \(stance === 'lie' && !seated\) \{[\s\S]{0,400}spin = y0 < 0 \? -90 : 90;\s+full\.y = spot\.y \+ \(90 - LIE_THICK\) \* scale;/);
+  const shotSrc = fs.readFileSync(path.join(eng, 'shot.tsx'), 'utf8');
+  assert.match(shotSrc, /if \(p\.on && p\.stance === 'lie'\) \{[\s\S]{0,260}const top = pl\.pointOf\(p\.on\);/, 'lying on a piece is on top of it');
+  assert.match(shotSrc, /if \(subject\.stance === 'lie'\) \{/, 'and the camera finds the head');
+  const { SHOT_GUIDE } = await import('../dist/orchestrator/director-guide.js');
+  assert.match(SHOT_GUIDE, /`stance: 'lie'` lays them down/);
+  assert.match(SHOT_GUIDE, /`act: 'call', hold: 'phone'` brings the phone to the ear/);
+  assert.match(fs.readFileSync('src/orchestrator/director-guide.ts', 'utf8'), /`body: 'child'\\` for a child under about 11/);
+  assert.match(stage, /export const LIE_THICK = 24;/);
+  assert.match(shotSrc, /const LIE_THICK = 24;/, 'the same thickness on both sides');
+});
+
+test('décors, hands, gaze and things in motion: four places, soft medium blur, a foot that follows its shin, a pair from one person, pour / slide / into', async () => {
+  const ts = (await import('typescript')).default;
+  const eng = path.resolve('engine-overlay/files/src/engine');
+  const read = (f) => fs.readFileSync(path.join(eng, f), 'utf8');
+  const rooms = read('rooms.tsx');
+  const shotSrc = read('shot.tsx');
+  const person = read('person.tsx');
+  const stage = read('stage.tsx');
+  const objects = read('objects.tsx');
+  // --- the places the agents kept faking, each with what a story needs in it
+  for (const [name, ids] of [['bathroom', ['stall1', 'sink1']], ['gym', ['bleachers', 'bench']], ['bar', ['bar', 's1', 's3']], ['car', ['driver', 'back']]]) {
+    const recipe = new RegExp(`\\n  ${name}: \\{ mood: [\\s\\S]*?\\n    front: `).exec(rooms);
+    assert.ok(recipe, `place ${name}`);
+    for (const id of ids) assert.match(recipe[0], new RegExp(`id: '${id}'`), `${name} has ${id}`);
+  }
+  for (const piece of ['stall', 'sink', 'bleachers', "'bar-stool'", "'car-seat'", 'dashboard', 'hoop', "'court-lines'"]) assert.match(rooms, new RegExp(`\\n  ${piece}: \\{ kind: `), `piece ${piece}`);
+  for (const seat of ['stall', 'bleachers', "'bar-stool'", "'car-seat'"]) assert.match(rooms, new RegExp(`\\n  ${seat}: \\{ kind: 'floor'[^\\n]*seats: `), `${seat} seats someone`);
+  // every piece a recipe names exists
+  const pieceNames = new Set([...rooms.matchAll(/\n  '?([a-z-]+)'?: \{ kind: '(?:floor|wall|flat)'/g)].map((m) => m[1]));
+  const block = rooms.slice(rooms.indexOf('2026-11-16: the places the agents kept faking'), rooms.indexOf('// the reverse views of the first recipes'));
+  for (const m of block.matchAll(/\{ p: '([a-z-]+)'/g)) assert.ok(pieceNames.has(m[1]), `piece "${m[1]}" used by a new place exists`);
+  // side walls are no longer one frame on a bare wall
+  assert.match(rooms, /opts\.leftWall \?\? base\.leftWall \?\? \[\{ p: 'window'/);
+  assert.match(rooms, /opts\.rightWall \?\? base\.rightWall \?\? \[\{ p: 'door'/);
+  // --- a medium shot keeps its room readable
+  assert.match(shotSrc, /size === 'close' \|\| size === 'ots' \? 'url\(#blur6\)' : 'url\(#blurSoft\)'/);
+  assert.match(shotSrc, /<filter id="blurSoft"[^>]*><feGaussianBlur stdDeviation=\{1\.4\} \/>/);
+  // --- the foot follows the shin
+  assert.match(person, /const shoe = \(o: \{ root: P; mid: P; end: P \}, side: 1 \| -1 = 1\) => \{/);
+  assert.match(person, /const turn = \(-shin \+ f \* 90 \* back\) \* turned \+ side \* 9 \* \(1 - turned\);/);
+  assert.match(person, /shoe\(j\.legR, 1\)/);
+  assert.match(person, /shoe\(j\.legL, -1\)/);
+  // --- hands, arms over the face, brows of another feeling
+  assert.match(person, /type HandKind = 'open' \| 'point' \| 'fist' \| 'palm' \| 'thumb';/);
+  assert.match(person, /\{pose\.armsOver \? <>\{pose\.armsFront \? farArmFront : null\}\{nearArm\}<\/> : null\}/);
+  assert.match(person, /brows\[brow \?\? expr\]/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-acts-'));
+  try {
+    const src = read('actions.ts');
+    const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+    for (const im of new Set([...js.matchAll(/^import .* from '(\.\/[a-z-]+)';$/gm)].map((m) => m[1]))) fs.writeFileSync(path.join(dir, `${im.slice(2)}.mjs`), "export const basePose = { armL: { a: 14, b: 12 }, armR: { a: 14, b: 12 }, legL: { a: 0, b: 0 }, legR: { a: 0, b: 0 } };\nexport const foldYaw = (y) => Math.min(1, Math.abs(y));\nexport const clamp = (v, a, b) => Math.max(a, Math.min(b, v));\nexport const ease01 = (v) => v;\nexport const talkAt = () => 0;\n");
+    fs.writeFileSync(path.join(dir, 'actions.mjs'), js.replace(/from '(\.\/[a-z-]+)';/g, "from '$1.mjs';"));
+    const A = await import(path.join(dir, 'actions.mjs'));
+    for (const g of ['cover-mouth', 'hands-head', 'thumbs-up', 'stop', 'fist', 'clap', 'open-arms']) assert.ok(A.GESTURES.includes(g), `gesture ${g}`);
+    assert.equal(A.act('facepalm', 5, {}).armsOver, true, 'a hand on the face is in front of the face');
+    assert.equal(A.act('hands-head', 5, {}).armsOver, true);
+    assert.equal(A.act('thumbs-up', 5, {}).handR, 'thumb');
+    assert.equal(A.act('stop', 5, {}).handR, 'palm');
+    assert.equal(A.act('fist', 5, {}).handR, 'fist');
+    assert.equal(A.act('beg', 5, {}).armsFront, true, 'beg is another word for open-arms');
+    assert.equal(A.act('idle', 5, {}).armsOver, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // --- eyes follow the person looked at; a pair from one person
+  assert.match(shotSrc, /if \(target !== undefined && people\[target\] && target !== i\) out\.look = Math\.sign\(spotOfPerson\(target\)\.x - spotOfPerson\(i\)\.x\) \* 0\.7;/);
+  assert.match(shotSrc, /const BROWS: Record<string, string> = \{ up: 'shock', sad: 'sad', angry: 'angry', flat: 'determined' \};/);
+  assert.match(shotSrc, /const duo = spec\.duo \?\? autoDuo;/);
+  assert.match(shotSrc, /\|\| pairIdx\.has\(i\)\) return null;/, 'the two are drawn once, by the pair');
+  assert.match(shotSrc, /needs both people standing at an at: \{ u, w \}/);
+  // --- things in motion
+  assert.match(stage, /how\?: 'put' \| 'throw' \| 'drop' \| 'slide'/);
+  assert.match(stage, /const gone = rel\.into \? clamp01\(\(k - 0\.7\) \/ 0\.3\) : 0;/);
+  assert.match(stage, /released = gone >= 1 \? null :/);
+  assert.match(stage, /const tip = pk \* 112 \* \(y0Sign < 0 \? -1 : 1\);/);
+  assert.match(shotSrc, /if \(holdSpec && \(level \|\| rel \|\| holdSpec\.pour\)\) \{/);
+  for (const o of ['bucket', 'glass', 'mic']) { assert.match(objects, new RegExp(`\\n  ${o}: \\(c\\) => \\(`)); assert.match(objects, new RegExp(`HELD_NAMES: HeldName\\[\\] = \\[[^\\]]*'${o}'`)); }
+  // --- the agent is told
+  const guide = fs.readFileSync('src/orchestrator/director-guide.ts', 'utf8');
+  for (const w of ["bathroom gym bar car blank", "act: 'hug', with: 1", "brows: 'up' | 'sad' | 'angry' | 'flat'", "how: 'slide'", "into: true", "pour: { at: 30", "one shot out of four at most"]) assert.ok(guide.includes(w), `guide: ${w}`);
 });

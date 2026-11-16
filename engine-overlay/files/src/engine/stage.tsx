@@ -134,10 +134,14 @@ export type Carry = {
   side?: 'L' | 'R';
   /** stays level whatever the forearm does (a tray, a plate, a bottle) */ level?: boolean;
   /** how far below the palm line the drawing ends, so it rests on what it lands on */ bottom?: number;
-  release?: { at: number; to: Pt; how?: 'put' | 'throw' | 'drop'; dur?: number; /** where the person stood at that frame */ spot?: { x: number; y: number; scale: number } };
+  release?: { at: number; to: Pt; how?: 'put' | 'throw' | 'drop' | 'slide'; dur?: number; /** it goes into what it lands on and is seen no more */ into?: boolean; /** where the person stood at that frame */ spot?: { x: number; y: number; scale: number } };
+  /** tipped over while held, its content falls to the ground: a bucket emptied, a glass poured out */
+  pour?: { at: number; dur?: number; color?: string };
 };
 type Moment = { at: number; act?: ActName; from?: number; yaw: number; reach?: { to: Pt; side?: 'L' | 'R' } | null; reachAt: number };
 
+ /** half the thickness of a body lying down, in body units */
+export const LIE_THICK = 24;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const ease = (v: number) => v * v * (3 - 2 * v);
 const LIMBS = ['armL', 'armR', 'legL', 'legR'] as const;
@@ -220,6 +224,12 @@ export const Staged: React.FC<{
   const scale = spot.scale * height;
   const full = { ...basePose, ...STANCES[seated ? 'sit' : stance ?? 'stand'], ...limbs, ...pose, ...(turning ? { blink: 1 } : {}), yaw: y0, x: spot.x, y: 0, scale } as unknown as PersonPose;
   full.y = spot.y - (feetBelowHips(full, b) + lift) * scale;
+  if (stance === 'lie' && !seated) {
+    // the rig turns a body about the middle of its torso (0, -90): bring that point down to half a body's thickness
+    // above what the person lies on, the head toward the side they look at
+    (full as { spin: number }).spin = y0 < 0 ? -90 : 90;
+    full.y = spot.y + (90 - LIE_THICK) * scale;
+  }
   // reaching: the hand travels from where it is to the target, and back when the reach ends
   const target = cur.reach ?? (prev?.reach && cur.reach === null ? prev.reach : null);
   if (target) {
@@ -234,6 +244,7 @@ export const Staged: React.FC<{
   };
   const now = t ?? 0;
   const { full, lift, scale } = poseAtFrame(now, spot);
+  const y0Sign = (full as { yaw: number }).yaw;
   // the carried thing: in the hand until it is released, then on its way to where it lands, then resting there
   const handProps: { handLProp?: React.ReactNode; handRProp?: React.ReactNode } = {};
   let released: React.ReactNode = null;
@@ -246,24 +257,44 @@ export const Staged: React.FC<{
     };
     const rel = carry.release;
     if (!rel || now < rel.at) {
+      // pouring: the thing tips toward the side the person faces, holds, comes back
+      const pr = carry.pour;
+      const pk = pr && now >= pr.at ? Math.min(clamp01((now - pr.at) / 5), clamp01((pr.at + (pr.dur ?? 24) - now) / 5)) : 0;
+      const tip = pk * 112 * (y0Sign < 0 ? -1 : 1);
       // the hand's drawing turns with the forearm; a level thing is turned back about the palm
-      const node = carry.level ? <g transform={`rotate(${armAngle(full)} 0 10)`}>{carry.node}</g> : carry.node;
+      const node = carry.level || pk > 0 ? <g transform={`rotate(${(carry.level ? armAngle(full) : 0) + tip} 0 10)`}>{carry.node}</g> : carry.node;
       if (side === 'L') handProps.handLProp = node;
       else handProps.handRProp = node;
+      if (pr && pk > 0.35) {
+        const h = handOf(full, side, b);
+        const x = h.x + (y0Sign < 0 ? -1 : 1) * 30 * scale;
+        const y = h.y + 12 * scale;
+        const fall = clamp01((now - pr.at - 3) / 6);
+        const yEnd = y + (spot.y - y) * fall;
+        released = (
+          <g>
+            <path d={`M ${x - 7 * scale} ${y} Q ${x + (y0Sign < 0 ? -1 : 1) * 10 * scale} ${(y + yEnd) / 2} ${x - 5 * scale} ${yEnd} L ${x + 9 * scale} ${yEnd} Q ${x + (y0Sign < 0 ? -1 : 1) * 22 * scale} ${(y + yEnd) / 2} ${x + 7 * scale} ${y} Z`} fill={pr.color ?? '#7CC4F2'} opacity={0.85} />
+            {fall >= 1 ? <ellipse cx={x} cy={spot.y + 3 * scale} rx={(26 + 34 * clamp01((now - pr.at - 9) / 12)) * scale} ry={(6 + 5 * clamp01((now - pr.at - 9) / 12)) * scale} fill={pr.color ?? '#7CC4F2'} opacity={0.75} /> : null}
+          </g>
+        );
+      }
     } else {
       const then = poseAtFrame(rel.at, rel.spot ?? spot);
       const start = handOf(then.full, side, b);
       const ang = armAngle(then.full);
       const how = rel.how ?? 'put';
-      const k = clamp01((now - rel.at) / Math.max(1, rel.dur ?? (how === 'throw' ? 14 : how === 'drop' ? 9 : 8)));
-      const e = how === 'drop' ? k * k : how === 'throw' ? k : ease(k);
+      const k = clamp01((now - rel.at) / Math.max(1, rel.dur ?? (how === 'throw' ? 14 : how === 'drop' ? 9 : how === 'slide' ? 14 : 8)));
+      // sliding: fast at first, then it runs out of speed
+      const e = how === 'drop' ? k * k : how === 'throw' ? k : how === 'slide' ? 1 - (1 - k) * (1 - k) : ease(k);
       const end = { x: rel.to.x, y: rel.to.y - (carry.bottom ?? 24) * then.scale };
       const arc = how === 'throw' ? 130 * then.scale : how === 'put' ? 12 * then.scale : 0;
       const x = start.x + (end.x - start.x) * e;
       const y = start.y + (end.y - start.y) * e - Math.sin(Math.PI * k) * arc;
       // thrown, it spins and ends lying; put down or dropped, a level thing stays level and the others straighten
       const turn = how === 'throw' ? (k < 1 ? (carry.level ? 0 : -ang) + 540 * k * (end.x < start.x ? -1 : 1) : 90) : carry.level ? 0 : -ang * (1 - e);
-      released = <g transform={`translate(${x} ${y}) scale(${then.scale}) rotate(${turn})`}>{carry.node}</g>;
+      // put into a box, a bag, a bin: it shrinks into the opening and is gone
+      const gone = rel.into ? clamp01((k - 0.7) / 0.3) : 0;
+      released = gone >= 1 ? null : <g transform={`translate(${x} ${y}) scale(${then.scale * (1 - 0.75 * gone)}) rotate(${turn})`} opacity={1 - gone}>{carry.node}</g>;
     }
   }
   return (

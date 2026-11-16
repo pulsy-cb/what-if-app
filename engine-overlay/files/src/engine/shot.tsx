@@ -35,7 +35,10 @@ export type ForegroundKind = 'auto' | 'plant' | 'doorframe' | 'lamp' | 'chair' |
 export type ForegroundSpec = ForegroundKind | { kind: Exclude<ForegroundKind, 'auto' | 'none'>; side?: 'left' | 'right' };
 
 type Timed<T> = T | ((t: number, len: number) => T);
-export type FaceExpr = Expr | 'sad' | 'angry' | 'scared' | 'surprised' | 'smile' | 'calm';
+/** Drawn faces. A feeling and its strong form: sad / cry, angry / furious, scared / terrified, happy / laugh. */
+export type DrawnExpr = Expr | 'sad' | 'cry' | 'angry' | 'furious' | 'scared' | 'terrified' | 'laugh' | 'disgust' | 'shy' | 'determined';
+export const FACE_NAMES: DrawnExpr[] = ['neutral', 'happy', 'laugh', 'smug', 'cool', 'determined', 'shock', 'scared', 'terrified', 'worried', 'sad', 'cry', 'angry', 'furious', 'disgust', 'shy', 'oops', 'dizzy', 'tired'];
+export type FaceExpr = DrawnExpr | 'surprised' | 'smile' | 'calm' | 'crying' | 'laughing' | 'afraid' | 'mad' | 'disgusted' | 'embarrassed' | 'focused';
 /** one expression, or [frame, expression] pairs: [[0, 'neutral'], [20, 'shock']] */
 export type FaceSpecT = FaceExpr | [number, FaceExpr][];
 /** where a hand goes: another person (index in people), a piece by id, or a floor point with a height v (0 ceiling, 1 floor) */
@@ -48,7 +51,10 @@ export type PersonBeat = { at: number; act?: ActName | OwnActionSpec; face?: Fac
 export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level'; view?: PlaceView; zone?: string; cut?: boolean };
 export type PersonSpec = {
   who: PersonLook;
-  /** turn toward this person (index in people) */ look?: number;
+  /** turn toward this person (index in people); the eyes go there too */ look?: number;
+  /** where the eyes go when it is not a person: 'left' | 'right' on screen, or -1..1 */ eyes?: 'left' | 'right' | number;
+  /** the brows of another feeling than the face: 'up' (surprise), 'sad', 'angry', 'flat' (resolve) */ brows?: 'up' | 'sad' | 'angry' | 'flat';
+  /** with act: 'hug' | 'handshake' | 'give' | 'push' | 'whisper': the other person (index in people). Both need an `at` */ with?: number;
   /** a hand goes to someone or something, from the start */ reach?: ReachSpec;
   /** what changes during the shot, at given frames */ beats?: PersonBeat[];
   /** on the floor; a function of (t, len) to move someone */ at?: Timed<Place>;
@@ -60,7 +66,7 @@ export type PersonSpec = {
    * `level: true` keeps it level whatever the arm does (tray, plate and bottle are level by themselves).
    * `release` makes it leave the hand: { at: 52, to: 'table' } puts it on a piece, { at: 21, to: { u, w }, how: 'throw' }
    * throws it to a floor point (v: 0 floor … 1 head height), { at: 30, how: 'drop' } lets it fall at the feet. */
-  hold?: HeldName | ({ what?: HeldName; /** your own drawing, carried by the hand, around (0, 10) in hand units */ node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec } & HeldOpts);
+  hold?: HeldName | ({ what?: HeldName; /** your own drawing, carried by the hand, around (0, 10) in hand units */ node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec; /** tip it over at a frame: hold: { what: 'bucket', pour: { at: 30 } } */ pour?: PourSpec } & HeldOpts);
   /** worn things: 'crown' | 'eye-mask' | 'face-mask' | 'sunglasses' | 'cat-ears' | 'headphones' | 'collar' | 'tie' | 'scarf' | 'medal'… or { what, color } */
   wear?: WornSpec[];
   /** an animal that stands and talks: ears, muzzle, whiskers, mane on this person's head. 'cat' | 'dog' | 'lion' | 'bear' | 'rabbit' | 'wolf' | 'fox' | 'pig' | 'mouse', or { kind, fur, inner } */
@@ -104,7 +110,7 @@ export type ShotSpec = {
   people?: PersonSpec[];
   duo?: DuoSpec;
   /** objects that sit ON a piece of the place (a cake on the table, a phone on the desk): drawn with their origin on the piece's top, y up is negative. A hand-placed translate() in `extra` floats when the camera or place changes. */
-  props?: { on: string; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
+  props?: { on?: string; /** a floor point instead of a piece (v: height, 0 floor … 1 head) */ at?: { u: number; w: number; v?: number }; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
   /** your own SVG in the world BEHIND the people, on the room (a door that opens, a poster, a light): someone walking in passes in front of it */
   behind?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
   /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
@@ -130,6 +136,10 @@ const ease01 = (v: number) => { const k = clamp(v, 0, 1); return k * k * (3 - 2 
 const BODY = 378;
 /** how far to the side a hand goes from the middle of the body, at scale 1 (shoulder 42 + arm 120, less the bend) */
 const ARM_REACH = 135;
+const DUO_ACTIONS = ['handshake', 'give', 'hug', 'push', 'whisper'];
+const BROWS: Record<string, string> = { up: 'shock', sad: 'sad', angry: 'angry', flat: 'determined' };
+/** half the thickness of a body lying down: the same value as LIE_THICK in stage.tsx */
+const LIE_THICK = 24;
 
 /** The camera for a person: zoom from how much of them shows, off-centre so they look into the frame. */
 export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number }, yaw = 0): { x: number; y: number; zoom: number } => {
@@ -167,15 +177,22 @@ const Stool: React.FC<{ x: number; y: number; scale: number; height: number; col
   );
 };
 
-const EXPR_MAP: Record<string, Expr> = {
-  sad: 'worried',
-  angry: 'worried',
-  scared: 'shock',
+// Other words for a drawn face. Until 2026-11-16 sad and angry were both drawn as worried, scared as shock: in one
+// episode 108 faces out of 177 were the same drawing. They are faces of their own now.
+const EXPR_MAP: Record<string, DrawnExpr> = {
   surprised: 'shock',
   smile: 'happy',
   calm: 'neutral',
+  crying: 'cry',
+  laughing: 'laugh',
+  afraid: 'scared',
+  mad: 'angry',
+  disgusted: 'disgust',
+  embarrassed: 'shy',
+  focused: 'determined',
 };
-const normExpr = (e: FaceExpr): Expr => EXPR_MAP[e] ?? (e as Expr);
+// the rig's own Expr type lists its nine faces; the drawing code takes any of FACE_NAMES
+const normExpr = (e: FaceExpr): Expr => (EXPR_MAP[e] ?? e) as Expr;
 const timed = <T,>(v: Timed<T> | undefined, t: number, len: number): T | undefined => (typeof v === 'function' ? (v as (t: number, len: number) => T)(t, len) : v);
 const poseOf = (p: { face?: FaceSpecT; pose?: Timed<Record<string, unknown>> }, t: number, len: number): Record<string, unknown> => {
   const keys: [number, Expr][] | undefined =
@@ -185,10 +202,12 @@ const poseOf = (p: { face?: FaceSpecT; pose?: Timed<Record<string, unknown>> }, 
 };
 
 /** When and where a held thing leaves the hand. `to`: a piece id, a floor point (v: height, 0 floor … 1 head) or a person index. */
-export type ReleaseSpec = { at: number; to?: string | { u: number; w: number; v?: number } | number; how?: 'put' | 'throw' | 'drop'; dur?: number; /** nudge where it rests */ dx?: number; dy?: number };
+export type ReleaseSpec = { at: number; to?: string | { u: number; w: number; v?: number } | number; how?: 'put' | 'throw' | 'drop' | 'slide'; dur?: number; /** it goes into what it lands on (a box, a bag, a bin) and is seen no more */ into?: boolean; /** nudge where it rests */ dx?: number; dy?: number };
+/** A held thing tipped over: its content falls to the ground. */
+export type PourSpec = { at: number; dur?: number; color?: string };
 
 /** `hold` as written by many hands: a name, { what }, the same under kind / name / object / item, a drawing, or { node }. */
-const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec } & HeldOpts) | undefined => {
+const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L' | 'R'; level?: boolean; release?: ReleaseSpec; pour?: PourSpec } & HeldOpts) | undefined => {
   if (h === undefined || h === null || h === false) return undefined;
   if (typeof h === 'string') return { what: h };
   if (React.isValidElement(h)) return { node: h };
@@ -308,6 +327,21 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     throw new Error(`shot({ place }) needs what place('name') returns, got ${typeof pl0 === 'string' ? `the string "${pl0}"` : pl0 === undefined ? 'nothing (undefined: is the place defined above this shot, and exported from shared.tsx?)' : 'something else'}. Write const ROOM = place('classroom') once in shared.tsx and pass place: ROOM.`);
   }
   const ShotComp: React.FC<ShotProps> = ({ t, len }) => {
+    // act: 'hug', with: 1 on a person is the short way to a gesture for two: the engine draws the pair together
+    const pairFrom = (spec.people ?? []).findIndex((p) => p.with !== undefined && DUO_ACTIONS.includes(String(actionName(p.act))));
+    let autoDuo: DuoSpec | undefined;
+    const pairIdx = new Set<number>();
+    if (!spec.duo && pairFrom >= 0) {
+      const pa = spec.people![pairFrom]!;
+      const pb = spec.people![pa.with!];
+      const sa = timed(pa.at, t, len);
+      const sb = pb ? timed(pb.at, t, len) : undefined;
+      if (!pb || pa.with === pairFrom) throw new Error(`people[${pairFrom}].with ${pa.with}: there is no other person ${pa.with} in this shot (people has ${spec.people!.length})`);
+      if (!sa || !sb || !('u' in sa) || !('u' in sb)) throw new Error(`act: '${String(actionName(pa.act))}' with: ${pa.with} needs both people standing at an at: { u, w } (not seated on a piece)`);
+      autoDuo = { a: { who: pa.who, at: { u: sa.u, w: sa.w }, face: pa.face, rimId: pa.rimId }, b: { who: pb.who, at: { u: sb.u, w: sb.w }, face: pb.face, rimId: pb.rimId }, action: actionName(pa.act) as DuoAction, from: pa.from, dur: pa.dur };
+      pairIdx.add(pairFrom); pairIdx.add(pa.with!);
+    }
+    const duo = spec.duo ?? autoDuo;
     let camNow = { cam: spec.cam ?? ('wide' as CamSpec), on: spec.duo ? -1 : spec.on ?? 0 };
     let camPrev: typeof camNow | null = null;
     let camAt = 0;
@@ -334,8 +368,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     if (zoneNow === 'door' && spec.view === undefined && !spec.place.has('door') && spec.place.reverse?.has?.('door')) {
       viewNow = 'reverse';
     }
+    // outdoors a 90-degree side view has nothing to show (no facades, pieces stretched): the diagonal view stands in
+    if (spec.place.outdoor && (viewNow === 'left' || viewNow === 'right')) viewNow = viewNow === 'left' ? '3/4-left' : '3/4-right';
     const pl = typeof spec.place.viewOf === 'function' ? spec.place.viewOf(viewNow) : (viewNow === 'reverse' ? spec.place.reverse : spec.place);
-    const flipYaw = (y: number | undefined) => (viewNow === 'front' ? y : yawForView(y, viewNow));
+    const flipYaw = (y: number | undefined, walking = false) => (viewNow === 'front' ? y : yawForView(y, viewNow, walking));
     const flipAt = <T extends Place>(at: T): Place => (viewNow !== 'front' && 'u' in at ? spotForView(at as { u: number; w: number }, viewNow) : at);
     const people = spec.people ?? [];
     // how far along a walkTo this person is, 0..1
@@ -357,6 +393,12 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       return { x: to.x - Math.sign(dx) * ARM_REACH * 0.85 * g.scale, y: g.y, scale: g.scale, w: here.w } as Place;
     };
     const whereOf = (p: PersonSpec, idx = 0, when: number = t): Place => {
+      // lying on a piece (a bed, a stretcher, a sofa): on top of it, not on the seat at its edge
+      if (p.on && p.stance === 'lie') {
+        const seat = flipAt(pl.seat(p.on, p.seat ?? 0)) as { u: number; w: number };
+        const top = pl.pointOf(p.on);
+        return { x: top.x, y: top.y, scale: pl.ground.project(seat.u, seat.w).scale, w: seat.w } as Place;
+      }
       if (p.on) return flipAt(pl.seat(p.on, p.seat ?? 0));
       const at = timed(p.at, when, len) ?? { u: people.length <= 1 ? 0.5 : 0.34 + idx * 0.28, w: 0.45 };
       const near = stepIn(p, at);
@@ -392,6 +434,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const dx = spotOfPerson(j).x - spotOfPerson(i).x;
       return Math.sign(dx || 1) * Math.max(Math.abs(yaw ?? 0), 0.5);
     };
+    const walkingNow = (p: PersonSpec): boolean => !!p.walkTo && !p.on && walkK(p) < 1;
     const baseYaw = (p: PersonSpec): number | undefined => {
       if (p.yaw !== undefined) return p.yaw;
       if (p.walkTo && !p.on && walkK(p) < 1) {
@@ -410,16 +453,35 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     };
     const yawAt = (i: number): number => {
       const p = people[i]!;
-      let y = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
+      let y = yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p))) ?? 0;
       for (const b of sortBeats(p.beats)) if (b.at <= t && (b.yaw !== undefined || b.look !== undefined)) y = yawToward(i, b.look, flipYaw(b.yaw) ?? y) ?? y;
       return y;
+    };
+    // the eyes follow who the person looks at (the head alone used to turn), or go where `eyes` says
+    const gazeOf = (p: PersonSpec, i: number): { look?: number; brow?: string } => {
+      const out: { look?: number; brow?: string } = {};
+      if (p.brows && BROWS[p.brows]) out.brow = BROWS[p.brows];
+      if (p.eyes !== undefined) out.look = p.eyes === 'left' ? -0.8 : p.eyes === 'right' ? 0.8 : clamp(Number(p.eyes) || 0, -1, 1);
+      else {
+        let target = p.look;
+        for (const b of sortBeats(p.beats)) if (b.at <= t && b.look !== undefined) target = b.look;
+        if (target !== undefined && people[target] && target !== i) out.look = Math.sign(spotOfPerson(target).x - spotOfPerson(i).x) * 0.7;
+      }
+      return out;
     };
     const personFramePoint = (i: number) => {
       const subject = people[i]!;
       const g = spotOfPerson(i);
       const b = legsOf(subject);
       const sitting = subject.on !== undefined || subject.stance === 'sit';
-      return { x: g.x, y: g.y + (sitting ? b.thigh * g.scale * 0.85 : 0), scale: g.scale * ((b.thigh + b.shin) / 140) };
+      // kneeling or crouching lowers the head as sitting does: a close-up framed for a standing head cut it off (2026-11-16)
+      // lying down, the head is at one end of the body, just above what the person lies on
+      if (subject.stance === 'lie') {
+        const side = yawAt(i) < 0 ? -1 : 1;
+        return { x: g.x + side * 86 * g.scale, y: g.y + (b.thigh + b.shin + 176 - LIE_THICK) * g.scale, scale: g.scale * ((b.thigh + b.shin) / 140) };
+      }
+      const lower = sitting && subject.stance !== 'floor' ? b.thigh * 0.85 : subject.stance === 'kneel' ? b.shin * 0.9 : subject.stance === 'crouch' ? b.thigh * 0.55 + b.shin * 0.3 : subject.stance === 'floor' ? (b.thigh + b.shin) * 0.74 : 0;
+      return { x: g.x, y: g.y + lower * g.scale, scale: g.scale * ((b.thigh + b.shin) / 140) };
     };
     const focusOn = (i: number) => {
       if (i === -2 && people.length >= 2) {
@@ -432,9 +494,9 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         };
       }
       if (people[i]) return personFramePoint(i);
-      if (spec.duo) {
-        const da = flipAt(spec.duo.a.at) as { u: number; w: number };
-        const db = flipAt(spec.duo.b.at) as { u: number; w: number };
+      if (duo) {
+        const da = flipAt(duo.a.at) as { u: number; w: number };
+        const db = flipAt(duo.b.at) as { u: number; w: number };
         const a = pl.ground.project(da.u, da.w);
         const b = pl.ground.project(db.u, db.w);
         return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, scale: (a.scale + b.scale) / 2 };
@@ -551,7 +613,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const focusSubjectIdx = otsActive ? otsActive.targetIdx : isPov ? povTargetOf(camNow.on) : camNow.on;
     const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'ots' || size === 'medium') && people[focusSubjectIdx];
     const focus = spec.focus ?? (soft ? ('u' in whereOf(people[focusSubjectIdx]!, focusSubjectIdx) ? (whereOf(people[focusSubjectIdx]!, focusSubjectIdx) as { w: number }).w : undefined) : undefined);
-    const shellFilter = soft ? (size === 'close' || size === 'ots' ? 'url(#blur6)' : 'url(#blur3)') : undefined;
+    // a medium shot keeps its room readable: half the frames of an episode were a face on a smear (audit 2026-11-16)
+    const shellFilter = soft ? (size === 'close' || size === 'ots' ? 'url(#blur6)' : 'url(#blurSoft)') : undefined;
     // an angle in a flat drawing: stretch the world about the subject's feet and move the frame toward ceiling or floor
     const feet = people[focusSubjectIdx] ? spotOfPerson(focusSubjectIdx).y : base.y;
     const tall = angle === 'low' ? 1.14 : angle === 'high' ? 0.88 : 1;
@@ -573,6 +636,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const povHeldNode = povHoldSpec ? (povHoldSpec.node ?? held(povHoldSpec.what as string, povHoldSpec)) : undefined;
     return (
       <g>
+      <defs><filter id="blurSoft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation={1.4} /></filter></defs>
       <g transform={camT(base.x + panX + jolt.x / zoom, base.y + panY + lift * viewH + jolt.y / zoom, zoom)}>
       <g transform={angleT}>
         <Stage ground={pl.ground} t={t} focus={focus}>
@@ -591,14 +655,14 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               const b = legsOf(p);
               return [<StageItem key={`sit-${pi}`} depth={(at as { w: number }).w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
             }
-            if (!p.on || !pl.wantsStool(p.on)) return [];
+            if (!p.on || p.stance === 'lie' || !pl.wantsStool(p.on)) return [];
             const s = flipAt(pl.seat(p.on, p.seat ?? 0)) as { u: number; w: number };
             const g = pl.ground.project(s.u, s.w);
             const b = legsOf(p);
             return [<StageItem key={`stool-${p.on}-${p.seat ?? 0}`} depth={s.w - 0.001}><Stool x={g.x} y={g.y} scale={g.scale} height={b.shin + 0.2 * b.thigh} color={pl.tokens.wood} metal={pl.tokens.metal} /></StageItem>];
           })}
           {people.map((p, i) => {
-            if ((isPov && i === povOwner) || (otsActive && i === otsActive.otherIdx)) return null;
+            if ((isPov && i === povOwner) || (otsActive && i === otsActive.otherIdx) || pairIdx.has(i)) return null;
             const { who, on, from, dur, stance, rimId, vfx } = p;
             // worn things and an animal's head join whatever the shot drew itself in headGear / torsoGear
             const yawNow = yawAt(i);
@@ -615,8 +679,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             const rel = holdSpec?.release;
             const level = holdSpec ? holdSpec.level ?? (holdSpec.what !== undefined && HELD_LEVEL.includes(holdSpec.what)) : false;
             let carry: Carry | undefined;
-            if (holdSpec && (level || rel)) {
-              carry = { node: heldNode, side: holdSpec.side, level, bottom: heldBottom(holdSpec.what) * (holdSpec.scale ?? 1) };
+            if (holdSpec && (level || rel || holdSpec.pour)) {
+              carry = { node: heldNode, side: holdSpec.side, level, bottom: heldBottom(holdSpec.what) * (holdSpec.scale ?? 1), pour: holdSpec.pour };
               if (rel) {
                 if (typeof rel.at !== 'number') throw new Error(`hold.release needs the frame the thing leaves the hand: release: { at: 52, to: 'table' }. Got ${JSON.stringify(rel)}`);
                 const w0 = whereOf(p, i, rel.at);
@@ -633,7 +697,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
                   const g = pl.ground.project(s2.u, s2.w);
                   to = { x: g.x, y: g.y - BODY * g.scale * (rel.to.v ?? 0) * 0.9 };
                 }
-                carry.release = { at: rel.at, how: rel.how ?? (rel.to === undefined ? 'drop' : 'put'), dur: rel.dur, to: { x: to.x + (rel.dx ?? 0), y: to.y + (rel.dy ?? 0) }, spot };
+                carry.release = { at: rel.at, how: rel.how ?? (rel.to === undefined ? 'drop' : 'put'), dur: rel.dur, into: rel.into, to: { x: to.x + (rel.dx ?? 0), y: to.y + (rel.dy ?? 0) }, spot };
               }
             }
             const handLProp = p.handLProp ?? (!carry && holdSpec?.side === 'L' ? heldNode : undefined);
@@ -649,7 +713,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             // faces given in beats join the face keyframes
             const baseFace: [number, FaceExpr][] = p.face === undefined ? [] : typeof p.face === 'string' ? [[0, p.face]] : p.face;
             const faces = [...baseFace, ...beats.filter((b) => b.face).map((b): [number, FaceExpr] => [b.at, b.face!])].sort((a, b) => a[0] - b[0]);
-            let yawRun = yawToward(i, p.look, flipYaw(baseYaw(p))) ?? 0;
+            let yawRun = yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p))) ?? 0;
             const stageBeats: StageBeat[] = beats.map((b) => {
               if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
               return { at: b.at, act: actionName(b.act), yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
@@ -668,14 +732,21 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               headGear
             );
             return (
-              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
-                pose={poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) as never} beats={stageBeats} reach={reach ?? undefined}
+              <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
+                pose={{ ...gazeOf(p, i), ...poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) } as never} beats={stageBeats} reach={reach ?? undefined}
                 rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} carry={carry} />
             );
           })}
-          {spec.duo ? <Duo a={{ at: flipAt(spec.duo.a.at) as { u: number; w: number }, look: spec.duo.a.who, rimId: spec.duo.a.rimId, pose: poseOf(spec.duo.a, t, len) as never }} b={{ at: flipAt(spec.duo.b.at) as { u: number; w: number }, look: spec.duo.b.who, rimId: spec.duo.b.rimId, pose: poseOf(spec.duo.b, t, len) as never }} action={spec.duo.action} from={spec.duo.from} dur={spec.duo.dur} prop={spec.duo.prop} /> : null}
+          {duo ? <Duo a={{ at: flipAt(duo.a.at) as { u: number; w: number }, look: duo.a.who, rimId: duo.a.rimId, pose: poseOf(duo.a, t, len) as never }} b={{ at: flipAt(duo.b.at) as { u: number; w: number }, look: duo.b.who, rimId: duo.b.rimId, pose: poseOf(duo.b, t, len) as never }} action={duo.action} from={duo.from} dur={duo.dur} prop={duo.prop} /> : null}
           {(spec.props ?? []).map((pr, i) => {
-            const at = pl.pointOf(pr.on);
+            // on a piece, or at a floor point (v: height above the floor, 0 floor … 1 head)
+            let at: { x: number; y: number };
+            if (typeof pr.on === 'string' && pr.on) at = pl.pointOf(pr.on);
+            else if (pr.at && typeof pr.at.u === 'number' && typeof pr.at.w === 'number') {
+              const sp = flipAt({ u: pr.at.u, w: pr.at.w }) as { u: number; w: number };
+              const g = pl.ground.project(sp.u, sp.w);
+              at = { x: g.x, y: g.y - BODY * g.scale * (pr.at.v ?? 0) * 0.9 };
+            } else throw new Error(`props[${i}] needs where it stands: { on: '<piece id>', node } to put it on a piece of the place, or { at: { u, w }, node } for a floor point. Got ${JSON.stringify(Object.keys(pr))}`);
             return <g key={`prop-${i}`} transform={`translate(${at.x + (pr.dx ?? 0)} ${at.y + (pr.dy ?? 0)}) scale(${pr.scale ?? 1})`}>{pr.node}</g>;
           })}
           {extraNode ? <g>{extraNode}</g> : null}

@@ -995,18 +995,15 @@ def main() -> int:
         if not is_char_shot or not same_room:
             shot_view = "3/4-left" if (is_char_shot and i % 3 == 2) else "front"
             front_run_in_room = 1 if is_char_shot else 0
-        elif ("close" in size or "medium" in size) and prev_view in {"front", "3/4-left", "3/4-right"} and (speech_or_react or front_run_in_room >= 2):
-            shot_view = "reverse"
-            front_run_in_room = 0
-        elif crossing_clause and prev_view not in {"left", "right"}:
-            shot_view = "left" if i % 2 == 0 else "right"
+        # No automatic `reverse`, `left` or `right`: given mechanically they put the framed person's back to the camera
+        # in 54 shots out of 252, and side views stack two people on one column (audit 2026-11-16). The diagonal views
+        # open another wall and keep the faces; a real reverse shot stays a director's choice on the card.
+        elif ("close" in size or "medium" in size) and prev_view == "front" and (speech_or_react or crossing_clause or front_run_in_room >= 2):
+            shot_view = "3/4-left" if i % 2 == 0 else "3/4-right"
             front_run_in_room = 0
         elif "wide" in size and prev_view == "front":
             shot_view = "3/4-right" if i % 2 == 0 else "3/4-left"
             front_run_in_room += 1
-        elif prev_view == "reverse" and i % 3 == 1:
-            shot_view = "3/4-left" if (i // 3) % 2 == 0 else "3/4-right"
-            front_run_in_room = 1
         else:
             shot_view = "front"
             front_run_in_room += 1

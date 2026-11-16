@@ -7,7 +7,7 @@ type Look = {
   extra?: string; accessory?: string;
   cast?: { eyeR?: [number, number]; browW?: number; noseK?: number };
 };
-type Pose = { yaw: number; tilt: number; headTilt: number; expr: string; blink: number; look: number; glasses: number; sway?: number; talk?: number };
+type Pose = { yaw: number; tilt: number; headTilt: number; brow?: string; expr: string; blink: number; look: number; glasses: number; sway?: number; talk?: number };
 
 // Views of the character. `yaw` is the turn angle of the body, as a number you can read like a compass:
 //    0 front · ±0.45 three-quarter · ±1 profile (facing screen-right when > 0) · ±2 seen from behind.
@@ -122,10 +122,24 @@ const HairProfile: React.FC<{ L: Look; pose: Pose }> = ({ L, pose }) => {
 
 const eyeShape = (L: Look, pose: Pose, x: number, y: number): React.ReactNode => {
   const e = pose.expr;
-  const open = pose.blink >= 0.95 ? 0.08 : e === 'tired' ? 0.5 : e === 'smug' || e === 'cool' ? 0.55 : 1;
+  const open = pose.blink >= 0.95 ? 0.08 : e === 'tired' ? 0.5 : e === 'smug' || e === 'cool' ? 0.55 : e === 'disgust' ? 0.58 : e === 'sad' ? 0.68 : e === 'angry' ? 0.76 : e === 'furious' || e === 'shy' ? 0.84 : 1;
   const look = pose.look * 4;
   if (pose.blink >= 0.95) return <path d={`M ${x - 9} ${y + 1} Q ${x} ${y + 7} ${x + 9} ${y + 1}`} stroke={L.face} strokeWidth={5} fill="none" strokeLinecap="round" />;
-  if (e === 'happy') return <path d={`M ${x - 9} ${y + 3} Q ${x} ${y - 9} ${x + 9} ${y + 3}`} stroke={L.face} strokeWidth={6} fill="none" strokeLinecap="round" />;
+  if (e === 'happy' || e === 'laugh') return <path d={`M ${x - 9} ${y + 3} Q ${x} ${y - 9} ${x + 9} ${y + 3}`} stroke={L.face} strokeWidth={6} fill="none" strokeLinecap="round" />;
+  if (e === 'cry')
+    return (
+      <g>
+        <path d={`M ${x - 10} ${y - 3} Q ${x} ${y + 8} ${x + 10} ${y - 3}`} stroke={L.face} strokeWidth={6} fill="none" strokeLinecap="round" />
+        <path d={`M ${x - 5} ${y + 9} L ${x - 6} ${y + 32} Q ${x} ${y + 42} ${x + 6} ${y + 32} L ${x + 5} ${y + 9} Z`} fill="#7CC4F2" opacity={0.92} />
+      </g>
+    );
+  if (e === 'scared' || e === 'terrified')
+    return (
+      <g>
+        <ellipse cx={x} cy={y - 1} rx={e === 'terrified' ? 11 : 10} ry={e === 'terrified' ? 14 : 12} fill="#FFFFFF" stroke={L.face} strokeWidth={4} />
+        <circle cx={x + 2 + look} cy={y} r={e === 'terrified' ? 3 : 4.2} fill={L.face} />
+      </g>
+    );
   if (e === 'dizzy') return <path d={`M ${x - 7} ${y - 7} L ${x + 7} ${y + 7} M ${x + 7} ${y - 7} L ${x - 7} ${y + 7}`} stroke={L.face} strokeWidth={5} strokeLinecap="round" />;
   if (e === 'oops') return <path d={`M ${x - 8} ${y - 6} L ${x + 4} ${y} L ${x - 8} ${y + 6}`} stroke={L.face} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />;
   const big = e === 'shock';
@@ -150,6 +164,23 @@ const browPath = (e: string, x: number, y: number): string => {
       return `M ${x - 10} ${y - 10} L ${x + 12} ${y - 6}`;
     case 'tired':
       return `M ${x - 11} ${y - 8} Q ${x} ${y - 12} ${x + 11} ${y - 9}`;
+    // the profile looks screen-right: the inner end of the brow is the right one
+    case 'sad':
+    case 'cry':
+    case 'shy':
+      return `M ${x - 11} ${y - 9} L ${x + 11} ${y - 19}`;
+    case 'scared':
+    case 'terrified':
+      return `M ${x - 10} ${y - 17} L ${x + 11} ${y - 27}`;
+    case 'angry':
+      return `M ${x - 11} ${y - 21} L ${x + 13} ${y - 9}`;
+    case 'furious':
+      return `M ${x - 12} ${y - 24} L ${x + 14} ${y - 7}`;
+    case 'determined':
+    case 'disgust':
+      return `M ${x - 11} ${y - 17} L ${x + 12} ${y - 11}`;
+    case 'laugh':
+      return `M ${x - 10} ${y - 16} Q ${x} ${y - 24} ${x + 12} ${y - 17}`;
     default:
       return '';
   }
@@ -176,6 +207,26 @@ const MouthProfile: React.FC<{ L: Look; pose: Pose }> = ({ L, pose }) => {
     case 'smug':
     case 'cool':
       return <path d={`M ${x - 12} ${y + 3} Q ${x} ${y + 8} ${x + 10} ${y - 5}`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" />;
+    case 'sad':
+      return <path d={`M ${x - 12} ${y + 8} Q ${x} ${y - 4} ${x + 10} ${y + 6}`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" />;
+    case 'angry':
+      return <path d={`M ${x - 12} ${y + 7} Q ${x} ${y - 3} ${x + 10} ${y + 5}`} stroke={L.face} strokeWidth={5.5} fill="none" strokeLinecap="round" />;
+    case 'determined':
+      return <path d={`M ${x - 12} ${y + 3} L ${x + 9} ${y + 2}`} stroke={L.face} strokeWidth={5} fill="none" strokeLinecap="round" />;
+    case 'shy':
+      return <g><path d={`M ${x - 8} ${y + 2} Q ${x} ${y + 7} ${x + 7} ${y + 1}`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" /><ellipse cx={x - 10} cy={y - 22} rx={10} ry={6} fill="#F08A8A" opacity={0.6} /></g>;
+    case 'scared':
+      return <path d={`M ${x - 12} ${y + 4} l 5 -6 l 5 6 l 5 -6 l 5 5`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />;
+    case 'disgust':
+      return <g><path d={`M ${x - 12} ${y + 6} Q ${x - 5} ${y - 4} ${x + 1} ${y + 3} Q ${x + 6} ${y + 8} ${x + 10} ${y}`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" /><path d={`M ${x + 1} ${y + 6} q 2 10 7 8 q 4 -2 2 -10 Z`} fill="#E06A6A" stroke={L.face} strokeWidth={2.5} /></g>;
+    case 'cry':
+      return <path d={`M ${x - 12} ${y + 11} Q ${x - 10} ${y - 7} ${x} ${y - 7} Q ${x + 8} ${y - 7} ${x + 10} ${y + 10} Q ${x} ${y + 5} ${x - 12} ${y + 11} Z`} fill={L.face} />;
+    case 'terrified':
+      return <path d={`M ${x - 9} ${y - 6} Q ${x} ${y - 11} ${x + 8} ${y - 6} L ${x + 9} ${y + 13} Q ${x} ${y + 20} ${x - 10} ${y + 13} Z`} fill={L.face} />;
+    case 'furious':
+      return <g><path d={`M ${x - 14} ${y - 5} L ${x + 10} ${y - 5} L ${x + 8} ${y + 11} L ${x - 11} ${y + 11} Z`} fill={L.face} stroke={L.face} strokeWidth={3} strokeLinejoin="round" /><path d={`M ${x - 10} ${y - 2} L ${x + 8} ${y - 2} L ${x + 7} ${y + 3} L ${x - 9} ${y + 3} Z`} fill="#FFFFFF" /></g>;
+    case 'laugh':
+      return <g><path d={`M ${x - 16} ${y - 7} Q ${x} ${y + 28} ${x + 10} ${y - 7} Z`} fill={L.face} /><path d={`M ${x - 12} ${y - 4} L ${x + 8} ${y - 4} Q ${x - 2} ${y + 3} ${x - 12} ${y - 4} Z`} fill="#FFFFFF" /></g>;
     default:
       return <path d={`M ${x - 12} ${y} Q ${x} ${y + 4} ${x + 9} ${y}`} stroke={L.face} strokeWidth={4.5} fill="none" strokeLinecap="round" />;
   }
@@ -201,7 +252,7 @@ const ProfileHead: React.FC<Ctx> = ({ L, pose }) => {
       <ellipse cx={-12} cy={Y + 10} rx={8} ry={12} fill={L.skinShade} {...st} strokeWidth={3.5} />
       <path d={`M -14 ${Y + 4} Q -8 ${Y + 10} -13 ${Y + 17}`} stroke={L.line} strokeWidth={2.5} fill="none" strokeLinecap="round" opacity={0.6} />
       {hairBehind ? null : <HairProfile L={L} pose={pose} />}
-      {browPath(pose.expr, ex, ey) ? <path d={browPath(pose.expr, ex, ey)} stroke={L.face} strokeWidth={L.cast?.browW ?? 5} fill="none" strokeLinecap="round" /> : null}
+      {browPath(pose.brow ?? pose.expr, ex, ey) ? <path d={browPath(pose.brow ?? pose.expr, ex, ey)} stroke={L.face} strokeWidth={L.cast?.browW ?? 5} fill="none" strokeLinecap="round" /> : null}
       {eyeShape(L, pose, ex, ey)}
       <MouthProfile L={L} pose={pose} />
       {L.accessory === 'beard' ? <path d={`M 4 ${Y + 20} Q 6 ${Y + 64} 44 ${Y + 62} Q 62 ${Y + 56} 60 ${Y + 28} Q 40 ${Y + 38} 20 ${Y + 34} Z`} fill={L.hair} opacity={0.92} /> : null}
