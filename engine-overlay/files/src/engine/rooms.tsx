@@ -557,6 +557,7 @@ export type Placed = {
   has: (id: string) => boolean;
   /** true when someone sitting at piece `id` needs a stool under them */ wantsStool: (id: string) => boolean;
   /** the world point a hand goes to on piece `id` (its top, or the middle of a wall piece) */ pointOf: (id: string) => { x: number; y: number };
+  /** the id of the table, desk, counter or bed whose footprint holds this floor point, if any */ pieceAt?: (u: number, w: number) => string | undefined;
   /** camera anchor for a sub-zone or piece of this room (e.g. 'window', 'door', 'sofa', 'counter', 'left', 'right') */
   zoneOf: (zone: string) => { x: number; y: number; zoom: number } | null;
   /** the same place seen from any supported camera perspective */
@@ -655,8 +656,11 @@ export const yawForView = (yaw: number | undefined, view: PlaceView, walking = f
   return yaw;
 };
 
+const PLACE_ALIASES: Record<string, string> = { study: 'office', bureau: 'office', library: 'office', school: 'classroom', class: 'classroom', home: 'living', lounge: 'living', salon: 'living', cafe: 'restaurant', diner: 'restaurant', road: 'street', yard: 'garden', toilet: 'bathroom', restroom: 'bathroom', pub: 'bar' };
 /** Build a place from a recipe name (see PLACES) and your changes. */
 export const place = (name: string, opts: PlaceOpts = {}): Placed => {
+  // names the stories use for a place that exists under another name (a launch lost a pass on 'study', 2026-11-16)
+  name = PLACE_ALIASES[name] ?? name;
   const base = PLACES[name];
   if (!base) throw new Error(`unknown place "${name}". Places: ${Object.keys(PLACES).join(', ')}. For anything else use place('blank', { pieces: [...] }), or place('open', { pieces: [...] }) outdoors.`);
   const outdoor = Boolean(base.outdoor);
@@ -828,6 +832,8 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
         if (x.def.kind !== 'floor') return r.P(x.u + x.len / 2, 0.45, 0);
         return r.P(x.u + x.len / 2, x.def.top ?? 0.8, x.w + x.deep / 2);
       },
+      pieceAt: (u, w) =>
+        resolved.find((x) => x.def.kind === 'floor' && /desk|table|counter|bed|podium|sink|dashboard/.test(x.name) && u >= x.u - 0.01 && u <= x.u + x.len + 0.01 && w >= x.w - 0.03 && w <= x.w + x.deep + 0.03)?.id,
       zoneOf,
       viewOf,
       tokens: T,

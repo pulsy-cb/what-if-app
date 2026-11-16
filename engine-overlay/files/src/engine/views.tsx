@@ -47,7 +47,9 @@ const HairProfile: React.FC<{ L: Look; pose: Pose }> = ({ L, pose }) => {
     case 'curls':
       return (
         <g>
-          {[-165, -140, -115, -90, -65, -40, -15].map((deg, k) => {
+          {/* the front curl stops above the brow: at -15° it sat on the eye, and a close-up in profile read as the back of
+              a head (4v9iyhecgpu-1, S2). The mass goes down the back of the skull instead. */}
+          {[-200, -175, -150, -125, -100, -75, -52].map((deg, k) => {
             const a = (deg * Math.PI) / 180;
             return <circle key={k} cx={Math.cos(a) * 52 - 4} cy={Y + Math.sin(a) * 52} r={24} fill={L.hair} />;
           })}

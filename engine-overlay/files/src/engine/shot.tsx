@@ -41,7 +41,7 @@ export const FACE_NAMES: DrawnExpr[] = ['neutral', 'happy', 'laugh', 'smug', 'co
 export type FaceExpr = DrawnExpr | 'surprised' | 'smile' | 'calm' | 'crying' | 'laughing' | 'afraid' | 'mad' | 'disgusted' | 'embarrassed' | 'focused';
 /** one expression, or [frame, expression] pairs: [[0, 'neutral'], [20, 'shock']] */
 export type FaceSpecT = FaceExpr | [number, FaceExpr][];
-/** where a hand goes: another person (index in people), a piece by id, or a floor point with a height v (0 ceiling, 1 floor) */
+/** where a hand goes: another person (index in people), a piece by id, or a floor point with a height v (0 floor … 1 head height, the same as props.at and release.to) */
 export type ReachTarget = number | string | { u: number; w: number; v?: number };
 /** part: where on a person the hand goes (default chest) */
 export type ReachSpec = { to: ReachTarget; side?: 'L' | 'R'; part?: 'head' | 'chest' | 'hand' };
@@ -110,7 +110,7 @@ export type ShotSpec = {
   people?: PersonSpec[];
   duo?: DuoSpec;
   /** objects that sit ON a piece of the place (a cake on the table, a phone on the desk): drawn with their origin on the piece's top, y up is negative. A hand-placed translate() in `extra` floats when the camera or place changes. */
-  props?: { on?: string; /** a floor point instead of a piece (v: height, 0 floor … 1 head) */ at?: { u: number; w: number; v?: number }; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
+  props?: { /** lying on the piece instead of standing on it: a sheet, a card, a phone, a plate */ flat?: boolean; on?: string; /** a floor point instead of a piece (v: height, 0 floor … 1 head) */ at?: { u: number; w: number; v?: number }; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
   /** your own SVG in the world BEHIND the people, on the room (a door that opens, a poster, a light): someone walking in passes in front of it */
   behind?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
   /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
@@ -142,7 +142,7 @@ const BROWS: Record<string, string> = { up: 'shock', sad: 'sad', angry: 'angry',
 const LIE_THICK = 24;
 
 /** The camera for a person: zoom from how much of them shows, off-centre so they look into the frame. */
-export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number }, yaw = 0): { x: number; y: number; zoom: number } => {
+export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number }, yaw = 0, solo = false): { x: number; y: number; zoom: number } => {
   // a tall frame at zoom 0.85 was one third ceiling and one third empty floor (prof, 2026-11-12): go in until the room fills the height
   if (size === 'establishing') return PORTRAIT ? { x: 900, y: 500, zoom: 1.4 } : { x: 900, y: 500, zoom: 0.85 };
   const s = p.scale;
@@ -156,7 +156,11 @@ export const frameOn = (size: CamSize, p: { x: number; y: number; scale: number 
     close: { height: 190 * s, width: 280 * s, share: PORTRAIT ? 0.44 : 0.66, chest: 0.87 },
   };
   const c = fit[size];
-  const zoom = clamp(Math.min((FRAME.h * c.share) / c.height, FRAME.w / c.width), 0.6, 4.5);
+  // A tall frame is limited by its width: a wide shot on one person left them a third of the height, between a bare
+  // ceiling and a bare floor (417 subjects measured in 9:16, 2026-11-16: wide shots at 0.26 to 0.31 of the frame).
+  // Alone in a tall frame, the wide shot takes a narrower field.
+  const width = solo && PORTRAIT && size === 'wide' ? c.width * 0.78 : c.width;
+  const zoom = clamp(Math.min((FRAME.h * c.share) / c.height, FRAME.w / width), 0.6, 4.5);
   const look = yaw > 0.15 ? 1 : yaw < -0.15 ? -1 : 0;
   const lookRoom = (FRAME.w / zoom) * (size === 'close' ? 0.1 : 0.14);
   return { x: p.x + look * lookRoom, y: p.y - 378 * s * c.chest + (PORTRAIT ? 40 / zoom : 0), zoom };
@@ -426,7 +430,9 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       if (typeof to === 'string') return { to: pl.pointOf(to), side: r.side };
       const spot = flipAt({ u: to.u, w: to.w }) as { u: number; w: number };
       const g = pl.ground.project(spot.u, spot.w);
-      return { to: { x: g.x, y: g.y - BODY * g.scale * (1 - (to.v ?? 0.8)) * 0.9 }, side: r.side };
+      // v reads like props.at and release.to (0 floor … 1 head). It used to run the other way here, so a hand sent to a
+      // card lying low (v: 0.03) went up to the head while the card (v: 0.02) stayed on the floor (4v9iyhecgpu-1, S5 and S14).
+      return { to: { x: g.x, y: g.y - BODY * g.scale * (to.v ?? 0.2) * 0.9 }, side: r.side };
     };
     // turning toward someone keeps the strength of the turn and picks its side
     const yawToward = (i: number, j: number | undefined, yaw: number | undefined): number | undefined => {
@@ -577,7 +583,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         return { x: ahead.x, y: ahead.y - 190 * ahead.scale, zoom: PORTRAIT ? 1.75 : 1.18 };
       }
       const groupWide = c === 'wide' && on === 0 && spec.on === undefined && people.length >= 2;
-      const sized = typeof c === 'string' ? frameOn(c, focusOn(groupWide ? -2 : on), !groupWide && people[on] ? yawAt(on) : 0) : c;
+      const sized = typeof c === 'string' ? frameOn(c, focusOn(groupWide ? -2 : on), !groupWide && people[on] ? yawAt(on) : 0, people.length === 1 && !duo) : c;
       const zoned = zCam && typeof c === 'string' && c === 'wide'
         ? { ...sized, x: sized.x * 0.65 + zCam.x * 0.35, y: sized.y * 0.75 + zCam.y * 0.25 }
         : sized;
@@ -611,6 +617,47 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const panY = isPov ? Math.cos(t / 19) * (4 / zoom) : 0;
     // a close-up or OTS separates the face from the room: the room goes soft, people at another depth too
     const focusSubjectIdx = otsActive ? otsActive.targetIdx : isPov ? povTargetOf(camNow.on) : camNow.on;
+    // What the checker reads (nothing listens during a render): is the head of the person this shot is on inside the
+    // frame, and is it hidden by someone nearer? On the first launch of the 16 Nov engine four shots out of eighteen
+    // had their subject outside the frame or behind another head, and nothing said so (4v9iyhecgpu-1: S7, S10, S11, S15).
+    const framingSink = (globalThis as { __whatifFraming?: unknown[] }).__whatifFraming;
+    if (Array.isArray(framingSink)) {
+      const subjectIdx = camNow.on;
+      const named = spec.on !== undefined || people.length === 1 || sortBeats(spec.beats).some((b) => b.on !== undefined);
+      const sub = people[subjectIdx];
+      if (sub && named && !isPov && !otsActive && !pairIdx.has(subjectIdx) && !(sub.walkTo && !sub.on) && sub.stance !== 'lie') {
+        const feetY = spotOfPerson(subjectIdx).y;
+        const tallK = angle === 'low' ? 1.14 : angle === 'high' ? 0.88 : 1;
+        const liftK = angle === 'low' ? -0.15 : angle === 'high' ? 0.15 : 0;
+        const headOf = (i: number) => {
+          const fp = personFramePoint(i);
+          return { x: fp.x, y: feetY + (fp.y - 316 * fp.scale - feetY) * tallK, r: 58 * fp.scale, feet: feetY + (fp.y - feetY) * tallK, top: feetY + (fp.y - 378 * fp.scale - feetY) * tallK };
+        };
+        const h = headOf(subjectIdx);
+        const cx = base.x + panX;
+        const cy = base.y + panY + liftK * (FRAME.h / zoom);
+        const hw = FRAME.w / (2 * zoom);
+        const hh = FRAME.h / (2 * zoom);
+        const share = (lo: number, hi: number, a: number, b: number) => clamp((Math.min(hi, b) - Math.max(lo, a)) / (hi - lo), 0, 1);
+        const visible = share(h.x - h.r, h.x + h.r, cx - hw, cx + hw) * share(h.y - h.r, h.y + h.r, cy - hh, cy + hh);
+        const depthOf = (i: number) => { const wv = whereOf(people[i]!, i); return 'u' in wv ? wv.w : 0.5; };
+        let covered = 0;
+        let by = -1;
+        people.forEach((q, j) => {
+          if (j === subjectIdx || depthOf(j) <= depthOf(subjectIdx) + 0.04) return;
+          const o = headOf(j);
+          const c = share(h.x - h.r, h.x + h.r, o.x - o.r * 1.1, o.x + o.r * 1.1) * share(h.y - h.r, h.y + h.r, o.top, o.feet);
+          if (c > covered) { covered = c; by = j; }
+        });
+        framingSink.push({ kind: 'subject', t, on: subjectIdx, visible: Math.round(visible * 100) / 100, covered: Math.round(covered * 100) / 100, by, handCam: typeof camNow.cam !== 'string', share: Math.round(((h.feet - h.top) / (FRAME.h / zoom)) * 100) / 100, portrait: PORTRAIT, opening: !!spec.title || camNow.cam === 'establishing' });
+      }
+      (spec.props ?? []).forEach((pr, i) => {
+        if (!pr.at || pr.on || (pr.at.v ?? 0) >= 0.15 || !pl.pieceAt) return;
+        const sp = flipAt({ u: pr.at.u, w: pr.at.w }) as { u: number; w: number };
+        const piece = pl.pieceAt(sp.u, sp.w);
+        if (piece) framingSink.push({ kind: 'low-prop', t, prop: i, piece });
+      });
+    }
     const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'ots' || size === 'medium') && people[focusSubjectIdx];
     const focus = spec.focus ?? (soft ? ('u' in whereOf(people[focusSubjectIdx]!, focusSubjectIdx) ? (whereOf(people[focusSubjectIdx]!, focusSubjectIdx) as { w: number }).w : undefined) : undefined);
     // a medium shot keeps its room readable: half the frames of an episode were a face on a smear (audit 2026-11-16)
@@ -747,7 +794,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               const g = pl.ground.project(sp.u, sp.w);
               at = { x: g.x, y: g.y - BODY * g.scale * (pr.at.v ?? 0) * 0.9 };
             } else throw new Error(`props[${i}] needs where it stands: { on: '<piece id>', node } to put it on a piece of the place, or { at: { u, w }, node } for a floor point. Got ${JSON.stringify(Object.keys(pr))}`);
-            return <g key={`prop-${i}`} transform={`translate(${at.x + (pr.dx ?? 0)} ${at.y + (pr.dy ?? 0)}) scale(${pr.scale ?? 1})`}>{pr.node}</g>;
+            // flat: the drawing is laid on the surface (seen at a low angle it is a third as tall, leaning with the view)
+            // instead of standing like a poster on the front of the desk (4v9iyhecgpu-1, S4 and S18)
+            const lay = pr.flat ? ` skewX(${viewNow === '3/4-left' ? 14 : viewNow === '3/4-right' ? -14 : 0}) scale(1 0.34)` : '';
+            return <g key={`prop-${i}`} transform={`translate(${at.x + (pr.dx ?? 0)} ${at.y + (pr.dy ?? 0)}) scale(${pr.scale ?? 1})${lay}`}>{pr.node}</g>;
           })}
           {extraNode ? <g>{extraNode}</g> : null}
         </Stage>

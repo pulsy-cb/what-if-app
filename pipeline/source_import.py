@@ -166,6 +166,17 @@ def main(argv: List[str]) -> int:
             nv.save_transcript(str(video_id), lang="en")
             transcript_state = "transcribed"
         except NouveauError as e:
+            if "404" in str(e):
+                # a video id is case-sensitive: `4v9iyhecgpu` for `4v9iYHecGpU` came back as "no French proposal"
+                # and sent the user looking at the wrong problem (2026-11-16)
+                proj.result(
+                    ok=False,
+                    error=(
+                        f"video id {video_id!r} is not on :8005 ({e}). Ids are case-sensitive (4v9iYHecGpU is not "
+                        "4v9iyhecgpu): do NOT retry, ask the user for the exact id as :8005 shows it."
+                    ),
+                )
+                return 4
             proj.result(
                 ok=False,
                 error=(

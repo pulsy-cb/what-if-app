@@ -76,6 +76,136 @@ def resolve_cue(cue: Any, words: list[dict], fps: int, segments: list[dict], sho
     return 0
 
 
+PLACE_ALIASES = {"study": "office", "school": "classroom", "class": "classroom", "road": "street", "yard": "garden"}
+QUIET_FOLEY = {"pop", "paper_land", "clink", "counter_tick", "gasp", "sparkle", "step"}
+GLASSY = {"glass", "bottle", "mug", "cup", "keys", "key", "plate", "tray", "bucket", "ring", "pills"}
+VFX_CLIP = {"shock": ("gasp", 0.22), "focus": ("sparkle", 0.18), "question": ("pop", 0.14), "anger": ("crack", 0.16), "idea": ("ding", 0.16)}
+
+
+def real_places(ep_dir: Path) -> dict[str, str]:
+    """Where each shot really is: the place its code uses, not the guess of the shot list.
+
+    The shot list wrote `study` on shots that the code set in the classroom, and the ambience followed the guess."""
+    try:
+        shared = (ep_dir / "shared.tsx").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    recipes = {m[1]: PLACE_ALIASES.get(m[2], m[2]) for m in re.finditer(r"export const (\w+)\s*=\s*place\(\s*'([\w-]+)'", shared)}
+    out: dict[str, str] = {}
+    for f in sorted((ep_dir / "shots").glob("S*.tsx")):
+        m = re.search(r"\bplace:\s*(\w+)", f.read_text(encoding="utf-8"))
+        if m and m[1] in recipes:
+            out[f.stem] = recipes[m[1]]
+    return out
+
+
+def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
+    """The sounds the picture asks for, read in the code of each shot and set on the frame of the effect.
+
+    The sound used to be decided from the shot list, before any shot was written: 701 shots of 891 had no sound at all
+    while their code held 171 vfx, 89 tags, 82 walks and 22 bursts (26 episodes, 2026-11-16)."""
+    out: dict[str, list[list]] = {}
+    for f in sorted((ep_dir / "shots").glob("S*.tsx")):
+        sid = f.stem
+        try:
+            code = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        n = max(8, int(lens.get(sid, 60)))
+        evs: list[list] = []
+
+        def add(at: int, clip: str, gain: float, align: str = "onset") -> None:
+            at = max(0, min(n - 3, int(at)))
+            if not any(e[1] == clip and abs(int(str(e[0]).split("+")[1]) - at) < 6 for e in evs):
+                evs.append([f"{sid}+{at}", clip, gain] + ([align] if align != "onset" else []))
+
+        m = re.search(r"\bburst:\s*\{[^{}]*?\bat:\s*(\d+)", code)
+        if m:
+            add(int(m[1]), "title_boom", 0.34, "peak")
+        m = re.search(r"\btag:\s*\{([^{}]*)\}", code)
+        if m:
+            at = re.search(r"\bat:\s*(\d+)", m[1])
+            add(int(at[1]) if at else 4, "counter_tick", 0.18)
+        m = re.search(r"\bstamp:\s*\{([^{}]*)\}", code)
+        if m:
+            at = re.search(r"\bat:\s*(\d+)", m[1])
+            add(int(at[1]) if at else 2, "pop", 0.16)
+        for obj in re.findall(r"\{[^{}]*\}", code):
+            at = re.search(r"\bat:\s*(\d+)", obj)
+            kind = re.search(r"\bkind:\s*'([\w-]+)'", obj)
+            if at and kind and kind[1] in VFX_CLIP:
+                add(int(at[1]), VFX_CLIP[kind[1]][0], VFX_CLIP[kind[1]][1])
+            if at and re.search(r"\bact:\s*'(slam|bang)'", obj):
+                add(int(at[1]) + 6, "land", 0.22)
+        if re.search(r"^\s*\{?[^\n]*\bact:\s*'(slam|bang)'", code, re.M) and not any(e[1] == "land" for e in evs):
+            add(6, "land", 0.22)
+        what = re.search(r"\bhold:\s*(?:\{\s*what:\s*)?'([\w-]+)'", code)
+        glassy = bool(what and what[1] in GLASSY)
+        m = re.search(r"\brelease:\s*\{([^{}]*)\}", code)
+        if m:
+            at = re.search(r"\bat:\s*(\d+)", m[1])
+            thrown = re.search(r"how:\s*'(throw|drop)'", m[1])
+            dur = re.search(r"\bdur:\s*(\d+)", m[1])
+            land_at = (int(at[1]) if at else 20) + (int(dur[1]) if dur else 14 if thrown else 0)
+            add(land_at, "shatter" if glassy and thrown else "clink" if glassy else "paper_land", 0.24)
+        if re.search(r"\bwalkTo:", code):
+            for k in (3, 13, 23):
+                if k < n - 6:
+                    add(k, "step", 0.16)
+        if "phoneShot(" in code:
+            add(6, "pop", 0.22)
+        if "tabletopShot(" in code:
+            add(3, "clink" if re.search(r"kind:\s*'(mug|glass|keys|ring|pills)'", code) else "paper_land", 0.22)
+        if evs:
+            out[sid] = sorted(evs, key=lambda e: int(str(e[0]).split("+")[1]))[:4]
+    return out
+
+
+def auto_sound(ep: dict, tl: dict, ep_dir: Path, shots: list[dict], title_idx: int) -> dict:
+    """The studio's own sound: ambience by the real place of each shot, then the sounds the code of the shots asks for."""
+    places = real_places(ep_dir)
+    located = [{**s, "set": places.get(str(s.get("id")), s.get("set", ""))} for s in shots]
+    snd = build_default_sound(located, title_idx, ep.get("edit") or [], ep.get("fx") or [])
+    lens = {str(s.get("shot")): int(s.get("b", 0)) - int(s.get("a", 0)) for s in (tl.get("segments") or []) if s.get("shot")}
+    for s in tl.get("shots") or []:
+        lens.setdefault(str(s.get("id")), int(s.get("len") or 60))
+    from_code = code_events(ep_dir, lens)
+    kept = [e for e in snd["events"] if not (str(e[0]).split("+")[0] in from_code and e[1] in QUIET_FOLEY and len(e) < 5)]
+    added = [e for sid in sorted(from_code, key=lambda k: [str(s.get("id")) for s in shots].index(k) if k in [str(s.get("id")) for s in shots] else 1e9) for e in from_code[sid]]
+    snd["events"] = kept + added
+    for e in added:
+        if e[1] in LIBRARY_CLIPS:
+            snd["clips"][e[1]] = LIBRARY_CLIPS[e[1]]
+    return snd
+
+
+def duck_under_words(x: np.ndarray, words: list[dict], depth_db: float = -5.0) -> np.ndarray:
+    """A music bed goes down while someone speaks and comes back in the silences (0.35 s and more)."""
+    if not len(x) or not words:
+        return x
+    env = np.ones(len(x))
+    low = 10 ** (depth_db / 20.0)
+    spans: list[list[float]] = []
+    for w in words:
+        try:
+            s, e = float(w.get("s", 0)), float(w.get("e", w.get("s", 0)))
+        except (TypeError, ValueError):
+            continue
+        if spans and s - spans[-1][1] < 0.35:
+            spans[-1][1] = max(spans[-1][1], e)
+        else:
+            spans.append([s, e])
+    ramp = int(0.12 * SR)
+    for s, e in spans:
+        a, b = max(0, int(s * SR) - ramp), min(len(x), int(e * SR) + ramp)
+        if b - a <= 2 * ramp:
+            continue
+        env[a + ramp : b - ramp] = low
+        env[a : a + ramp] = np.minimum(env[a : a + ramp], np.linspace(1.0, low, ramp))
+        env[b - ramp : b] = np.minimum(env[b - ramp : b], np.linspace(low, 1.0, ramp))
+    return x * env
+
+
 def decode(path: Path) -> np.ndarray:
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"],
@@ -286,7 +416,27 @@ def main(argv: list[str]) -> int:
         -1,
     )
     default_snd = build_default_sound(shots, title_idx, ep.get("edit") or [], ep.get("fx") or []) if shots else {}
-    if not ep.get("sound") or not (ep.get("sound") or {}).get("clips"):
+    prev = ep.get("sound") or {}
+    if shots and (not prev.get("clips") or prev.get("auto") is True):
+        # the studio's sound is rebuilt at every run from the code of the shots; what the agent added in `extra` is kept
+        snd = auto_sound(ep, tl, ep_path.parent, shots, title_idx)
+        extra = [e for e in (prev.get("extra") or []) if isinstance(e, list) and len(e) >= 3]
+        if extra:
+            snd["extra"] = extra
+            snd["events"] = snd["events"] + extra
+            for e in extra:
+                snd["clips"].setdefault(str(e[1]), LIBRARY_CLIPS.get(str(e[1]), [str(e[1]), 1.0]))
+        for k, v in (prev.get("clips") or {}).items():
+            snd["clips"].setdefault(k, v)
+        if prev.get("music"):
+            snd["music"] = prev["music"]
+        if prev.get("levels"):
+            snd["levels"] = prev["levels"]
+        ep["sound"] = snd
+        save_json(ep_path, ep)
+        hits = sum(1 for e in snd["events"] if len(e) < 5)
+        print(f"[sfx] sound built from the shots: {len(snd['events']) - hits} ambience bed(s), {hits} sound(s) on the picture, {len(extra)} of yours")
+    elif not prev.get("clips"):
         ep["sound"] = default_snd
         save_json(ep_path, ep)
         print(f"[sfx] seeded default sound section in episode.json ({len(ep['sound'].get('clips', {}))} cached clips)")
@@ -332,7 +482,11 @@ def main(argv: list[str]) -> int:
                 generated_count += 1
         if p is None:
             p = find_library_clip(lib_dir, name, prompt, secs)
+            if p is not None:
+                swapped = p.name.rsplit("-", 1)[0]
+                print(f"[sfx] '{name}' is not in the library and was not generated: '{swapped}' plays in its place")
         if p is None:
+            print(f"[sfx] '{name}' has no clip at all: it stays silent")
             continue
         x = decode(p)
         m = float(np.abs(x).max()) if len(x) else 0.0
@@ -386,6 +540,7 @@ def main(argv: list[str]) -> int:
             end = min(len(music), int(cue_fn(M["until"]) / fps * SR)) if M.get("until") else len(music)
             if end > m0:
                 span = tile_crossfade(m, end - m0)
+                span = duck_under_words(np.concatenate([np.zeros(m0), span]), words)[m0:]
                 fo = min(len(span), int(0.08 * SR))
                 if fo > 0:
                     span[-fo:] *= np.linspace(1.0, 0.0, fo)
@@ -393,7 +548,13 @@ def main(argv: list[str]) -> int:
 
     pub = studio / "public" / slug
     pub.mkdir(parents=True, exist_ok=True)
-    write_wav(pub / "sfx.wav", sfx, 0.98)
+    # One scale for every episode: a gain of 0.52 (the title impact) is full scale. The whole track used to be brought to
+    # its own peak, so the same room tone came out 3.7 dB louder in an episode without a title impact.
+    sfx = sfx * (0.98 / 0.52)
+    peak = float(np.abs(sfx).max()) if len(sfx) else 0.0
+    if peak > 0.98:
+        sfx = sfx * (0.98 / peak)
+    write_wav(pub / "sfx.wav", sfx)
     music_wav_path = pub / "music.wav"
     if has_music:
         write_wav(music_wav_path, music, 0.98)
@@ -413,8 +574,10 @@ def main(argv: list[str]) -> int:
     if has_music and not np.isfinite(m_lufs):
         m_lufs = -22.0
 
-    # Keep the voice track dominant (>= sfx & music) even when SFX hits are sparse across a long narrative
-    sfx_gain_db = min(-1.5, v_lufs + float(L["sfx_lu"]) - s_lufs)
+    # The sounds follow the voice: 1.5 dB under a voice at -18 LUFS, and as much lower as the voice is quieter. The old
+    # rule compared the voice with the mean level of a nearly empty track, always hit its ceiling and gave 0.6731
+    # whatever the voice (10 runs of 12); `levels.sfx_db` shifts it.
+    sfx_gain_db = min(-0.5, -1.5 + max(-6.0, min(3.0, v_lufs + 18.0)) + float(L.get("sfx_db", 0.0)))
     gain_db: dict[str, float] = {"voice": 0.0, "sfx": sfx_gain_db}
     if has_music:
         gain_db["music"] = min(-6.0, v_lufs + float(L["music_lu"]) - m_lufs)

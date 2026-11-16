@@ -335,6 +335,34 @@ test('context compaction: compacts old write_file payloads, drops orphan tool me
     );
     assert.equal(parsedFail.pass, false);
     assert.equal(parsedFail.issues.length, 1);
+    // one meaning for a height: reach reads v like props.at and release.to (0 floor … 1 head)
+    {
+      const shotSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+      assert.match(shotSrc, /g\.y - BODY \* g\.scale \* \(to\.v \?\? 0\.2\) \* 0\.9 \}, side: r\.side/, 'reach: v is a height above the floor');
+      assert.doesNotMatch(shotSrc, /1 - \(to\.v/, 'reach no longer reads v from the ceiling');
+      const guideSrc = fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8');
+      assert.match(guideSrc, /reads the same everywhere/);
+    }
+    // a reviewer that quotes a word of the script without escaping it, or whose answer is cut, is still read
+    const quoted = parseReviewJson(
+      '```json\n{\n "pass": false,\n "summary": "Fidèle au script",\n "issues": [\n  {"shot": "S7", "severity": "error", "problem": "Elijah dit "pouces" mais il est hors cadre", "fix": "Recadrer sur Elijah"},\n  {"shot": "S15", "severity": "warn", "problem": "Cadre vide en bas, personnage minuscule", "fix": "Resserrer"}\n ]\n}\n```',
+      'm',
+      'ep',
+    );
+    assert.equal(quoted.ok, true, 'unescaped quotes must not lose the review');
+    assert.equal(quoted.salvaged, true);
+    assert.equal(quoted.pass, false);
+    assert.deepEqual(quoted.issues.map((i) => `${i.shot}:${i.severity}`), ['S7:error', 'S15:warn']);
+    assert.match(quoted.issues[0].problem, /"pouces" mais il est hors cadre$/);
+    assert.equal(quoted.issues[0].fix, 'Recadrer sur Elijah');
+    const cut = parseReviewJson('```json\n{"pass": false, "summary": "Deux défauts", "issues": [{"shot": "S2", "severity": "error", "problem": "Le héros est de dos en gros plan", "fix": "Tourner le visage"}, {"shot": "S9", "severity": "err', 'm', 'ep');
+    assert.equal(cut.ok, true, 'a cut answer keeps the issues that are complete');
+    assert.equal(cut.pass, false);
+    assert.deepEqual(cut.issues.map((i) => i.shot), ['S2']);
+    const cutEarly = parseReviewJson('```json\n{"pass": false, "summary": "L\'épisode est globalement fidèle au script (casting conforme', 'm', 'ep');
+    assert.equal(cutEarly.ok, false, 'a refusal with no readable issue is not a pass: the reviewer is asked again');
+    assert.match(cutEarly.raw, /globalement fidèle/, 'the unreadable answer is kept');
+    assert.equal(parseReviewJson('je ne peux pas répondre', 'm', 'ep').ok, false);
     const fb = formatReviewFeedback(parsedFail, 'ep');
     assert.match(fb, /CORRECTIONS REQUISES/);
     assert.match(fb, /args: \["S2"\]/);
@@ -4386,6 +4414,7 @@ test('CSRF Origin: the configured public tunnel origin passes, while an unlisted
   }
 });
 
+
 test('security hardening (C1-C4): malformed URL 400, CSRF Origin 403, .env block, Range 416/206, C2 path normalization, symlink escape, shell policy, SSR VM sandbox & API key origin guard', async () => {
   const http = await import('node:http');
   const { dir, app } = tmpApp();
@@ -5821,4 +5850,122 @@ test('décors, hands, gaze and things in motion: four places, soft medium blur, 
   // --- the agent is told
   const guide = fs.readFileSync('src/orchestrator/director-guide.ts', 'utf8');
   for (const w of ["bathroom gym bar car blank", "act: 'hug', with: 1", "brows: 'up' | 'sad' | 'angry' | 'flat'", "how: 'slide'", "into: true", "pour: { at: 30", "one shot out of four at most"]) assert.ok(guide.includes(w), `guide: ${w}`);
+});
+
+test('framing checks after the first launch on the 16 Nov engine: the subject in the frame and not hidden, a low prop under a piece, no cast in a shot', async () => {
+  const { framingErrors, castErrors } = await import('../dist/tools/whatif.js');
+  const errs = framingErrors({
+    S7: [{ kind: 'subject', on: 0, visible: 0, covered: 0, by: -1, handCam: true }],
+    S10: [{ kind: 'subject', on: 0, visible: 0.6, covered: 0, by: -1, handCam: false }],
+    S11: [{ kind: 'subject', on: 1, visible: 1, covered: 0.48, by: 0 }],
+    S5: [{ kind: 'subject', on: 0, visible: 1, covered: 0, by: -1 }, { kind: 'low-prop', prop: 0, piece: 'd2' }],
+    S2: [{ kind: 'subject', on: 0, visible: 0.71, covered: 0.3, by: 1 }],
+  });
+  assert.equal(errs.length, 4, errs.join('\n'));
+  assert.match(errs.find((e) => e.startsWith('S7:')), /100 % of the head outside the frame.*written by hand.*on: 0/);
+  assert.match(errs.find((e) => e.startsWith('S10:')), /40 % of the head outside/);
+  assert.doesNotMatch(errs.find((e) => e.startsWith('S10:')), /written by hand/);
+  assert.match(errs.find((e) => e.startsWith('S11:')), /people\[0\] stands nearer the camera and hides the head of people\[1\]/);
+  assert.match(errs.find((e) => e.startsWith('S5:')), /on: 'd2'/);
+  assert.ok(!errs.some((e) => e.startsWith('S2:')), 'a head 71 % in the frame and 30 % covered passes');
+  assert.deepEqual(framingErrors(undefined), []);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-cast-'));
+  fs.mkdirSync(path.join(dir, 'shots'));
+  fs.writeFileSync(path.join(dir, 'shots', 'S1.tsx'), "export const S1 = shot({ people: [{ who: A, face: 'explain' as never }] });");
+  fs.writeFileSync(path.join(dir, 'shots', 'S2.tsx'), "export const S2 = shot({ people: [{ who: A, act: 'slam', pose: x as never }] });");
+  const casts = castErrors(dir, ['S1', 'S2', 'S3']);
+  assert.equal(casts.length, 1);
+  assert.match(casts[0], /^S1: remove "as never" after face: 'explain'/);
+
+  // lot C: a curl that leaves the eye free in profile, a thing laid flat, a narrower wide shot alone in a tall frame
+  const viewsSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/views.tsx'), 'utf8');
+  assert.match(viewsSrc, /\[-200, -175, -150, -125, -100, -75, -52\]\.map/, 'curls in profile stop above the brow');
+  const shotC = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  assert.match(shotC, /const lay = pr\.flat \? ` skewX\(/);
+  assert.match(shotC, /solo && PORTRAIT && size === 'wide' \? c\.width \* 0\.78 : c\.width/);
+  assert.match(shotC, /people\.length === 1 && !duo\) : c;/);
+  assert.match(fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8'), /flat: true/);
+
+  // lot D: a place under another name, an id that is not on :8005
+  const roomsSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/rooms.tsx'), 'utf8');
+  assert.match(roomsSrc, /name = PLACE_ALIASES\[name\] \?\? name;/);
+  for (const target of [...roomsSrc.match(/const PLACE_ALIASES[^\n]*/)[0].matchAll(/: '([\w-]+)'/g)].map((m) => m[1])) {
+    assert.match(roomsSrc, new RegExp(`\\n  '?${target}'?: \\{`), `alias target ${target} is a real place`);
+  }
+  assert.match(fs.readFileSync(path.resolve('pipeline/source_import.py'), 'utf8'), /Ids are case-sensitive/);
+
+  // the engine measures, at render time and only when the checker listens
+  const shotSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  assert.match(shotSrc, /globalThis as \{ __whatifFraming\?: unknown\[\] \}\)\.__whatifFraming/);
+  assert.match(shotSrc, /framingSink\.push\(\{ kind: 'subject'/);
+  assert.match(shotSrc, /framingSink\.push\(\{ kind: 'low-prop'/);
+  assert.match(fs.readFileSync(path.resolve('engine-overlay/files/src/engine/rooms.tsx'), 'utf8'), /pieceAt: \(u, w\) =>/);
+  const auditSrc = fs.readFileSync(path.resolve('src/tools/whatif.ts'), 'utf8');
+  assert.match(auditSrc, /if \(t === key\) sandboxCtx\.__whatifFraming = \[\];/);
+  assert.match(auditSrc, /errors\.push\(\.\.\.framingErrors\(parsed\?\.framing\)\);/);
+  assert.match(auditSrc, /errors\.push\(\.\.\.castErrors\(src, wanted\)\);/);
+});
+
+test('sound after the audio audit: murmur stops with the classroom, sounds read in the code of the shots, one scale for levels, music ducked under words', NEEDS_NUMPY, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-snd-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'ep');
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.writeFileSync(path.join(epDir, 'shared.tsx'), "export const SALLE = place('classroom', {});\nexport const ETUDE = place('study', {});\n");
+    const S = {
+      S1: "shot({ place: SALLE, title: { lines: ['A'] }, people: [{ who: A, walkTo: { u: 0.4, w: 0.4 } }] })",
+      S2: "shot({ place: ETUDE, tag: { text: '3 x 5', at: 30 }, people: [{ who: P, vfx: [{ at: 17, kind: 'thought' }] }] })",
+      S3: "shot({ place: SALLE, burst: { at: 24 }, people: [{ who: P, vfx: [{ kind: 'shock', at: 20, dur: 9 }], beats: [{ at: 9, act: 'slam' }] }] })",
+      S4: "shot({ place: ETUDE, people: [{ who: P, hold: { what: 'glass', release: { at: 12, how: 'throw', dur: 10 } } }] })",
+    };
+    for (const [id, code] of Object.entries(S)) fs.writeFileSync(path.join(epDir, 'shots', `${id}.tsx`), `export const ${id} = ${code};`);
+    const out = execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+import sys, json, pathlib
+import numpy as np
+sys.path.insert(0, "pipeline")
+import sfx_run as sfx
+from shotlist import build_default_sound
+ep_dir = pathlib.Path(sys.argv[1])
+# the shot list guessed wrong on purpose: S2 "classroom", S3 "study"
+shots = [{"id": "S1", "set": "classroom", "accent": "hook-title"}, {"id": "S2", "set": "classroom"}, {"id": "S3", "set": "study"}, {"id": "S4", "set": "study"}]
+assert sfx.real_places(ep_dir) == {"S1": "classroom", "S2": "office", "S3": "classroom", "S4": "office"}, sfx.real_places(ep_dir)
+tl = {"segments": [{"shot": s["id"], "a": i * 60, "b": (i + 1) * 60} for i, s in enumerate(shots)]}
+snd = sfx.auto_sound({}, tl, ep_dir, shots, 0)
+ev = snd["events"]
+murmur = [e for e in ev if e[1] == "class_murmur"]
+assert [(e[0], e[4]) for e in murmur] == [("S1", "S2"), ("S3", "S4")], murmur
+assert ["S3+24", "title_boom", 0.34, "peak"] in ev, ev
+assert ["S3+20", "gasp", 0.22] in ev and ["S3+15", "land", 0.22] in ev, ev
+assert ["S2+30", "counter_tick", 0.18] in ev, ev
+assert ["S4+22", "shatter", 0.24] in ev, ev
+assert [e[0] for e in ev if e[1] == "step"] == ["S1+3", "S1+13", "S1+23"], ev
+assert snd["auto"] is True and "shatter" in snd["clips"] and "land" in snd["clips"]
+# a long room: the old murmur ran to the end of the ambience group
+old_style = build_default_sound([{"id": "S1", "set": "classroom"}, {"id": "S2", "set": "office"}, {"id": "S3", "set": "office"}], -1)
+assert [e[4] for e in old_style["events"] if e[1] == "class_murmur"] == ["S2"], old_style["events"]
+# music goes down under the words and comes back in a silence
+x = sfx.duck_under_words(np.ones(sfx.SR * 4), [{"w": "a", "s": 0.5, "e": 0.9}, {"w": "b", "s": 1.0, "e": 1.6}, {"w": "c", "s": 3.0, "e": 3.5}])
+assert abs(x[int(1.0 * sfx.SR)] - 10 ** (-5 / 20)) < 1e-6 and x[int(2.3 * sfx.SR)] == 1.0 and x[int(3.2 * sfx.SR)] < 0.6, (x[int(1.0 * sfx.SR)], x[int(2.3 * sfx.SR)])
+print("PY_OK")
+`,
+        epDir,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.match(out, /PY_OK/);
+    const sfxSrc = fs.readFileSync(path.resolve('pipeline/sfx_run.py'), 'utf8');
+    assert.match(sfxSrc, /sfx = sfx \* \(0\.98 \/ 0\.52\)/, 'one scale for every episode');
+    assert.doesNotMatch(sfxSrc, /write_wav\(pub \/ "sfx\.wav", sfx, 0\.98\)/, 'the track is no longer brought to its own peak');
+    assert.match(sfxSrc, /sfx_gain_db = min\(-0\.5, -1\.5 \+ max\(-6\.0, min\(3\.0, v_lufs \+ 18\.0\)\)/);
+    assert.match(sfxSrc, /plays in its place/);
+    assert.match(fs.readFileSync(path.resolve('pipeline/master_run.py'), 'utf8'), /trim_db = min\(I_TARGET - lufs, -1\.0 - true_peak\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

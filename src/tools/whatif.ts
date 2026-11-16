@@ -558,6 +558,66 @@ function characterInspector(source: string): (id: string) => 'yes' | 'no' | 'unk
  * - local clock `t` is used in FRAMES (0..len), never decimal seconds (t - 0.8) and never past `len`,
  * - camera zoom in camT stays within 0.8..3.2, and elements are centred around x=960 (not x=640).
  */
+type FramingNote =
+  | { kind: 'subject'; on: number; visible: number; covered: number; by: number; handCam?: boolean }
+  | { kind: 'low-prop'; prop: number; piece: string };
+
+/**
+ * What the engine saw at the key frame of each shot, turned into refusals. The first launch on the 16 Nov engine shipped
+ * four shots out of eighteen whose subject was outside the frame or behind another head, and three with a card meant for
+ * a desk lying on the floor (4v9iyhecgpu-1): the code named the right people and things, so nothing refused them.
+ */
+export function framingErrors(framing: unknown): string[] {
+  const out: string[] = [];
+  if (!framing || typeof framing !== 'object') return out;
+  for (const [id, notes] of Object.entries(framing as Record<string, FramingNote[]>)) {
+    for (const n of Array.isArray(notes) ? notes : []) {
+      if (n?.kind === 'subject') {
+        if (n.visible < SUBJECT_MIN_VISIBLE) {
+          out.push(
+            `${id}: people[${n.on}], the person this shot is on, has ${Math.round((1 - n.visible) * 100)} % of the head outside the frame at the key frame` +
+              (n.handCam
+                ? `. The camera is written by hand (cam: { x, y, zoom }) and does not follow anyone: use cam: 'close' | 'medium' | 'wide' with on: ${n.on}.`
+                : `. Bring them in: another at / walkTo, a wider cam, or put the shot on the person who is in the picture (on: <index>).`),
+          );
+        } else if (n.covered > SUBJECT_MAX_COVERED) {
+          out.push(
+            `${id}: people[${n.by}] stands nearer the camera and hides the head of people[${n.on}], the person this shot is on. Give them different u (0.25 apart or more), or cam: 'ots' if a shoulder in front is what you want.`,
+          );
+        }
+      } else if (n?.kind === 'low-prop') {
+        out.push(
+          `${id}: props[${n.prop}] is an at point on the floor (v under 0.15) inside the footprint of "${n.piece}": it is drawn under it, on the ground. On the piece: props: [{ on: '${n.piece}', node }]. Really on the floor: move it clear of the piece.`,
+        );
+      }
+    }
+  }
+  return out;
+}
+// Measured on 717 framed subjects of 57 projects (2026-11-16): 696 are whole in the frame, the auto camera never goes
+// under 0.6, and no one is more than a quarter covered outside the four shots these limits refuse.
+const SUBJECT_MIN_VISIBLE = 0.7;
+const SUBJECT_MAX_COVERED = 0.45;
+
+/**
+ * A cast that silences the type checker in a shot. `face: 'explain' as never` hid a face that does not exist, and the
+ * six other casts of that episode sat on names that were valid all along (4v9iyhecgpu-1, 2026-11-16).
+ */
+export function castErrors(src: string, wanted: string[]): string[] {
+  const out: string[] = [];
+  for (const id of wanted) {
+    let code = '';
+    try {
+      code = fs.readFileSync(path.join(src, 'shots', `${id}.tsx`), 'utf8');
+    } catch {
+      continue;
+    }
+    const hit = /(\b(?:act|face|stance|cam|view|move|hold|kind|how)\s*:\s*'[^']*')\s+as\s+(?:never|any)\b/.exec(code);
+    if (hit) out.push(`${id}: remove "as never" after ${hit[1]}. A name the engine knows needs no cast; one it does not know is refused here with the list of valid names, which is how you find the right one.`);
+  }
+  return out;
+}
+
 export function shotsAudit(
   projectRoot: string,
   slug: string,
@@ -608,6 +668,7 @@ export function shotsAudit(
     return characterInspector(perFile)(id);
   };
   const errors: string[] = [];
+  errors.push(...castErrors(src, wanted));
   let heroShots = 0;
   const stillShots: string[] = [];
   let actingShots = 0;
@@ -969,6 +1030,7 @@ const loadMod = (rel) => {
   }
   return mod.exports;
 };
+const framing = {};
 let exportedShots = null;
 try {
   exportedShots = loadMod('src/episodes/' + payload.slug + '/shots.tsx');
@@ -990,9 +1052,13 @@ for (const sh of payload.tlShots) {
       sandboxCtx.__React = React;
       sandboxCtx.__Comp = Comp;
       sandboxCtx.__props = { t, len, f: t };
+      // at the key frame the engine reports where the subject's head falls in the frame (shot.tsx, __whatifFraming)
+      if (t === key) sandboxCtx.__whatifFraming = [];
       try {
         vm.runInContext('__render(__React.createElement(__Comp, __props))', sandboxCtx, { timeout: 3000 });
+        if (t === key && Array.isArray(sandboxCtx.__whatifFraming) && sandboxCtx.__whatifFraming.length) framing[id] = sandboxCtx.__whatifFraming.slice(0, 8);
       } finally {
+        sandboxCtx.__whatifFraming = undefined;
         [sandboxCtx.__render, sandboxCtx.__React, sandboxCtx.__Comp, sandboxCtx.__props] = prevComp;
       }
     } catch (err) {
@@ -1001,7 +1067,7 @@ for (const sh of payload.tlShots) {
     }
   }
 }
-process.stdout.write(JSON.stringify({ errors }));
+process.stdout.write(JSON.stringify({ errors, framing }));
 `;
       const childRes = spawnSync(process.execPath, ['-e', childHarness], {
         cwd: projectRoot,
@@ -1020,6 +1086,7 @@ process.stdout.write(JSON.stringify({ errors }));
       } else if (childRes.status === 0 && childRes.stdout) {
         const parsed = JSON.parse(childRes.stdout.trim());
         if (Array.isArray(parsed?.errors)) errors.push(...parsed.errors);
+        errors.push(...framingErrors(parsed?.framing));
       }
     }
   } catch {

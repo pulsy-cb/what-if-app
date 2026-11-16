@@ -741,10 +741,20 @@ def build_default_sound(
         end_cue = shots[j]["id"] if j < len(shots) else "end"
         used_clips.add(amb)
         events.append([start_cue, amb, 0.13, "onset", end_cue])
-        if any(str(shots[m].get("set", "")) == "classroom" for m in range(i, j)):
-            c_start = next(shots[m]["id"] for m in range(i, j) if str(shots[m].get("set", "")) == "classroom")
+        # The murmur of a class stops when the story leaves the classroom. It used to run to the end of the ambience
+        # group, and a classroom and an office share one: a teacher alone at night in his office kept the pupils'
+        # whispers (8 of 16 murmurs in 26 episodes, 2026-11-16).
+        m = i
+        while m < j:
+            if str(shots[m].get("set", "")) != "classroom":
+                m += 1
+                continue
+            n = m
+            while n < j and str(shots[n].get("set", "")) == "classroom":
+                n += 1
             used_clips.add("class_murmur")
-            events.append([c_start, "class_murmur", 0.11, "onset", end_cue])
+            events.append([shots[m]["id"], "class_murmur", 0.11, "onset", shots[n]["id"] if n < len(shots) else "end"])
+            m = n
         i = j
 
     look_by_shot = {str(e.get("shot")): str(e.get("look") or "") for e in (edit or []) if isinstance(e, dict)}
@@ -812,6 +822,9 @@ def build_default_sound(
         "events": events,
         "repeats": [],
         "levels": {"sfx_lu": -4.5, "music_lu": -11.0},
+        # built by the studio: sfx_run.py rebuilds it from the code of the shots at every run. Your own sounds go in
+        # "extra": [["S4+12", "clink", 0.24]], which is kept.
+        "auto": True,
     }
 
 

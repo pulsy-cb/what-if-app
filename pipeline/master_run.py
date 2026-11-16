@@ -172,6 +172,29 @@ def main(argv: list[str]) -> int:
 
     # Single audio-only (`-vn`) verification pass for both LUFS and True Peak (replaces 2 full video decodes)
     lufs, true_peak = measure_ebur128_audio_only(final)
+    # Catch-up: the second pass lands low more often than not (41 finals: median -14.5 LUFS, 7 under -14.8). When the
+    # peak leaves room, a plain gain brings the track to the target; nothing else is touched.
+    if lufs > -70.0 and abs(lufs - I_TARGET) > 0.4:
+        trim_db = min(I_TARGET - lufs, -1.0 - true_peak)
+        if abs(trim_db) >= 0.2:
+            tmp_trim = final.with_name(f".{slug}-final.trim.mp4")
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-v", "error", "-i", str(final),
+                        "-c:v", "copy", "-af", f"volume={trim_db:.2f}dB", "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
+                        "-movflags", "+faststart", str(tmp_trim),
+                    ],
+                    check=True,
+                )
+                os.replace(tmp_trim, final)
+                lufs, true_peak = measure_ebur128_audio_only(final)
+                print(f"level catch-up: {trim_db:+.2f} dB")
+            except subprocess.CalledProcessError:
+                pass
+            finally:
+                if tmp_trim.exists():
+                    tmp_trim.unlink()
     dur = probe_duration(final)
     tl = load_json(ep_dir / "timeline.json", {}) or {}
     costs = load_json(od / "costs.json", []) or []

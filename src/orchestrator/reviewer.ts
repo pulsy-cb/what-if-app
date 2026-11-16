@@ -43,6 +43,10 @@ export type ReviewReport = {
   defectsFile?: string;
   /** how many reviews in a row refused each shot */
   strikes?: Record<string, number>;
+  /** the answer was not valid JSON and its fields were read one by one (unescaped quotes, cut answer) */
+  salvaged?: boolean;
+  /** the answer as received, kept when nothing could be read from it */
+  raw?: string;
   /** shots refused three times in a row: the review stops there instead of asking again */
   gaveUpOn?: string[];
   /** a closed review the user came back to: the next board is looked at again, on the shots that changed */
@@ -335,6 +339,53 @@ export function timingMetrics(timeline: any): string {
   return `durée des plans : médiane ${median.toFixed(1)} s, la plus longue ${longest.s.toFixed(1)} s (${longest.id}) · ${over.length} plan(s) de plus de 6 s${over.length ? ` (${over.slice(0, 8).join(', ')})` : ''}`;
 }
 
+/**
+ * Reads a review whose JSON does not parse, field by field. A reviewer that quotes a word of the script inside a text
+ * ("il dit "pouces" trop tôt") or whose answer is cut by the output cap gives invalid JSON; the first real launch on
+ * the 16 Nov engine lost a whole refused review that way and the video shipped unreviewed. Each value runs from its
+ * key to the next known key, so quotes inside a text no longer matter.
+ */
+export function salvageReview(text: string): { pass?: boolean; summary?: string; issues: ReviewIssue[] } | null {
+  const KEY = /"(pass|summary|issues|shot|severity|problem|fix)"\s*:/g;
+  const marks: { key: string; start: number; end: number }[] = [];
+  for (let m = KEY.exec(text); m; m = KEY.exec(text)) marks.push({ key: m[1]!, start: m.index, end: m.index + m[0].length });
+  if (!marks.length) return null;
+  const valueOf = (i: number): string => {
+    let v = text.slice(marks[i]!.end, marks[i + 1]?.start ?? text.length).trim();
+    v = v.replace(/```\s*$/, '').replace(/[\s,{}[\]]+$/, '');
+    if (v.startsWith('"')) v = v.slice(1);
+    if (v.endsWith('"') && !v.endsWith('\\"')) v = v.slice(0, -1);
+    return v.replace(/\\n/g, ' ').replace(/\\"/g, '"').replace(/\s+/g, ' ').trim();
+  };
+  let pass: boolean | undefined;
+  let summary: string | undefined;
+  const issues: ReviewIssue[] = [];
+  let cur: Partial<ReviewIssue> | null = null;
+  const flush = () => {
+    if (cur && ((cur.problem ?? '').length >= 12 || (cur.fix ?? '').length >= 12))
+      issues.push({ shot: (cur.shot || 'GLOBAL').trim(), severity: cur.severity ?? 'warn', problem: cur.problem ?? '', fix: cur.fix ?? '' });
+    cur = null;
+  };
+  marks.forEach((mk, i) => {
+    const v = valueOf(i);
+    if (mk.key === 'pass') pass = /^true\b/i.test(v) ? true : /^false\b/i.test(v) ? false : pass;
+    else if (mk.key === 'summary') summary = v;
+    else if (mk.key === 'issues') flush();
+    else {
+      const k = mk.key as 'shot' | 'severity' | 'problem' | 'fix';
+      if (!cur || cur[k] !== undefined) {
+        flush();
+        cur = {};
+      }
+      if (k === 'severity') cur.severity = v.toLowerCase().startsWith('error') ? 'error' : 'warn';
+      else cur[k] = v;
+    }
+  });
+  flush();
+  if (!issues.length && pass === undefined) return null;
+  return { pass, summary, issues };
+}
+
 export function parseReviewJson(raw: string, model: string, episode: string): ReviewReport {
   const cleaned = raw.trim();
   const fenceMatch = /```(?:json)?\s*([\s\S]*?)```/i.exec(cleaned);
@@ -366,6 +417,22 @@ export function parseReviewJson(raw: string, model: string, episode: string): Re
       createdAt: new Date().toISOString(),
     };
   } catch {
+    const got = salvageReview(cleaned);
+    const hasError = !!got && got.issues.some((i) => i.severity === 'error');
+    // a refusal whose blocking issue was cut off is not read as a pass: it stays unreadable, so the reviewer is asked again
+    if (got && !(got.pass === false && !hasError)) {
+      const pass = !hasError;
+      return {
+        ok: true,
+        pass,
+        model,
+        episode,
+        summary: got.summary || (pass ? 'Réalisation cohérente.' : `${got.issues.length} problème(s) détecté(s).`),
+        issues: got.issues,
+        createdAt: new Date().toISOString(),
+        salvaged: true,
+      };
+    }
     return {
       ok: false,
       pass: true,
@@ -374,6 +441,7 @@ export function parseReviewJson(raw: string, model: string, episode: string): Re
       summary: `Réponse du reviewer non-JSON ignorée (${cleaned.slice(0, 140)})`,
       issues: [],
       createdAt: new Date().toISOString(),
+      raw: cleaned.slice(0, 20_000),
     };
   }
 }
