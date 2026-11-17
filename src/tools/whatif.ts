@@ -560,6 +560,7 @@ function characterInspector(source: string): (id: string) => 'yes' | 'no' | 'unk
  */
 type FramingNote =
   | { kind: 'subject'; on: number; visible: number; covered: number; by: number; handCam?: boolean }
+  | { kind: 'cut'; who: number; visible: number }
   | { kind: 'low-prop'; prop: number; piece: string };
 
 /**
@@ -585,6 +586,10 @@ export function framingErrors(framing: unknown): string[] {
             `${id}: people[${n.by}] stands nearer the camera and hides the head of people[${n.on}], the person this shot is on. Give them different u (0.25 apart or more), or cam: 'ots' if a shoulder in front is what you want.`,
           );
         }
+      } else if (n?.kind === 'cut') {
+        out.push(
+          `${id}: people[${n.who}] is cut by the edge of the frame at the key frame (${Math.round((1 - n.visible) * 100)} % of the head is out). Bring them in (a u nearer the subject, a wider cam), or take them out of this shot; a shoulder in front on purpose is cam: 'ots'.`,
+        );
       } else if (n?.kind === 'low-prop') {
         out.push(
           `${id}: props[${n.prop}] is an at point on the floor (v under 0.15) inside the footprint of "${n.piece}": it is drawn under it, on the ground. On the piece: props: [{ on: '${n.piece}', node }]. Really on the floor: move it clear of the piece.`,

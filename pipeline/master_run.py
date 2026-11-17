@@ -172,29 +172,34 @@ def main(argv: list[str]) -> int:
 
     # Single audio-only (`-vn`) verification pass for both LUFS and True Peak (replaces 2 full video decodes)
     lufs, true_peak = measure_ebur128_audio_only(final)
-    # Catch-up: the second pass lands low more often than not (41 finals: median -14.5 LUFS, 7 under -14.8). When the
-    # peak leaves room, a plain gain brings the track to the target; nothing else is touched.
-    if lufs > -70.0 and abs(lufs - I_TARGET) > 0.4:
-        trim_db = min(I_TARGET - lufs, -1.0 - true_peak)
-        if abs(trim_db) >= 0.2:
-            tmp_trim = final.with_name(f".{slug}-final.trim.mp4")
-            try:
-                subprocess.run(
-                    [
-                        "ffmpeg", "-y", "-v", "error", "-i", str(final),
-                        "-c:v", "copy", "-af", f"volume={trim_db:.2f}dB", "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
-                        "-movflags", "+faststart", str(tmp_trim),
-                    ],
-                    check=True,
-                )
+    # Catch-up: the second pass lands low more often than not (41 finals: median -14.5 LUFS, 7 under -14.8), and its
+    # peak already sits at the ceiling, so a plain gain has no room. The missing gain is applied under a limiter that
+    # holds the peaks where they are; the result replaces the final only when it is nearer the target and still safe.
+    if lufs > -70.0 and abs(lufs - I_TARGET) > 0.3:
+        trim_db = max(-6.0, min(3.0, I_TARGET - lufs))
+        chain = f"volume={trim_db:.2f}dB"
+        if true_peak + trim_db > -1.0:
+            chain += ",alimiter=limit=0.84:level=false:attack=5:release=50"
+        tmp_trim = final.with_name(f".{slug}-final.trim.mp4")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error", "-i", str(final),
+                    "-c:v", "copy", "-af", chain, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
+                    "-movflags", "+faststart", str(tmp_trim),
+                ],
+                check=True,
+            )
+            new_lufs, new_peak = measure_ebur128_audio_only(tmp_trim)
+            if abs(new_lufs - I_TARGET) < abs(lufs - I_TARGET) and new_peak <= -0.9:
                 os.replace(tmp_trim, final)
-                lufs, true_peak = measure_ebur128_audio_only(final)
-                print(f"level catch-up: {trim_db:+.2f} dB")
-            except subprocess.CalledProcessError:
-                pass
-            finally:
-                if tmp_trim.exists():
-                    tmp_trim.unlink()
+                print(f"level catch-up: {trim_db:+.2f} dB ({lufs:.1f} -> {new_lufs:.1f} LUFS, peak {new_peak:.1f} dBTP)")
+                lufs, true_peak = new_lufs, new_peak
+        except subprocess.CalledProcessError:
+            pass
+        finally:
+            if tmp_trim.exists():
+                tmp_trim.unlink()
     dur = probe_duration(final)
     tl = load_json(ep_dir / "timeline.json", {}) or {}
     costs = load_json(od / "costs.json", []) or []

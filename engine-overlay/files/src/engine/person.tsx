@@ -524,7 +524,11 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
         />
       ) : null}
       {L.extra === 'curls'
-        ? [-150, -125, -100, -78, -55, -30].map((deg, k) => {
+        ? [-150, -125, -100, -78, -55, -30].map((deg0, k) => {
+            // at three-quarter the face slides towards the side it turns to, and the lowest curl of that side sat on
+            // the eye (custom-1794854548, most shots). That curl climbs towards the crown as the head turns.
+            const side = deg0 === -30 ? 1 : deg0 === -150 ? -1 : 0;
+            const deg = side && side * pose.yaw > 0 ? deg0 - side * Math.min(1, Math.abs(pose.yaw)) * 34 : deg0;
             const a = (deg * Math.PI) / 180;
             return <circle key={k} cx={Math.cos(a) * 54} cy={HEAD.y + Math.sin(a) * 54} r={24} fill={L.hair} />;
           })

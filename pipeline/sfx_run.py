@@ -149,7 +149,7 @@ def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
             land_at = (int(at[1]) if at else 20) + (int(dur[1]) if dur else 14 if thrown else 0)
             add(land_at, "shatter" if glassy and thrown else "clink" if glassy else "paper_land", 0.24)
         if re.search(r"\bwalkTo:", code):
-            for k in (3, 13, 23):
+            for k in (3, 16):
                 if k < n - 6:
                     add(k, "step", 0.16)
         if "phoneShot(" in code:
@@ -157,7 +157,11 @@ def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
         if "tabletopShot(" in code:
             add(3, "clink" if re.search(r"kind:\s*'(mug|glass|keys|ring|pills)'", code) else "paper_land", 0.22)
         if evs:
-            out[sid] = sorted(evs, key=lambda e: int(str(e[0]).split("+")[1]))[:4]
+            # A short shot carries one sound, the one that matters most; under three seconds, two. Short formats ran at
+            # 32 to 39 sounds a minute, one every 1.7 s (2026-11-17), and the ear stops telling them apart.
+            room = 1 if n < 45 else 2 if n < 90 else 4
+            when = lambda e: int(str(e[0]).split("+")[1])
+            out[sid] = sorted(sorted(evs, key=lambda e: (-float(e[2]), when(e)))[:room], key=when)
     return out
 
 

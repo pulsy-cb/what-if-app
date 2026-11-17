@@ -21,7 +21,7 @@ export { worn, animalHead, WORN_NAMES, ANIMAL_KINDS } from './worn';
 import type { HeldName, HeldOpts } from './objects';
 export { held, HELD_NAMES } from './objects';
 export type { Carry } from './stage';
-import type { BurstSpec, HookTitleSpec, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
+import type { BurstSpec, HookTitleSpec, PersonVfxKind, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
 
 // A shot described instead of drawn. `shot({ ... })` gives the component a timeline expects: the place, who is there,
 // what they do, how it is framed. The camera follows from the person it is on, in 16:9 and in 9:16. Every field has a
@@ -46,7 +46,17 @@ export type ReachTarget = number | string | { u: number; w: number; v?: number }
 /** part: where on a person the hand goes (default chest) */
 export type ReachSpec = { to: ReachTarget; side?: 'L' | 'R'; part?: 'head' | 'chest' | 'hand' };
 /** from frame `at`, this person does something else. Frames are the shot's own clock (0..len): use the word frames given for the shot. */
-export type PersonBeat = { at: number; act?: ActName | OwnActionSpec; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null };
+export type PersonBeat = {
+  at: number; act?: ActName | OwnActionSpec; face?: FaceExpr; yaw?: number; look?: number; reach?: ReachSpec | null;
+  /** from this frame the person holds this (null: empty hands). `from: '<piece id>'` picks it up there: the thing lies on
+   * the piece until this frame and the hand goes to fetch it. Two agents lost 20 minutes each writing hold and vfx in a
+   * beat, and the four shots a review gave up on were all a thing that moved without the hand (2026-11-16). */
+  hold?: PersonSpec['hold'] | ({ from?: string } & Exclude<PersonSpec['hold'], string | undefined>) | null;
+  /** a reaction accent that starts with this beat: 'shock', or { kind: 'thought', label: '?' } (`at` is the beat's) */
+  vfx?: PersonVfxKind | Omit<PersonVfxSpec, 'at'> | (Omit<PersonVfxSpec, 'at'> & { at?: number })[];
+  /** pose fields from this frame on (over `act`), until another beat gives a pose: { armR: { a: 128, b: 124 }, tilt: -2 } */
+  pose?: Record<string, unknown>;
+};
 /** from frame `at`, the camera changes: another size, another person, a reverse/side-angle cut, a zone shift, or a shake */
 export type CamBeat = { at: number; cam?: CamSpec; on?: number; shake?: number; angle?: 'low' | 'high' | 'level'; view?: PlaceView; zone?: string; cut?: boolean };
 export type PersonSpec = {
@@ -110,7 +120,7 @@ export type ShotSpec = {
   people?: PersonSpec[];
   duo?: DuoSpec;
   /** objects that sit ON a piece of the place (a cake on the table, a phone on the desk): drawn with their origin on the piece's top, y up is negative. A hand-placed translate() in `extra` floats when the camera or place changes. */
-  props?: { /** lying on the piece instead of standing on it: a sheet, a card, a phone, a plate */ flat?: boolean; on?: string; /** a floor point instead of a piece (v: height, 0 floor … 1 head) */ at?: { u: number; w: number; v?: number }; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
+  props?: { /** drawn from this frame / until this frame only (a thing that appears, or that someone takes away) */ from?: number; until?: number; /** lying on the piece instead of standing on it: a sheet, a card, a phone, a plate */ flat?: boolean; on?: string; /** a floor point instead of a piece (v: height, 0 floor … 1 head) */ at?: { u: number; w: number; v?: number }; node: React.ReactNode; dx?: number; dy?: number; scale?: number }[];
   /** your own SVG in the world BEHIND the people, on the room (a door that opens, a poster, a light): someone walking in passes in front of it */
   behind?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
   /** your own SVG in the world, in front of the room and sorted last */ extra?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
@@ -222,6 +232,14 @@ const holdOf = (h: unknown): ({ what?: string; node?: React.ReactNode; side?: 'L
   return { ...(o as object), what };
 };
 
+/** a beat that picks a thing up on a piece is a reach for that piece: the person stands within arm's length and faces it */
+const pickUpReach = (p: PersonSpec): ReachSpec | undefined => {
+  for (const b of p.beats ?? []) {
+    const from = b.hold && typeof b.hold === 'object' && !React.isValidElement(b.hold) ? (b.hold as { from?: unknown }).from : undefined;
+    if (typeof from === 'string' && from) return { to: from };
+  }
+  return undefined;
+};
 const sortBeats = <T extends { at: number },>(b: T[] | undefined): T[] => [...(b ?? [])].sort((x, y) => x.at - y.at);
 
 /** Screen-space blurred shoulder & back-of-head amorce of the interlocutor for over-the-shoulder (`cam: 'ots'`) shots. */
@@ -387,7 +405,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     // hand that touches nothing (8 projects, 2026-11-13). The person stands within arm's length of what they reach for.
     const stepIn = (p: PersonSpec, at: Place): Place | null => {
       if (p.walkTo || !('u' in at)) return null;
-      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach;
+      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach ?? pickUpReach(p);
       if (!r || typeof r.to === 'number') return null;
       const here = flipAt(at) as { u: number; w: number };
       const g = pl.ground.project(here.u, here.w);
@@ -450,7 +468,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
         return Math.abs(du) > 0.04 ? Math.sign(du) * 0.85 : 0;
       }
       // reaching for a piece with no yaw given: face it
-      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach;
+      const r = p.reach ?? sortBeats(p.beats).find((b) => b.reach)?.reach ?? pickUpReach(p);
       if (!p.on && r && typeof r.to === 'string') {
         const a = timed(p.at, t, len);
         if (a && 'u' in a) { const here = flipAt(a) as { u: number; w: number }; return Math.sign(pl.pointOf(r.to).x - pl.ground.project(here.u, here.w).x || 1) * 0.85; }
@@ -593,9 +611,40 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const target = cameraFor(camNow.cam, camNow.on);
     const blend = camPrev ? (camCut ? 1 : ease01((t - camAt) / 5)) : 1;
     const from = camPrev ? cameraFor(camPrev.cam, camPrev.on) : target;
-    const base = { x: from.x + (target.x - from.x) * blend, y: from.y + (target.y - from.y) * blend, zoom: from.zoom + (target.zoom - from.zoom) * blend };
+    const blended = { x: from.x + (target.x - from.x) * blend, y: from.y + (target.y - from.y) * blend, zoom: from.zoom + (target.zoom - from.zoom) * blend };
     const k = len > 0 ? clamp(t / len, 0, 1) : 0;
     const move = spec.move ?? 'push';
+    // The frame keeps the head of the person it is on. A zone pulls a wide shot 35 % toward itself and look room adds
+    // 14 % of the width: together they left the subject 72 % out of a tall frame, with nothing wrong in the shot's code
+    // (custom-shortlist-026 S3, 2026-11-16). Then, if it fits, a head the edge would cut is brought in whole.
+    const keepHeads = (c: { x: number; y: number; zoom: number }) => {
+      const size = typeof camNow.cam === 'string' ? camNow.cam : null;
+      if (!size || size === 'ots' || size === 'pov' || size === 'establishing' || !people[camNow.on]) return c;
+      const halfW = FRAME.w / (2 * c.zoom);
+      const drift = (move === 'track' ? 0.065 : move === 'pan' ? 0.03 : 0) * (FRAME.w / c.zoom);
+      const box = (i: number) => { const fp = personFramePoint(i); return { lo: fp.x - 60 * fp.scale, hi: fp.x + 60 * fp.scale }; };
+      const room = halfW - drift;
+      const s = box(camNow.on);
+      if (s.hi - s.lo > 2 * room) return c;
+      let lo = s.hi - room;
+      let hi = s.lo + room;
+      // the others, most visible first: who is whole stays whole, who is cut comes in, as long as it all fits
+      const seenAt = (j: number, x: number) => { const b = box(j); return clamp((Math.min(b.hi, x + halfW) - Math.max(b.lo, x - halfW)) / (b.hi - b.lo), 0, 1); };
+      people
+        .map((_, j) => j)
+        .filter((j) => j !== camNow.on && !pairIdx.has(j) && Math.abs(yawAt(j)) <= 1.3 && seenAt(j, c.x) > 0.15)
+        .sort((a, b) => seenAt(b, c.x) - seenAt(a, c.x))
+        .forEach((j) => {
+          const b = box(j);
+          const nlo = Math.max(lo, b.hi - room);
+          const nhi = Math.min(hi, b.lo + room);
+          if (nlo > nhi) return;
+          lo = nlo;
+          hi = nhi;
+        });
+      return { ...c, x: clamp(c.x, lo, hi) };
+    };
+    const base = keepHeads(blended);
     const zoom = base.zoom * (
       move === 'push' ? 1 + 0.05 * k :
       move === 'pull' ? 1.05 - 0.05 * k :
@@ -625,7 +674,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const subjectIdx = camNow.on;
       const named = spec.on !== undefined || people.length === 1 || sortBeats(spec.beats).some((b) => b.on !== undefined);
       const sub = people[subjectIdx];
-      if (sub && named && !isPov && !otsActive && !pairIdx.has(subjectIdx) && !(sub.walkTo && !sub.on) && sub.stance !== 'lie') {
+      if (sub && !isPov && !otsActive && !pairIdx.has(subjectIdx)) {
+        const subjectChecked = named && !(sub.walkTo && !sub.on);
         const feetY = spotOfPerson(subjectIdx).y;
         const tallK = angle === 'low' ? 1.14 : angle === 'high' ? 0.88 : 1;
         const liftK = angle === 'low' ? -0.15 : angle === 'high' ? 0.15 : 0;
@@ -649,7 +699,13 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           const c = share(h.x - h.r, h.x + h.r, o.x - o.r * 1.1, o.x + o.r * 1.1) * share(h.y - h.r, h.y + h.r, o.top, o.feet);
           if (c > covered) { covered = c; by = j; }
         });
-        framingSink.push({ kind: 'subject', t, on: subjectIdx, visible: Math.round(visible * 100) / 100, covered: Math.round(covered * 100) / 100, by, handCam: typeof camNow.cam !== 'string', share: Math.round(((h.feet - h.top) / (FRAME.h / zoom)) * 100) / 100, portrait: PORTRAIT, opening: !!spec.title || camNow.cam === 'establishing' });
+        people.forEach((q, j) => {
+          if ((j === subjectIdx && subjectChecked) || pairIdx.has(j) || Math.abs(yawAt(j)) > 1.3 || (q.walkTo && !q.on)) return;
+          const o = headOf(j);
+          const seen = share(o.x - o.r, o.x + o.r, cx - hw, cx + hw) * share(o.y - o.r, o.y + o.r, cy - hh, cy + hh);
+          if (seen > 0.2 && seen < 0.65) framingSink.push({ kind: 'cut', t, who: j, visible: Math.round(seen * 100) / 100 });
+        });
+        if (subjectChecked) framingSink.push({ kind: 'subject', t, on: subjectIdx, visible: Math.round(visible * 100) / 100, covered: Math.round(covered * 100) / 100, by, handCam: typeof camNow.cam !== 'string', share: Math.round(((h.feet - h.top) / (FRAME.h / zoom)) * 100) / 100, portrait: PORTRAIT, opening: !!spec.title || camNow.cam === 'establishing' });
       }
       (spec.props ?? []).forEach((pr, i) => {
         if (!pr.at || pr.on || (pr.at.v ?? 0) >= 0.15 || !pl.pieceAt) return;
@@ -710,7 +766,16 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           })}
           {people.map((p, i) => {
             if ((isPov && i === povOwner) || (otsActive && i === otsActive.otherIdx) || pairIdx.has(i)) return null;
-            const { who, on, from, dur, stance, rimId, vfx } = p;
+            const { who, on, from, dur, stance, rimId } = p;
+            const beatsAll = sortBeats(p.beats);
+            // accents written in a beat start with it
+            const vfx: PersonVfxSpec[] = [
+              ...(p.vfx ?? []),
+              ...beatsAll.flatMap((b) => (b.vfx === undefined ? [] : (Array.isArray(b.vfx) ? b.vfx : [typeof b.vfx === 'string' ? { kind: b.vfx } : b.vfx]).map((v) => ({ ...v, at: (v as { at?: number }).at ?? b.at }) as PersonVfxSpec))),
+            ];
+            // what is in the hand now: the last beat that says so, else the shot's own hold
+            const holdBeat = [...beatsAll].reverse().find((b) => b.hold !== undefined && b.at <= t);
+            const beatPose = [...beatsAll].reverse().find((b) => b.pose !== undefined && b.at <= t)?.pose;
             // worn things and an animal's head join whatever the shot drew itself in headGear / torsoGear
             const yawNow = yawAt(i);
             const wornList = (p.wear ?? []).map((x) => (typeof x === 'string' ? { what: x } : x));
@@ -720,7 +785,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
               <g>{p.animal ? animalHead(p.animal, yawNow) : null}{headWorn.map((x, k) => <g key={k}>{worn(x.what, { ...x, yaw: yawNow })}</g>)}{p.headGear}</g>
             ) : undefined;
             const torsoGear = p.torsoGear || torsoWorn.length ? <g>{torsoWorn.map((x, k) => <g key={k}>{worn(x.what, x)}</g>)}{p.torsoGear}</g> : undefined;
-            const holdSpec = holdOf(p.hold);
+            const holdSpec = holdOf(holdBeat ? holdBeat.hold ?? undefined : p.hold);
             const heldNode = holdSpec ? (holdSpec.node ?? held(holdSpec.what as string, holdSpec)) : undefined;
             // a thing that stays level or leaves the hand is carried by Staged, which knows the arm at every frame
             const rel = holdSpec?.release;
@@ -763,8 +828,17 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             let yawRun = yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p))) ?? 0;
             const stageBeats: StageBeat[] = beats.map((b) => {
               if (b.yaw !== undefined || b.look !== undefined) yawRun = yawToward(i, b.look, flipYaw(b.yaw) ?? yawRun) ?? yawRun;
-              return { at: b.at, act: actionName(b.act), yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: targetOf(b.reach) };
+              const picks = b.hold && typeof b.hold === 'object' && !React.isValidElement(b.hold) && typeof (b.hold as { from?: unknown }).from === 'string';
+              // a hand that takes or lets go changes what the arm does, unless the beat says it
+              const actNow = actionName(b.act) ?? (b.hold !== undefined ? (b.hold ? 'hold' : 'idle') : undefined);
+              return { at: b.at, act: actNow, yaw: b.yaw !== undefined || b.look !== undefined ? yawRun : undefined, reach: b.reach !== undefined ? targetOf(b.reach) : picks ? null : undefined };
             });
+            // picking up: the hand goes to the piece ten frames before the thing is in it
+            for (const b of beats) {
+              const fromPiece = b.hold && typeof b.hold === 'object' && !React.isValidElement(b.hold) ? (b.hold as { from?: unknown }).from : undefined;
+              if (typeof fromPiece === 'string' && fromPiece) stageBeats.push({ at: Math.max(0, b.at - 10), reach: { to: pl.pointOf(fromPiece) } });
+            }
+            stageBeats.sort((a, b) => a.at - b.at);
             // the arm stops carrying once the thing is gone, unless the shot says what the person does next
             if (rel && !pAct && !beats.some((b) => b.act && b.at >= rel.at)) stageBeats.push({ at: rel.at + 4, act: 'idle' });
             const reach = targetOf(p.reach);
@@ -780,12 +854,23 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             );
             return (
               <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
-                pose={{ ...gazeOf(p, i), ...poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len) } as never} beats={stageBeats} reach={reach ?? undefined}
+                pose={{ ...gazeOf(p, i), ...poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len), ...(beatPose ?? {}) } as never} beats={stageBeats} reach={reach ?? undefined}
                 rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} carry={carry} />
             );
           })}
           {duo ? <Duo a={{ at: flipAt(duo.a.at) as { u: number; w: number }, look: duo.a.who, rimId: duo.a.rimId, pose: poseOf(duo.a, t, len) as never }} b={{ at: flipAt(duo.b.at) as { u: number; w: number }, look: duo.b.who, rimId: duo.b.rimId, pose: poseOf(duo.b, t, len) as never }} action={duo.action} from={duo.from} dur={duo.dur} prop={duo.prop} /> : null}
+          {(spec.people ?? []).flatMap((p, pi) =>
+            sortBeats(p.beats).flatMap((b, bi) => {
+              // a thing waiting on a piece until the beat that picks it up
+              const h = b.hold && typeof b.hold === 'object' && !React.isValidElement(b.hold) ? holdOf(b.hold) : undefined;
+              const fromPiece = (b.hold as { from?: unknown } | null | undefined)?.from;
+              if (!h || typeof fromPiece !== 'string' || !fromPiece || t >= b.at) return [];
+              const at = pl.pointOf(fromPiece);
+              return [<g key={`pick-${pi}-${bi}`} transform={`translate(${at.x} ${at.y - heldBottom(h.what) * (h.scale ?? 1)})`}>{h.node ?? held(h.what as string, h)}</g>];
+            }),
+          )}
           {(spec.props ?? []).map((pr, i) => {
+            if ((pr.from !== undefined && t < pr.from) || (pr.until !== undefined && t >= pr.until)) return null;
             // on a piece, or at a floor point (v: height above the floor, 0 floor … 1 head)
             let at: { x: number; y: number };
             if (typeof pr.on === 'string' && pr.on) at = pl.pointOf(pr.on);
@@ -965,19 +1050,29 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
       </g>
     );
   }
-  // chat: header, bubbles stacked from the top and scrolled so the newest stays above the input bar
+  // chat: header, bubbles standing on the input bar, scrolled so the newest stays above it
   const headerH = H * 0.13;
   const inputH = H * 0.095;
-  const shown = (spec.messages ?? []).filter((m) => t >= m.at);
-  const lineH = fs * 1.3;
-  const blocks = shown.map((m) => {
-    const lines = wrapText(m.text, 20);
-    return { m, lines, h: lines.length * lineH + fs * 1.1 };
-  });
-  const gap = fs * 0.55;
-  const total = blocks.reduce((s, b) => s + b.h + gap, 0);
+  const all = spec.messages ?? [];
   const room = H - headerH - inputH - fs * 1.8;
-  let y = headerH + fs * 0.6 - Math.max(0, total - room);
+  // A short conversation used to sit in two small bubbles at the top of a screen left three-quarters empty (xwxj5etfkci
+  // S5, S10). The type grows until the whole conversation takes a good half of the screen, and the bubbles stand on the
+  // input bar, the way a chat does: the newest at the bottom, the older ones pushed up.
+  const layout = (cf: number) => {
+    const lineH = cf * 1.3;
+    const max = Math.max(9, Math.min(20, Math.floor((W * 0.86 - cf * 1.5) / (cf * 0.58))));
+    return { cf, lineH, gap: cf * 0.55, blocks: all.map((m) => ({ m, lines: wrapText(m.text, max) })).map((b) => ({ ...b, h: b.lines.length * lineH + cf * 1.1 })) };
+  };
+  const heightOf = (l: ReturnType<typeof layout>) => l.blocks.reduce((sum, b) => sum + b.h + l.gap, 0);
+  const plain = layout(fs);
+  const grown = layout(fs * clamp((room * 0.55) / Math.max(1, heightOf(plain)), 1, 1.6));
+  const L = heightOf(grown) <= room * 0.8 ? grown : plain;
+  const cf = L.cf;
+  const lineH = L.lineH;
+  const gap = L.gap;
+  const blocks = L.blocks.filter((b) => t >= b.m.at);
+  const total = blocks.reduce((sum, b) => sum + b.h + gap, 0);
+  let y = headerH + fs * 0.6 + (room - total);
   const typed = spec.typing ? spec.typing.text.slice(0, Math.floor(spec.typing.text.length * clamp((t - spec.typing.at) / (spec.typing.dur ?? 30), 0, 1))) : '';
   return (
     <g>
@@ -991,15 +1086,15 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
         {blocks.map(({ m, lines, h }, i) => {
           const mine = m.from === 'me';
           const k = ease01((t - m.at) / 6);
-          const bw = Math.min(W * 0.8, Math.max(fs * 2.6, Math.max(...lines.map((l) => l.length)) * fs * 0.58 + fs * 1.5));
+          const bw = Math.min(W * 0.86, Math.max(cf * 2.6, Math.max(...lines.map((l) => l.length)) * cf * 0.58 + cf * 1.5));
           const x = mine ? W - pad * 0.7 - bw : pad * 0.7;
           const top = y;
           y += h + gap;
           return (
             <g key={i} transform={`translate(${x + (mine ? bw : 0)} ${top + h}) scale(${0.6 + 0.4 * k}) translate(${-(x + (mine ? bw : 0))} ${-(top + h)})`} opacity={k}>
-              <rect x={x} y={top} width={bw} height={h} rx={fs * 0.8} fill={mine ? accent : '#2A303C'} />
+              <rect x={x} y={top} width={bw} height={h} rx={cf * 0.8} fill={mine ? accent : '#2A303C'} />
               {lines.map((l, j) => (
-                <text key={j} x={x + fs * 0.7} y={top + fs * 1.25 + j * lineH} fontSize={fs} fill="#F4F6FA" fontFamily={font}>{l}</text>
+                <text key={j} x={x + cf * 0.7} y={top + cf * 1.25 + j * lineH} fontSize={cf} fill="#F4F6FA" fontFamily={font}>{l}</text>
               ))}
             </g>
           );

@@ -5935,7 +5935,7 @@ ep_dir = pathlib.Path(sys.argv[1])
 # the shot list guessed wrong on purpose: S2 "classroom", S3 "study"
 shots = [{"id": "S1", "set": "classroom", "accent": "hook-title"}, {"id": "S2", "set": "classroom"}, {"id": "S3", "set": "study"}, {"id": "S4", "set": "study"}]
 assert sfx.real_places(ep_dir) == {"S1": "classroom", "S2": "office", "S3": "classroom", "S4": "office"}, sfx.real_places(ep_dir)
-tl = {"segments": [{"shot": s["id"], "a": i * 60, "b": (i + 1) * 60} for i, s in enumerate(shots)]}
+tl = {"segments": [{"shot": s["id"], "a": i * 90, "b": (i + 1) * 90} for i, s in enumerate(shots)]}
 snd = sfx.auto_sound({}, tl, ep_dir, shots, 0)
 ev = snd["events"]
 murmur = [e for e in ev if e[1] == "class_murmur"]
@@ -5944,7 +5944,11 @@ assert ["S3+24", "title_boom", 0.34, "peak"] in ev, ev
 assert ["S3+20", "gasp", 0.22] in ev and ["S3+15", "land", 0.22] in ev, ev
 assert ["S2+30", "counter_tick", 0.18] in ev, ev
 assert ["S4+22", "shatter", 0.24] in ev, ev
-assert [e[0] for e in ev if e[1] == "step"] == ["S1+3", "S1+13", "S1+23"], ev
+assert [e[0] for e in ev if e[1] == "step"] == ["S1+3", "S1+16"], ev
+# a short shot keeps one sound, the strongest; under three seconds, two; the frames stay in order
+assert [e[1] for e in sfx.code_events(ep_dir, {"S3": 40})["S3"]] == ["title_boom"], sfx.code_events(ep_dir, {"S3": 40})
+assert [e[1] for e in sfx.code_events(ep_dir, {"S3": 60})["S3"]] == ["land", "title_boom"], sfx.code_events(ep_dir, {"S3": 60})
+assert len(sfx.code_events(ep_dir, {"S3": 120})["S3"]) == 3
 assert snd["auto"] is True and "shatter" in snd["clips"] and "land" in snd["clips"]
 # a long room: the old murmur ran to the end of the ambience group
 old_style = build_default_sound([{"id": "S1", "set": "classroom"}, {"id": "S2", "set": "office"}, {"id": "S3", "set": "office"}], -1)
@@ -5964,7 +5968,53 @@ print("PY_OK")
     assert.doesNotMatch(sfxSrc, /write_wav\(pub \/ "sfx\.wav", sfx, 0\.98\)/, 'the track is no longer brought to its own peak');
     assert.match(sfxSrc, /sfx_gain_db = min\(-0\.5, -1\.5 \+ max\(-6\.0, min\(3\.0, v_lufs \+ 18\.0\)\)/);
     assert.match(sfxSrc, /plays in its place/);
-    assert.match(fs.readFileSync(path.resolve('pipeline/master_run.py'), 'utf8'), /trim_db = min\(I_TARGET - lufs, -1\.0 - true_peak\)/);
+    assert.match(fs.readFileSync(path.resolve('pipeline/master_run.py'), 'utf8'), /alimiter=limit=0\.84:level=false/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lot J: a curl climbs off the eye at three-quarter, a short chat fills the phone and stands on the input bar, the guide speaks of repeated gestures', () => {
+  const person = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/person.tsx'), 'utf8');
+  // the geometry the engine draws, checked on the numbers: the eye of the turned side sits at x = 22 * (1 - 0.28|yaw|) + 30|yaw|, 5 above the head centre
+  const m = /deg0 - side \* Math\.min\(1, Math\.abs\(pose\.yaw\)\) \* (\d+)/.exec(person);
+  assert.ok(m, 'the lowest curl of the side the head turns to moves with the yaw');
+  const lift = Number(m[1]);
+  for (const yaw of [0.45, 0.85]) {
+    const eyeX = 22 * (1 - 0.28 * yaw) + 30 * yaw;
+    const free = (deg) => Math.hypot(Math.cos((deg * Math.PI) / 180) * 54 - eyeX, Math.sin((deg * Math.PI) / 180) * 54 + 5) - 24;
+    assert.ok(free(-30) < 7, `yaw ${yaw}: the curl left at -30 degrees sits on the eye (that is the defect)`);
+    assert.ok(free(-30 - yaw * lift) >= 7, `yaw ${yaw}: the lifted curl clears the eye, got ${free(-30 - yaw * lift).toFixed(1)}`);
+  }
+  const shotSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  assert.match(shotSrc, /clamp\(\(room \* 0\.55\) \/ Math\.max\(1, heightOf\(plain\)\), 1, 1\.6\)/, 'a short conversation grows to a good half of the screen');
+  assert.match(shotSrc, /let y = headerH \+ fs \* 0\.6 \+ \(room - total\);/, 'the bubbles stand on the input bar');
+  assert.match(fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8'), /A gesture means something once/);
+});
+
+test('master: a final that lands under the target is brought up to it under a limiter, the peak stays safe', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-level-'));
+  try {
+    const slug = 'lvl';
+    const outDir = path.join(dir, 'out', slug);
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.mkdirSync(path.join(dir, 'src', 'episodes', slug), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'episodes', slug, 'episode.json'), JSON.stringify({ id: slug }));
+    // A quiet, speech-like bed with a low thump every four seconds: the two-pass normalisation lands it at -14.7 LUFS with
+    // the peak already at the ceiling, which is what the real episodes did (-14.5 to -15.0 LUFS, -1.1 dBTP).
+    const bed = '0.05*(0.5+0.5*sin(2*PI*3*t))*gt(sin(2*PI*0.4*t),-0.5)*(sin(2*PI*160*t)+0.6*sin(2*PI*480*t)+0.4*sin(2*PI*1400*t)+0.3*sin(2*PI*2600*t))';
+    const thump = 'if(lt(mod(t,4.1),0.3),0.5*sin(2*PI*90*t)*exp(-9*mod(t,4.1)),0)';
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=navy:s=320x180:r=30:d=12', '-f', 'lavfi', '-i', `aevalsrc='${bed}+${thump}':s=48000:d=12`, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', path.join(outDir, `${slug}-raw.mp4`)],
+      { stdio: 'pipe' },
+    );
+    const out = execFileSync('python3', [path.resolve('pipeline/master_run.py'), slug, '--skip-render'], { cwd: dir, encoding: 'utf8' });
+    assert.match(out, /level catch-up: \+/, 'the missing gain is applied');
+    const rep = JSON.parse(fs.readFileSync(path.join(outDir, 'report.json'), 'utf8'));
+    assert.ok(Math.abs(rep.lufs + 14.0) <= 0.3, `expected the final within 0.3 dB of -14 LUFS, got ${rep.lufs}`);
+    assert.ok(rep.true_peak_dbtp <= -0.9, `the peak stays under -0.9 dBTP, got ${rep.true_peak_dbtp}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -5972,7 +6022,13 @@ print("PY_OK")
 
 test('whatif-studio MCP server + stdio bridge: exposes Studio tools, translates host paths, enforces Subagent Reviewer gate & Round 2 delta pack', async () => {
   const { spawn } = await import('node:child_process');
-  const { dir, app } = tmpApp();
+  // The test brings its own skill folder: a machine without WHATIF_SKILL_DIR (or a sibling clone) runs it all the same.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-'));
+  const skill = path.join(dir, 'skill');
+  fs.mkdirSync(path.join(skill, 'studio', 'src', 'episodes'), { recursive: true });
+  fs.writeFileSync(path.join(skill, 'studio', 'package.json'), JSON.stringify({ name: 'studio', private: true }));
+  fs.writeFileSync(path.join(skill, 'studio', 'src', 'episodes', 'index.ts'), 'export const EPISODES = [];\n');
+  const app = createApp({ ...loadConfig(), dataRoot: dir, dbPath: path.join(dir, 'app.db'), projectsDir: path.join(dir, 'projects'), skillDir: skill });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const port = app.server.address().port;
 
@@ -6126,4 +6182,119 @@ test('whatif-studio MCP server + stdio bridge: exposes Studio tools, translates 
     await app.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a reviewer that does not answer: the call has a deadline, is asked once more, then the chain goes on unreviewed', async () => {
+  const { chatWithin, ReviewTimeout, reviewEpisodeBoard, formatReviewFeedback, reviewTimeoutMs } = await import('../dist/orchestrator/reviewer.js');
+  assert.equal(reviewTimeoutMs(), 240_000, 'four minutes by default');
+  let calls = 0;
+  let aborted = 0;
+  const silent = {
+    label: 'silent',
+    model: 'never-answers',
+    chat({ signal }) {
+      calls++;
+      return new Promise((_, reject) => signal?.addEventListener('abort', () => { aborted++; reject(new Error('aborted')); }));
+    },
+  };
+  const t0 = Date.now();
+  await assert.rejects(() => chatWithin(silent, [{ role: 'user', content: 'x' }], undefined, 40), ReviewTimeout);
+  assert.ok(Date.now() - t0 < 1500 && aborted === 1, 'the silent call is aborted at the deadline');
+  // a provider that ignores the abort is left behind all the same
+  const deaf = { label: 'deaf', model: 'deaf', chat: () => new Promise(() => {}) };
+  await assert.rejects(() => chatWithin(deaf, [{ role: 'user', content: 'x' }], undefined, 40), ReviewTimeout);
+  // the user's stop is not a timeout
+  const ctl = new AbortController();
+  setTimeout(() => ctl.abort(), 20);
+  await assert.rejects(() => chatWithin(silent, [{ role: 'user', content: 'x' }], ctl.signal, 5000), (e) => !(e instanceof ReviewTimeout));
+  // an answer in time goes through
+  assert.equal(await chatWithin({ label: 'ok', model: 'ok', chat: async () => ({ text: 'fine', toolCalls: [] }) }, [], undefined, 500), 'fine');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-revtime-'));
+  const prev = process.env.WHATIF_REVIEW_TIMEOUT_MS;
+  process.env.WHATIF_REVIEW_TIMEOUT_MS = '40';
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'ep');
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'out', 'ep'), { recursive: true });
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ id: 'Ep', slug: 'ep', aspect: '16:9', script: [{ text: 'Bonjour.' }], shots: [{ id: 'S1' }] }));
+    fs.writeFileSync(path.join(epDir, 'timeline.json'), JSON.stringify({ fps: 30, total: 60, shots: [{ id: 'S1', len: 60 }], segments: [{ shot: 'S1', a: 0, b: 60 }] }));
+    fs.writeFileSync(path.join(epDir, 'shots', 'S1.tsx'), 'export const S1 = () => null;');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), "export { S1 } from './shots/S1';");
+    calls = 0;
+    const t1 = Date.now();
+    const report = await reviewEpisodeBoard(silent, dir, 'ep');
+    assert.equal(report.ok, false);
+    assert.equal(report.timedOut, true);
+    assert.equal(report.pass, true, 'an absent review does not block the render');
+    assert.equal(calls, 2, 'asked twice, not three times');
+    assert.ok(Date.now() - t1 < 3000, `the chain waited ${Date.now() - t1} ms`);
+    assert.match(formatReviewFeedback(report, 'ep'), /NON VÉRIFIÉ\. Reviewer indisponible : aucune réponse/);
+  } finally {
+    if (prev === undefined) delete process.env.WHATIF_REVIEW_TIMEOUT_MS; else process.env.WHATIF_REVIEW_TIMEOUT_MS = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the frame keeps its people: the camera is held on the head of its subject, a head cut by the edge is refused', async () => {
+  const { framingErrors } = await import('../dist/tools/whatif.js');
+  const errs = framingErrors({
+    S4: [{ kind: 'cut', who: 0, visible: 0.55 }, { kind: 'subject', on: 1, visible: 1, covered: 0, by: -1 }],
+    S5: [{ kind: 'subject', on: 0, visible: 1, covered: 0, by: -1 }],
+  });
+  assert.equal(errs.length, 1, errs.join('\n'));
+  assert.match(errs[0], /^S4: people\[0\] is cut by the edge of the frame at the key frame \(45 % of the head is out\).*cam: 'ots'/);
+
+  const src = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  assert.match(src, /const base = keepHeads\(blended\);/, 'the camera goes through keepHeads');
+  assert.match(src, /if \(!size \|\| size === 'ots' \|\| size === 'pov' \|\| size === 'establishing' \|\| !people\[camNow\.on\]\) return c;/);
+  assert.match(src, /if \(seen > 0\.2 && seen < 0\.65\) framingSink\.push\(\{ kind: 'cut'/);
+  assert.match(src, /\(q\.walkTo && !q\.on\)\) return;\n          const o = headOf\(j\);/, 'someone walking in is not a cut head');
+
+  // keepHeads on numbers: the function is lifted out of the source and run on a frame 900 wide
+  const body = src.slice(src.indexOf('const keepHeads = '), src.indexOf('const base = keepHeads(blended);'));
+  const js = body
+    .replace(/\(c: \{ x: number; y: number; zoom: number \}\)/, '(c)')
+    .replace(/\(i: number\)/g, '(i)')
+    .replace(/\(j: number, x: number\)/, '(j, x)');
+  const make = new Function('FRAME', 'camNow', 'people', 'personFramePoint', 'pairIdx', 'yawAt', 'move', 'clamp', `${js}; return keepHeads;`);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const run = (heads, cam, yaws = []) =>
+    make({ w: 900, h: 1600 }, { cam: 'wide', on: 0 }, heads.map(() => ({})), (i) => ({ x: heads[i], y: 0, scale: 1 }), new Set(), (i) => yaws[i] ?? 0, 'still', clamp)(cam).x;
+  // zoom 1: the frame shows 450 on each side. A subject at 400 with the camera pulled to 1000 is brought back in.
+  assert.equal(run([400], { x: 1000, y: 0, zoom: 1 }), 790);
+  assert.equal(run([400], { x: 500, y: 0, zoom: 1 }), 500, 'a subject already inside leaves the camera alone');
+  // a second head cut by the right edge comes in when both fit
+  assert.equal(run([500, 980], { x: 560, y: 0, zoom: 1 }), 590);
+  // … and the camera stays on the subject when they do not
+  assert.equal(run([500, 1500], { x: 560, y: 0, zoom: 1 }), 560);
+  // someone seen from behind (an amorce) is not brought in
+  assert.equal(run([500, 980], { x: 560, y: 0, zoom: 1 }, [0, 1.55]), 560);
+});
+
+test('beats carry things: hold, vfx and pose in a beat, picking a thing up on a piece, props with from / until', async () => {
+  const src = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  // the type the agents wrote against: two episodes lost 20 minutes on "'hold' does not exist in type 'PersonBeat'"
+  const beatType = src.slice(src.indexOf('export type PersonBeat = {'), src.indexOf('/** from frame `at`, the camera changes'));
+  assert.match(beatType, /hold\?: PersonSpec\['hold'\] \| \(\{ from\?: string \}/);
+  assert.match(beatType, /vfx\?: PersonVfxKind \| Omit<PersonVfxSpec, 'at'>/);
+  assert.match(beatType, /pose\?: Record<string, unknown>;/);
+  // what is in the hand follows the last beat that says so; null empties it
+  assert.match(src, /const holdBeat = \[\.\.\.beatsAll\]\.reverse\(\)\.find\(\(b\) => b\.hold !== undefined && b\.at <= t\);/);
+  assert.match(src, /const holdSpec = holdOf\(holdBeat \? holdBeat\.hold \?\? undefined : p\.hold\);/);
+  // the arm follows: 'hold' when the hand takes, 'idle' when it lets go, unless the beat gives an act
+  assert.match(src, /actionName\(b\.act\) \?\? \(b\.hold !== undefined \? \(b\.hold \? 'hold' : 'idle'\) : undefined\)/);
+  // picking up: stand at the piece, reach ten frames before, the thing waits on the piece until the beat
+  assert.match(src, /find\(\(b\) => b\.reach\)\?\.reach \?\? pickUpReach\(p\);/);
+  assert.equal(src.split('?? pickUpReach(p);').length - 1, 2, 'both the stepping-in and the facing use it');
+  assert.match(src, /stageBeats\.push\(\{ at: Math\.max\(0, b\.at - 10\), reach: \{ to: pl\.pointOf\(fromPiece\) \} \}\);/);
+  assert.match(src, /if \(!h \|\| typeof fromPiece !== 'string' \|\| !fromPiece \|\| t >= b\.at\) return \[\];/);
+  // accents and pose of a beat
+  assert.match(src, /at: \(v as \{ at\?: number \}\)\.at \?\? b\.at/);
+  assert.match(src, /poseOf\(\{ face: faces\.length \? faces : undefined, pose: p\.pose \}, t, len\), \.\.\.\(beatPose \?\? \{\}\)/);
+  // props in time
+  assert.match(src, /if \(\(pr\.from !== undefined && t < pr\.from\) \|\| \(pr\.until !== undefined && t >= pr\.until\)\) return null;/);
+  const guide = fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8');
+  assert.match(guide, /hold: \{ what: 'keys', from: 'table' \}/);
+  assert.match(guide, /until: 40/);
 });

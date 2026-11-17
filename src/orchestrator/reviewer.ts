@@ -47,6 +47,8 @@ export type ReviewReport = {
   salvaged?: boolean;
   /** the answer as received, kept when nothing could be read from it */
   raw?: string;
+  /** the reviewer gave no answer in time, twice: the chain goes on unreviewed */
+  timedOut?: boolean;
   /** shots refused three times in a row: the review stops there instead of asking again */
   gaveUpOn?: string[];
   /** a closed review the user came back to: the next board is looked at again, on the shots that changed */
@@ -489,6 +491,40 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/** How long one call to the reviewer may take. One episode waited 31 minutes for a review, another 10 (2026-11-16). */
+export const reviewTimeoutMs = (): number => {
+  const n = Number(process.env.WHATIF_REVIEW_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 240_000;
+};
+export class ReviewTimeout extends Error {}
+/** provider.chat with a deadline of its own: the call is aborted and, should the provider ignore that, left behind. */
+export async function chatWithin(provider: Provider, messages: ChatMessage[], signal: AbortSignal | undefined, ms = reviewTimeoutMs()): Promise<string> {
+  const ctl = new AbortController();
+  const onUser = () => ctl.abort();
+  if (signal?.aborted) ctl.abort();
+  signal?.addEventListener('abort', onUser, { once: true });
+  let timer: NodeJS.Timeout | undefined;
+  let late = false;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      late = true;
+      ctl.abort();
+      reject(new ReviewTimeout(`no answer from the reviewer in ${Math.round(ms / 1000)} s`));
+    }, ms);
+  });
+  try {
+    const call = provider.chat({ messages, tools: [], signal: ctl.signal }).then((r) => r.text);
+    call.catch(() => undefined);
+    return await Promise.race([call, deadline]);
+  } catch (err) {
+    if (late && !signal?.aborted) throw new ReviewTimeout(`no answer from the reviewer in ${Math.round(ms / 1000)} s`);
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', onUser);
+  }
+}
+
 async function askReviewerWithFallback(
   provider: Provider,
   systemPrompt: string,
@@ -497,8 +533,27 @@ async function askReviewerWithFallback(
   slug: string,
   signal?: AbortSignal,
 ): Promise<{ report: ReviewReport; sawImages: boolean }> {
-  const ask = async (msgs: ChatMessage[]): Promise<ReviewReport> =>
-    parseReviewJson((await provider.chat({ messages: msgs, tools: [], signal })).text, provider.model, slug);
+  const late = (): ReviewReport => ({
+    ok: false,
+    pass: true,
+    model: provider.model,
+    episode: slug,
+    summary: `Reviewer indisponible : aucune réponse en ${Math.round(reviewTimeoutMs() / 60_000)} min, deux essais.`,
+    issues: [],
+    createdAt: new Date().toISOString(),
+    timedOut: true,
+  });
+  // a reviewer that does not answer is asked once more, then the chain goes on unreviewed instead of waiting
+  const ask = async (msgs: ChatMessage[]): Promise<ReviewReport> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return parseReviewJson(await chatWithin(provider, msgs, signal), provider.model, slug);
+      } catch (err) {
+        if (!(err instanceof ReviewTimeout)) throw err;
+      }
+    }
+    return late();
+  };
 
   let sawImages = images.length > 0;
   let sent: ChatMessage[] = [
@@ -515,7 +570,7 @@ async function askReviewerWithFallback(
     sent = [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
     report = await ask(sent);
   }
-  if (!report.ok) report = await ask(sent);
+  if (!report.ok && !report.timedOut) report = await ask(sent);
   return { report, sawImages };
 }
 
@@ -871,7 +926,7 @@ export async function reviewStageCards(provider: Provider, projectRoot: string, 
   const user = `## Script\n${script}\n\n## Fiches (format ${ep.aspect ?? '16:9'}, ${shots.length} plans)\n${cards.slice(0, 20_000)}`;
   let issues: { shot: string; problem: string; fix: string }[] = [];
   try {
-    const text = (await provider.chat({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], tools: [], signal })).text;
+    const text = await chatWithin(provider, [{ role: 'system', content: system }, { role: 'user', content: user }], signal);
     const m = text.match(/\{[\s\S]*\}/);
     const parsed = m ? JSON.parse(m[0]) : null;
     if (!parsed || !Array.isArray(parsed.issues)) return null;
@@ -1028,6 +1083,9 @@ export function clearReviewBlock(projectRoot: string, slug: string): void {
 }
 
 export function formatReviewFeedback(report: ReviewReport, slug: string, wordFrames: string[] = []): string {
+  if (!report.ok && report.timedOut) {
+    return `[reviewer indépendant · ${report.model}] Audit de "${slug}" : NON VÉRIFIÉ. ${report.summary}\nContinue la chaîne : vérifie toi-même les planches de contact.`;
+  }
   if (!report.ok) {
     return `[reviewer indépendant · ${report.model}] Audit de "${slug}" : NON VÉRIFIÉ (réponse illisible, deux essais). ${report.summary}\nContinue la chaîne : vérifie toi-même les planches de contact.`;
   }
