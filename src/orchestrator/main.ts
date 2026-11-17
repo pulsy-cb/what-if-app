@@ -23,6 +23,7 @@ import {
   reviewProviderConfig,
 } from './providers/index.js';
 import { runTurn } from './agent.js';
+import { callMcpTool, listMcpTools } from '../mcp/service.js';
 import { mimeOf, safeJoin, walk } from '../tools/paths.js';
 
 function safeTokenEqual(a: string, b: string): boolean {
@@ -239,6 +240,23 @@ export function createApp(config: Config = loadConfig()): App {
         if (typeof body.reviewApiKey === 'string' && body.reviewApiKey.trim()) db.setSetting('reviewApiKey', body.reviewApiKey.trim());
         return json(res, 200, { ok: true });
       }
+    }
+
+    // ---- MCP tool bridge for host CLI agents (agy CLI + Reviewer subagents)
+    if (parts[1] === 'mcp-tools' && method === 'GET') {
+      return json(res, 200, { tools: listMcpTools(registry), dataRoot: config.dataRoot });
+    }
+    if (parts[1] === 'mcp-tool' && method === 'POST') {
+      const body = await readJson(req);
+      const toolName = String(body?.name ?? '').trim();
+      const toolArgs = body?.arguments && typeof body.arguments === 'object' ? (body.arguments as Record<string, unknown>) : {};
+      if (!toolName) return json(res, 400, { ok: false, summary: 'missing tool "name"' });
+      const ac = new AbortController();
+      req.on('close', () => {
+        if (!res.writableEnded) ac.abort();
+      });
+      const result = await callMcpTool({ db, bus, config, registry }, toolName, toolArgs, ac.signal);
+      return json(res, 200, { ...result, dataRoot: config.dataRoot });
     }
 
     // ---- live model discovery per provider

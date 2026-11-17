@@ -5969,3 +5969,161 @@ print("PY_OK")
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('whatif-studio MCP server + stdio bridge: exposes Studio tools, translates host paths, enforces Subagent Reviewer gate & Round 2 delta pack', async () => {
+  const { spawn } = await import('node:child_process');
+  const { dir, app } = tmpApp();
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const port = app.server.address().port;
+
+  const child = spawn('node', [path.resolve('dist/mcp/stdio.js')], {
+    env: {
+      ...process.env,
+      WHATIF_PORT: String(port),
+      WHATIF_STUDIO_HOST: '127.0.0.1',
+      WHATIF_HOST_DATA: dir,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const pending = new Map();
+  let stdoutBuf = '';
+  child.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk.toString('utf8');
+    let nl;
+    while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+      const line = stdoutBuf.slice(0, nl).trim();
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+      const msg = JSON.parse(line);
+      if (msg.id !== undefined && pending.has(msg.id)) {
+        const resolve = pending.get(msg.id);
+        pending.delete(msg.id);
+        resolve(msg);
+      }
+    }
+  });
+
+  let nextRpcId = 1;
+  const rpc = (method, params = {}) =>
+    new Promise((resolve) => {
+      const id = nextRpcId++;
+      pending.set(id, resolve);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+
+  try {
+    const initRes = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy-test', version: '1.0' } });
+    assert.equal(initRes.result.serverInfo.name, 'whatif-studio');
+
+    const listRes = await rpc('tools/list');
+    const toolNames = listRes.result.tools.map((t) => t.name);
+    for (const expected of [
+      'whatif_create_project',
+      'whatif_run',
+      'whatif_episode_pin',
+      'whatif_shot_words',
+      'whatif_stage_shots',
+      'whatif_edit_shot',
+      'whatif_write_file',
+      'whatif_read_file',
+      'whatif_review_pack',
+      'whatif_save_review',
+      'whatif_status',
+    ]) {
+      assert.ok(toolNames.includes(expected), `missing MCP tool ${expected}`);
+    }
+
+    // 1. Create project over MCP & check SQLite + hostProjectRoot path translation
+    const createRes = await rpc('tools/call', {
+      name: 'whatif_create_project',
+      arguments: { episode: 'mcp-ep', aspect: '9:16' },
+    });
+    assert.equal(createRes.result.isError, false, createRes.result.content[0]?.text);
+    assert.match(createRes.result.content[0].text, new RegExp(`hostProjectRoot: ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/projects/mcp-ep`));
+    assert.ok(app.db.getProject('mcp-ep'), 'project registered in Studio SQLite database');
+
+    const projRoot = path.join(dir, 'projects', 'mcp-ep');
+    const epDir = path.join(projRoot, 'src', 'episodes', 'mcp-ep');
+    const outDir = path.join(projRoot, 'out', 'mcp-ep');
+    fs.mkdirSync(path.join(outDir, 'sheets'), { recursive: true });
+    fs.mkdirSync(path.join(outDir, 'board'), { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'storyboard.jpg'), 'fake-board');
+    fs.writeFileSync(path.join(outDir, 'sheets', 'sheet-01.jpg'), 'fake-sheet-1');
+    fs.writeFileSync(path.join(outDir, 'board', 'S1.png'), 'fake-s1');
+
+    // Write DIRECTOR.md, shared.tsx & S1 via MCP tools
+    const wrDir = await rpc('tools/call', {
+      name: 'whatif_write_file',
+      arguments: { episode: 'mcp-ep', path: 'src/episodes/mcp-ep/DIRECTOR.md', content: '# Director Plan\nClassroom exam scene in 3 depth layers with Elijah and his professor.\n'.repeat(4) },
+    });
+    assert.equal(wrDir.result.isError, false);
+
+    await rpc('tools/call', {
+      name: 'whatif_write_file',
+      arguments: { episode: 'mcp-ep', path: 'src/episodes/mcp-ep/shared.tsx', content: `import { place, cast } from '../../engine';\nconst ROOM = place('classroom');\nconst ELIJAH = cast({ seed: 'elijah', kind: 'masc', skin: 'brown' });\n` },
+    });
+    const edShot = await rpc('tools/call', {
+      name: 'whatif_edit_shot',
+      arguments: { episode: 'mcp-ep', id: 'S1', code: `export const S1 = shot({ place: ROOM, cam: 'wide', people: [{ who: ELIJAH, at: { u: 0.5, w: 0.5 }, act: 'explain' }] });` },
+    });
+    assert.equal(edShot.result.isError, false, edShot.result.content[0]?.text);
+
+    // 2. Render is mechanically blocked until Independent Reviewer subagent runs!
+    const blockedRender = await rpc('tools/call', {
+      name: 'whatif_run',
+      arguments: { episode: 'mcp-ep', step: 'render' },
+    });
+    assert.equal(blockedRender.result.isError, true);
+    assert.match(blockedRender.result.content[0].text, /STOP BEFORE RENDER.*Independent Reviewer subagent/);
+
+    // 3. Round 1 Global Review Pack -> Save failing review (blocking: true)
+    const pack1 = await rpc('tools/call', {
+      name: 'whatif_review_pack',
+      arguments: { episode: 'mcp-ep' },
+    });
+    assert.equal(pack1.result.isError, false);
+    assert.match(pack1.result.content[0].text, /mode=global/);
+    assert.match(pack1.result.content[0].text, /sheet-01\.jpg/);
+
+    const save1 = await rpc('tools/call', {
+      name: 'whatif_save_review',
+      arguments: {
+        episode: 'mcp-ep',
+        pass: false,
+        summary: 'S1 lacks cardboard prop.',
+        issues: [{ shot: 'S1', severity: 'error', problem: 'Missing giant cheat sheet prop', fix: 'Add hold prop on ELIJAH' }],
+        mode: 'global',
+      },
+    });
+    assert.equal(save1.result.isError, false);
+    assert.match(save1.result.content[0].text, /CORRECTIONS REQUISES/);
+
+    // 4. Touch S1.tsx + S1.png after review timestamp -> Round 2 automatically switches to High-Res Delta Mode!
+    const futureMs = Date.now() + 5_000;
+    fs.utimesSync(path.join(epDir, 'shots', 'S1.tsx'), futureMs / 1000, futureMs / 1000);
+    fs.utimesSync(path.join(outDir, 'board', 'S1.png'), futureMs / 1000, futureMs / 1000);
+
+    const pack2 = await rpc('tools/call', {
+      name: 'whatif_review_pack',
+      arguments: { episode: 'mcp-ep' },
+    });
+    assert.equal(pack2.result.isError, false, pack2.result.content[0]?.text);
+    assert.match(pack2.result.content[0].text, /mode=delta/);
+    assert.match(pack2.result.content[0].text, /board\/S1\.png/);
+
+    const save2 = await rpc('tools/call', {
+      name: 'whatif_save_review',
+      arguments: { episode: 'mcp-ep', pass: true, summary: 'S1 fixed cleanly.', issues: [], mode: 'delta' },
+    });
+    assert.equal(save2.result.isError, false);
+    assert.match(save2.result.content[0].text, /VALIDÉ ✓/);
+    const savedRev = JSON.parse(fs.readFileSync(path.join(outDir, 'review.json'), 'utf8'));
+    assert.equal(savedRev.pass, true);
+    assert.equal(savedRev.blocking, false);
+  } finally {
+    child.kill();
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
