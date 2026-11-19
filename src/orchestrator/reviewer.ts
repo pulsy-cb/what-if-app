@@ -632,6 +632,35 @@ function fileSha256Hex32(filePath: string): string | null {
   }
 }
 
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+      out[k] = canonicalizeJson((value as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function timelineSha256Hex32(filePath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rest: Record<string, unknown> = {};
+      for (const k of Object.keys(parsed as Record<string, unknown>).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+        if (k === 'audio') continue;
+        rest[k] = canonicalizeJson((parsed as Record<string, unknown>)[k]);
+      }
+      return crypto.createHash('sha256').update(JSON.stringify(rest), 'utf8').digest('hex').slice(0, 32);
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(canonicalizeJson(parsed)), 'utf8').digest('hex').slice(0, 32);
+  } catch {
+    return fileSha256Hex32(filePath);
+  }
+}
+
 function collectOpeningSourceFiles(rootDir: string, currentDir: string, skipRelPosix: string, out: string[]): void {
   let entries: fs.Dirent[] = [];
   try {
@@ -654,11 +683,11 @@ function collectOpeningSourceFiles(rootDir: string, currentDir: string, skipRelP
   }
 }
 
-/** Canonical SHA-256 signatures of `timeline.json` and all episode/engine source files (matching `render_run.mjs` and `board_sheets.py`). */
+/** Canonical SHA-256 signatures of `timeline.json` (excluding `audio`) and all episode/engine source files (matching `render_run.mjs` and `board_sheets.py`). */
 export function computeOpeningInputSigs(projectRoot: string, slug: string): { timelineSig: string | null; sourcesSig: string | null } {
   const tlRel = `src/episodes/${slug}/timeline.json`;
   const tlPath = path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json');
-  const timelineSig = fs.existsSync(tlPath) && fs.statSync(tlPath).isFile() ? fileSha256Hex32(tlPath) : null;
+  const timelineSig = fs.existsSync(tlPath) && fs.statSync(tlPath).isFile() ? timelineSha256Hex32(tlPath) : null;
 
   const epDir = path.join(projectRoot, 'src', 'episodes', slug);
   if (!fs.existsSync(epDir) || !fs.statSync(epDir).isDirectory()) {
@@ -1277,7 +1306,13 @@ export async function reviewEpisodeBoard(
   if (gaveUpOn.length) finalReport.gaveUpOn = gaveUpOn;
   const final = Boolean(opts.final) || gaveUpOn.length > 0;
   finalReport.blocking = finalReport.ok && !finalReport.pass && !final;
-  if (final && finalReport.ok && !finalReport.pass) {
+  if (finalReport.ok && finalReport.pass) {
+    try {
+      fs.rmSync(path.join(outDir, 'DEFAUTS-NON-CORRIGES.md'), { force: true });
+    } catch {
+      /* ignore */
+    }
+  } else if (final && finalReport.ok && !finalReport.pass) {
     const file = writeUnresolvedDefects(projectRoot, slug, finalReport);
     if (file) finalReport.defectsFile = file;
   }
@@ -1360,7 +1395,7 @@ export async function reviewStageCards(provider: Provider, projectRoot: string, 
   if (fs.existsSync(marker)) return null;
   if (shots.some((s) => shotCoded(epDir, String(s.id)))) return null;
   const script = (Array.isArray(ep.script) ? ep.script : []).map((b: any) => String(b?.text ?? '')).join(' ').slice(0, 9_000);
-  const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre et même point de vue ; un dialogue entier filmé face au même mur sans contrechamp (view: "reverse") ; un changement de lieu dans le texte qui reste coincé dans l'ancien décor ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
+  const system = `Tu es réalisateur d'animation. On te donne le script d'un épisode court et la fiche de mise en scène de chaque plan, AVANT que le moindre plan soit codé. Dis seulement ce qui donnera une mauvaise image : un plan sans sujet clair ; une action qu'on ne peut pas dessiner ou trop vague ; un personnage qui change de place sans raison entre deux plans voisins ; un objet qui apparaît ou disparaît sans être pris ni posé ; celui qui agit dans le texte absent du plan ; trois plans de suite au même cadre et même point de vue ; un dialogue entier filmé face au même mur sans alterner les angles (view: "3/4-left", "3/4-right", "ots", "pov") ; un changement de lieu dans le texte qui reste coincé dans l'ancien décor ; un format vertical où deux personnages sont côte à côte au lieu d'être en profondeur. Ne commente pas ce qui va bien. Réponds en JSON strict : {"issues":[{"shot":"S4","problem":"…","fix":"…"}]} avec 8 remarques au plus, les plus graves d'abord ; {"issues":[]} si tout est bon.`;
   const variety = varietyFigures(shots);
   const monotone = variety.longestRun > 6 || variety.topObjectShare > 0.4;
   const varietyNote = `## Variété (comptée sur les fiches)\n${variety.text}\n${

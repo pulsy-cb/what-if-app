@@ -202,7 +202,7 @@ def make_app(project: pathlib.Path):
                     try:
                         tl_obj = json.loads(tl_file.read_text(encoding="utf-8"))
                         tl_obj["audio"] = {}
-                        tl_file.write_text(json.dumps(tl_obj, ensure_ascii=False), encoding="utf-8")
+                        tl_file.write_text(json.dumps(tl_obj, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
                     except Exception:
                         pass
                 try:

@@ -759,7 +759,11 @@ def opening_variety_note(root: Path, kind: str) -> str:
         return ""
     found: list[tuple[float, str]] = []
     for proj in siblings:
-        for ep_file in (proj / "src" / "episodes").glob("*/episode.json"):
+        try:
+            ep_files = list((proj / "src" / "episodes").glob("*/episode.json"))
+        except OSError:
+            continue
+        for ep_file in ep_files:
             try:
                 data = json.loads(ep_file.read_text(encoding="utf-8"))
                 t = str(((data or {}).get("opening") or {}).get("type") or "")

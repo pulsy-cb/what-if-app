@@ -141,8 +141,8 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         }
         emptyTurns++;
         const note = res.truncatedToolCall
-          ? `[orchestrateur] L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Pour écrire shots.tsx sur un épisode long, écris d'abord l'en-tête et les 6-8 premiers plans avec write_file ({ path, content }), puis ajoute les plans suivants par lots de 6-8 avec write_file ({ path, content, append: true }). Reprends immédiatement.`
-          : `[orchestrateur] Réponse coupée par le budget de tokens (${provider.model}, WHATIF_MAX_TOKENS=${config.maxTokens}). Ne réfléchis pas trop longtemps avant d'agir : écris shots.tsx par lots de 6-8 plans avec write_file (puis append: true pour la suite).`;
+          ? `[orchestrateur] L'appel d'outil "${res.truncatedToolCall}" a été coupé par la limite de tokens (sortie trop volumineuse en un seul appel). Écris les fiches par lots avec stage_shots, le décor/casting dans shared.tsx avec write_file, puis chaque plan séparément dans shots/S<N>.tsx avec edit_shot (jamais tout un épisode dans un seul appel). Reprends immédiatement.`
+          : `[orchestrateur] Réponse coupée par le budget de tokens (${provider.model}, WHATIF_MAX_TOKENS=${config.maxTokens}). Ne réfléchis pas trop longtemps avant d'agir : avance par petits appels ciblés (stage_shots, write_file sur shared.tsx, puis edit_shot sur shots/S<N>.tsx).`;
         bus.emit(threadId, 'notice', { text: note });
         db.addMessage(threadId, 'user', note);
         if (emptyTurns <= 5) continue;
@@ -199,7 +199,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           nudges++;
           const nudge =
             `[orchestrateur] La chaîne n'est pas terminée (étapes restantes : ${todo.join(', ')}). ` +
-            `Appelle directement l'outil suivant maintenant (pour un shots.tsx de plus de 10 plans, écris-le par lots de 6-8 plans avec write_file puis write_file { append: true }).`;
+            `Appelle directement l'outil suivant maintenant (écris les fiches avec stage_shots, shared.tsx avec write_file, puis les plans un par un dans shots/S<N>.tsx avec edit_shot).`;
           db.addMessage(threadId, 'user', nudge);
           bus.emit(threadId, 'notice', { text: nudge });
           continue;
@@ -226,7 +226,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
         res.toolCalls.length > 1 &&
         res.toolCalls.every((c) => {
           const t = registry.get(c.name);
-          return t && t.policy === 'auto' && !t.mutating;
+          return t && t.policy === 'auto' && !t.mutating && c.name !== 'stage_shots';
         });
 
       if (allReadOnlyAuto) {
@@ -298,12 +298,18 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
           }
           const tool = registry.get(call.name);
           const started = Date.now();
+          const mustAsk = Boolean(
+            tool &&
+              tool.policy !== 'deny' &&
+              ((config.approvalsMode === 'all' && (tool.policy === 'ask' || tool.mutating || call.name === 'stage_shots')) ||
+                (config.approvalsMode === 'pipeline' && tool.policy === 'ask')),
+          );
           bus.emit(threadId, 'tool_call', {
             id: call.id,
             name: call.name,
             input: call.args,
             policy: tool?.policy ?? 'deny',
-            mustAsk: tool?.policy === 'ask' && config.approvalsMode !== 'off',
+            mustAsk,
           });
 
           let result: ToolResult;
@@ -313,9 +319,7 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
             result = { ok: false, summary: `tool "${call.name}" is disabled by policy` };
           } else {
             let decision: string = 'approved';
-            const gated =
-              config.approvalsMode === 'all' || (config.approvalsMode === 'pipeline' && tool.policy === 'ask');
-            if (tool.policy === 'ask' && gated) {
+            if (mustAsk) {
               decision = await deps.approvals.request(threadId, call.name, call.args, config.approvalTimeoutMs, signal);
             }
             if (decision !== 'approved') {

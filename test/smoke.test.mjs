@@ -2958,8 +2958,8 @@ test('step 3 — sfx_run.py: continuous crossfade ambience (>45s without 12.5s d
     assert.ok(usedClips.includes('room_tone') && usedClips.includes('roof_wind'), 'indoor/outdoor ambience beds placed per location');
     assert.ok(usedClips.includes('paper_land') && usedClips.includes('pop') && usedClips.includes('gasp'), 'semantic prop/phone/shock foley placed');
 
-    // 3. Voice-dominant mix
-    assert.equal(savedTl.audio.voiceVol, 0.8);
+    // 3. Voice-dominant mix (quiet stems boosted up to 1.4x cap without clipping)
+    assert.ok(savedTl.audio.voiceVol >= 0.8 && savedTl.audio.voiceVol <= 1.4, `voiceVol (${savedTl.audio.voiceVol}) within [0.8, 1.4]`);
     assert.ok(savedTl.audio.sfxVol < savedTl.audio.voiceVol, `sfxVol (${savedTl.audio.sfxVol}) stays below voiceVol (${savedTl.audio.voiceVol})`);
 
     // 4. Continuous ambience across the full 45s (8s room_tone/roof_wind crossfade-tiled without dropping to silence at 15s, 28s, or 41s)
@@ -5895,9 +5895,9 @@ test('décors, hands, gaze and things in motion: four places, soft medium blur, 
   // side walls are no longer one frame on a bare wall
   assert.match(rooms, /opts\.leftWall \?\? base\.leftWall \?\? \[\{ p: 'window'/);
   assert.match(rooms, /opts\.rightWall \?\? base\.rightWall \?\? \[\{ p: 'door'/);
-  // --- a medium shot keeps its room readable
-  assert.match(shotSrc, /size === 'close' \|\| size === 'ots' \? 'url\(#blur6\)' : 'url\(#blurSoft\)'/);
-  assert.match(shotSrc, /<filter id="blurSoft"[^>]*><feGaussianBlur stdDeviation=\{1\.4\} \/>/);
+  // --- a medium shot keeps its room readable (with per-instance blurSoftId to prevent nested SVG collisions)
+  assert.match(shotSrc, /size === 'close' \|\| size === 'ots' \? 'url\(#blur6\)' : `url\(#\$\{blurSoftId\}\)`/);
+  assert.match(shotSrc, /<filter id=\{blurSoftId\}[^>]*><feGaussianBlur stdDeviation=\{1\.4\} \/>/);
   // --- the foot follows the shin
   assert.match(person, /const shoe = \(o: \{ root: P; mid: P; end: P \}, side: 1 \| -1 = 1\) => \{/);
   assert.match(person, /const turn = \(-shin \+ f \* 90 \* back\) \* turned \+ side \* 9 \* \(1 - turned\);/);
@@ -7056,13 +7056,17 @@ test('subtitles & music opt-in: sfx_run.py builds timed cues without delivery ta
     const tl1 = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
     assert.equal(tl1.audio.music, undefined, 'sound.music alone never enables music when episode.json.music !== true');
     assert.equal(fs.existsSync(path.join(pubDir, 'music.wav')), false);
-    assert.ok(Array.isArray(tl1.subtitles) && tl1.subtitles.length === 4, `expected 4 subtitle cues, got ${JSON.stringify(tl1.subtitles)}`);
+    assert.ok(Array.isArray(tl1.subtitles) && tl1.subtitles.length === 7, `expected 7 single-line subtitle cues, got ${JSON.stringify(tl1.subtitles)}`);
     const allSubWords = tl1.subtitles.flatMap((c) => c.words.map((w) => w.w));
     assert.ok(!allSubWords.some((w) => w.includes('tense') || w.includes('[')), 'delivery tags are stripped from subtitles');
-    assert.deepEqual(tl1.subtitles[0].words.map((w) => w.w), ['Il', 'arrache', "l'étiquette,"], 'punctuation p is not duplicated');
-    assert.deepEqual(tl1.subtitles[1].words.map((w) => w.w), ['Pourquoi?'], 'single-word sentence forms its own cue');
-    assert.equal(tl1.subtitles[2].words.length, 5, 'long clause splits cleanly at 5 words');
-    assert.deepEqual(tl1.subtitles[3].words.map((w) => w.w), ['devant', 'lui.']);
+    assert.ok(tl1.subtitles.every((c) => c.words.length >= 1 && c.words.length <= 2), 'every subtitle cue has 1 or 2 words');
+    assert.deepEqual(tl1.subtitles[0].words.map((w) => w.w), ['Il', 'arrache']);
+    assert.deepEqual(tl1.subtitles[1].words.map((w) => w.w), ["l'étiquette,"], 'long word + punctuation p is not duplicated and stays on its own cue');
+    assert.deepEqual(tl1.subtitles[2].words.map((w) => w.w), ['Pourquoi?'], 'single-word sentence forms its own cue');
+    assert.deepEqual(tl1.subtitles[3].words.map((w) => w.w), ['La', 'caisse']);
+    assert.deepEqual(tl1.subtitles[4].words.map((w) => w.w), ['sonne', 'trois']);
+    assert.deepEqual(tl1.subtitles[5].words.map((w) => w.w), ['fois', 'devant']);
+    assert.deepEqual(tl1.subtitles[6].words.map((w) => w.w), ['lui.']);
     for (let i = 0; i < tl1.subtitles.length - 1; i++) {
       assert.ok(tl1.subtitles[i].b <= tl1.subtitles[i + 1].a, 'consecutive cues never overlap in frames');
     }
@@ -7090,12 +7094,18 @@ test('subtitles & music opt-in: sfx_run.py builds timed cues without delivery ta
       const active = Subtitles({ tl: tl1, f: 10 }); // frame 10 (~0.33s): inside cue 0, word "arrache" (a=8, b=16)
       assert.ok(active && active.type === 'div', 'renders lower-third container');
       assert.equal(active.props.style.top, portrait ? '68%' : '76%');
+      assert.equal(active.props.style.flexWrap, 'nowrap', 'subtitles never wrap onto a second line');
+      assert.equal(active.props.style.whiteSpace, 'nowrap');
       const spans = active.props.children;
-      assert.equal(spans.length, 3);
+      assert.equal(spans.length, 2);
       assert.equal(spans[0].props.style.color, '#F6EFE3', 'spoken word stays cream');
       assert.equal(spans[1].props.style.color, '#FFE27A', 'current word highlights in gold');
       assert.equal(spans[1].props.style.transform, 'scale(1.08)');
-      assert.equal(spans[2].props.style.color, '#F6EFE3');
+      const longCue = { subtitles: [{ a: 0, b: 30, words: [{ w: 'anticonstitutionnellement', a: 0, b: 30 }] }] };
+      const shrunk = Subtitles({ tl: longCue, f: 5 });
+      if (portrait) {
+        assert.ok(shrunk.props.style.fontSize < active.props.style.fontSize, 'very long word shrinks to stay on one line in 9:16');
+      }
     }
 
     // 3. episode.json.music: true (without needing sound.music) lays & ducks music.wav; subtitles: false removes subtitles

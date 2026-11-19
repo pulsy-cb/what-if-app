@@ -28,6 +28,35 @@ function fileSha256Hex32(filePath) {
   }
 }
 
+function canonicalizeJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+      out[k] = canonicalizeJson(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function timelineSha256Hex32(filePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rest = {};
+      for (const k of Object.keys(parsed).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+        if (k === 'audio') continue;
+        rest[k] = canonicalizeJson(parsed[k]);
+      }
+      return crypto.createHash('sha256').update(JSON.stringify(rest), 'utf8').digest('hex').slice(0, 32);
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(canonicalizeJson(parsed)), 'utf8').digest('hex').slice(0, 32);
+  } catch {
+    return fileSha256Hex32(filePath);
+  }
+}
+
 function collectOpeningSourceFiles(rootDir, currentDir, skipRelPosix, out) {
   let entries = [];
   try {
@@ -53,7 +82,7 @@ function collectOpeningSourceFiles(rootDir, currentDir, skipRelPosix, out) {
 function computeOpeningInputSigs(projectRoot, slug) {
   const tlRel = `src/episodes/${slug}/timeline.json`;
   const tlPath = path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json');
-  const timelineSig = fs.existsSync(tlPath) && fs.statSync(tlPath).isFile() ? fileSha256Hex32(tlPath) : null;
+  const timelineSig = fs.existsSync(tlPath) && fs.statSync(tlPath).isFile() ? timelineSha256Hex32(tlPath) : null;
 
   const epDir = path.join(projectRoot, 'src', 'episodes', slug);
   if (!fs.existsSync(epDir) || !fs.statSync(epDir).isDirectory()) return { timelineSig, sourcesSig: null };

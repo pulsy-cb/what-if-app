@@ -184,7 +184,7 @@ export function applyCardAngles(episodeDir: string, shots: any[]): string[] {
   return done;
 }
 
-const DRAWS_OBJECT = /\bhold\s*:|\bprops\s*:|hand[LR]Prop|\bextra\s*:|\bbehind\s*:|tabletopShot\s*\(|phoneShot\s*\(|\breach\s*:/;
+const DRAWS_OBJECT = /\bhold\s*:|\bprops\s*:|hand[LR]Prop|\bextra\s*:|\bbehind\s*:|tabletopShot\s*\(|phoneShot\s*\(|screenShot\s*\(|\breach\s*:/;
 const WALK_ACT = /\bact\s*[:=]\s*\{?\s*['"](walk|run|sneak)['"]/;
 const REAL_MOVE = /\bwalkTo\s*:|\bat\s*[:=]\s*\{?\s*\(|walkPose\s*\(|\bkf\s*\(/;
 
@@ -223,10 +223,10 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     if (handled.length && !DRAWS_OBJECT.test(body)) {
       out.push(`${id}: the card shows ${handled.join(', ')} but the code draws no object: use hold: '<object>' on the person (or hold: { node: <g>…</g> } for your own drawing), props: [{ on: '<piece>', node: held('<object>') }], or tabletopShot / phoneShot`);
     }
-    if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
+    if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot|screenShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
       out.push(`${id}: the card asks for a ${card.angle} angle but the code has no angle: '${card.angle}'`);
     }
-    if (card.view && card.view !== 'front' && !/\b(tabletopShot|phoneShot)\s*\(/.test(body)) {
+    if (card.view && card.view !== 'front' && !/\b(tabletopShot|phoneShot|screenShot)\s*\(/.test(body)) {
       const escaped = card.view.replace('/', '\\/');
       if (!new RegExp(`\\bview\\s*:\\s*['"]${escaped}['"]`).test(body)) {
         out.push(
@@ -254,7 +254,7 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     const povs: PovEntry[] = shots.map((s) => {
       const id = String(s.id);
       const body = bodies[id] ?? '';
-      const isShot = /\bshot\(\{/.test(body) && !/\b(phoneShot|tabletopShot)\s*\(/.test(body);
+      const isShot = /\bshot\(\{/.test(body) && !/\b(phoneShot|tabletopShot|screenShot)\s*\(/.test(body);
       const place = /\bplace\s*:\s*([A-Za-z0-9_]+)/.exec(body)?.[1] ?? '';
       const cam = /\bcam\s*:\s*['"]([\w-]+)['"]/.exec(body)?.[1] ?? (/\bcam\s*:\s*\{/.test(body) ? 'custom' : 'wide');
       const view = /\bview\s*:\s*['"](front|reverse|left|right|3\/4-left|3\/4-right)['"]/.exec(body)?.[1] ?? 'front';
@@ -302,6 +302,27 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
 
     // No rule asks for a reverse shot any more: demanded by this check and handed out by the shot list, `view: 'reverse'`
     // gave the back of a head in 43 shots of 6 projects (audit 2026-11-16). Three identical points of view in a row stay refused.
+
+    // Long flat streak: 6+ consecutive character shots all locked on view: 'front' + angle: 'level' without any
+    // alternate perspective (3/4, OTS, POV), low/high angle, or insert break.
+    let flatRun: PovEntry[] = [];
+    let flatWarnings = 0;
+    const flushFlatRun = () => {
+      if (flatRun.length >= 6 && flatWarnings < 2) {
+        const first = flatRun[0]!;
+        const last = flatRun[flatRun.length - 1]!;
+        out.push(
+          `${first.id}..${last.id} (${flatRun.length} consecutive character shots) stay locked on view: 'front' and angle: 'level': break the flat streak with view: '3/4-left' | '3/4-right', cam: 'ots' | 'pov', angle: 'low' | 'high', or a phoneShot/tabletopShot/screenShot insert`,
+        );
+        flatWarnings++;
+      }
+      flatRun = [];
+    };
+    for (const p of povs) {
+      if (p.isShot && p.view === 'front' && p.angle === 'level' && !p.hasAltPerspective) flatRun.push(p);
+      else flushFlatRun();
+    }
+    flushFlatRun();
 
     const shotEntries = povs.filter((p) => p.isShot);
     const hasMoveSignals = shotEntries.filter((p) => p.explicitMove !== '').length >= 6 || shots.some((s) => Boolean(s?.move));

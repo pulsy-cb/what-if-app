@@ -342,8 +342,13 @@ const ForegroundAmorce: React.FC<{ spec: ForegroundSpec | undefined; tokens: Pla
   );
 };
 
+let shotSeq = 0;
+
 /** Turn a description into a shot. */
 export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
+  const uid = ++shotSeq;
+  const shellId = `sh${uid}`;
+  const blurSoftId = `blurSoft-${uid}`;
   const pl0 = spec.place as unknown as { items?: unknown; ground?: unknown } | string | undefined;
   if (!pl0 || typeof pl0 === 'string' || typeof pl0.items !== 'function' || !pl0.ground) {
     throw new Error(`shot({ place }) needs what place('name') returns, got ${typeof pl0 === 'string' ? `the string "${pl0}"` : pl0 === undefined ? 'nothing (undefined: is the place defined above this shot, and exported from shared.tsx?)' : 'something else'}. Write const ROOM = place('classroom') once in shared.tsx and pass place: ROOM.`);
@@ -579,7 +584,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       if (c === 'deep') { const d = deepCam(); if (d) return d; }
       const zCam = zoneNow && typeof pl.zoneOf === 'function' ? pl.zoneOf(zoneNow) : null;
       if (zCam && typeof c === 'string' && (people.length === 0 || c === 'establishing')) {
-        return { x: zCam.x, y: zCam.y, zoom: PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom };
+        const zoom = PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom;
+        return { x: zCam.x, y: Math.min(zCam.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * zoom)), zoom };
       }
       if (c === 'ots') {
         const pair = otsPair(on);
@@ -596,7 +602,10 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
           const raw = frameOn('pov', focusOn(lookIdx), yawAt(lookIdx));
           return { x: raw.x, y: Math.min(raw.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * raw.zoom)), zoom: raw.zoom };
         }
-        if (zCam) return { x: zCam.x, y: zCam.y, zoom: PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom };
+        if (zCam) {
+          const zoom = PORTRAIT ? zCam.zoom * 1.45 : zCam.zoom;
+          return { x: zCam.x, y: Math.min(zCam.y, pl.ground.project(0.5, 1).y - FRAME.h / (2 * zoom)), zoom };
+        }
         const ahead = pl.ground.project(0.5, 0.28);
         return { x: ahead.x, y: ahead.y - 190 * ahead.scale, zoom: PORTRAIT ? 1.75 : 1.18 };
       }
@@ -621,7 +630,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       const size = typeof camNow.cam === 'string' ? camNow.cam : null;
       if (!size || size === 'ots' || size === 'pov' || size === 'establishing' || !people[camNow.on]) return c;
       const halfW = FRAME.w / (2 * c.zoom);
-      const drift = (move === 'track' ? 0.065 : move === 'pan' ? 0.03 : 0) * (FRAME.w / c.zoom);
+      const drift = (move === 'track' ? 0.075 : move === 'pan' ? 0.045 : 0) * (FRAME.w / c.zoom);
       const box = (i: number) => { const fp = personFramePoint(i); return { lo: fp.x - 60 * fp.scale, hi: fp.x + 60 * fp.scale }; };
       const room = halfW - drift;
       const s = box(camNow.on);
@@ -645,11 +654,12 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
       return { ...c, x: clamp(c.x, lo, hi) };
     };
     const base = keepHeads(blended);
+    const ek = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
     const zoom = base.zoom * (
-      move === 'push' ? 1 + 0.05 * k :
-      move === 'pull' ? 1.05 - 0.05 * k :
-      move === 'pan' ? 1 + 0.015 * k :
-      move === 'track' ? 1 + 0.02 * k :
+      move === 'push' ? 1 + 0.1 * ek :
+      move === 'pull' ? 1.1 - 0.1 * ek :
+      move === 'pan' ? 1 + 0.02 * ek :
+      move === 'track' ? 1 + 0.025 * ek :
       move === 'whip' ? 1 + 0.03 * (1 - ease01(t / 9)) :
       1
     );
@@ -658,8 +668,8 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const povOwner = isPov && people.length > 0 ? clamp(camNow.on < 0 ? 0 : camNow.on, 0, people.length - 1) : -1;
     const otsActive = size === 'ots' ? otsPair(camNow.on) : null;
     const panX = (
-      move === 'pan' ? (k - 0.5) * (FRAME.w / zoom) * 0.06 :
-      move === 'track' ? (k - 0.5) * (FRAME.w / zoom) * 0.13 :
+      move === 'pan' ? (ek - 0.5) * (FRAME.w / zoom) * 0.09 :
+      move === 'track' ? (ek - 0.5) * (FRAME.w / zoom) * 0.15 :
       move === 'whip' ? (1 - ease01(t / 9)) * (FRAME.w / zoom) * 0.26 :
       0
     ) + (isPov ? Math.sin(t / 14) * (6 / zoom) : 0);
@@ -717,7 +727,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const soft = spec.background !== 'sharp' && spec.focus === undefined && (size === 'close' || size === 'ots' || size === 'medium') && people[focusSubjectIdx];
     const focus = spec.focus ?? (soft ? ('u' in whereOf(people[focusSubjectIdx]!, focusSubjectIdx) ? (whereOf(people[focusSubjectIdx]!, focusSubjectIdx) as { w: number }).w : undefined) : undefined);
     // a medium shot keeps its room readable: half the frames of an episode were a face on a smear (audit 2026-11-16)
-    const shellFilter = soft ? (size === 'close' || size === 'ots' ? 'url(#blur6)' : 'url(#blurSoft)') : undefined;
+    const shellFilter = soft ? (size === 'close' || size === 'ots' ? 'url(#blur6)' : `url(#${blurSoftId})`) : undefined;
     // an angle in a flat drawing: stretch the world about the subject's feet and move the frame toward ceiling or floor
     const feet = people[focusSubjectIdx] ? spotOfPerson(focusSubjectIdx).y : base.y;
     const tall = angle === 'low' ? 1.14 : angle === 'high' ? 0.88 : 1;
@@ -739,12 +749,12 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
     const povHeldNode = povHoldSpec ? (povHoldSpec.node ?? held(povHoldSpec.what as string, povHoldSpec)) : undefined;
     return (
       <g>
-      <defs><filter id="blurSoft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation={1.4} /></filter></defs>
+      <defs><filter id={blurSoftId} x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation={1.4} /></filter></defs>
       <g transform={camT(base.x + panX + jolt.x / zoom, base.y + panY + lift * viewH + jolt.y / zoom, zoom)}>
       <g transform={angleT}>
         <Stage ground={pl.ground} t={t} focus={focus}>
           <g filter={shellFilter}>
-            <pl.Shell t={t} />
+            <pl.Shell t={t} id={shellId} />
           </g>
           {pl.items(t)}
           {behindNode ? <StageItem depth={0.001}>{behindNode}</StageItem> : null}

@@ -108,10 +108,19 @@ export type Character = {
 };
 
 const INK = '#1D2033';
+const normalizeHex = (hex: string): { rgb: string; alpha: string } | null => {
+  const raw = hex.trim().replace(/^#/, '');
+  if (/^[0-9a-f]{3}$/i.test(raw)) return { rgb: `${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`, alpha: '' };
+  if (/^[0-9a-f]{6}$/i.test(raw)) return { rgb: raw, alpha: '' };
+  if (/^[0-9a-f]{8}$/i.test(raw)) return { rgb: raw.slice(0, 6), alpha: raw.slice(6) };
+  return null;
+};
 const shadeOf = (hex: string, k = 0.8): string => {
-  const n = parseInt(hex.slice(1), 16);
+  const parsed = normalizeHex(hex);
+  if (!parsed) return hex;
+  const n = parseInt(parsed.rgb, 16);
   const c = (v: number) => Math.max(0, Math.min(255, Math.round(v * k))).toString(16).padStart(2, '0');
-  return `#${c((n >> 16) & 255)}${c((n >> 8) & 255)}${c(n & 255)}`;
+  return `#${c((n >> 16) & 255)}${c((n >> 8) & 255)}${c(n & 255)}${parsed.alpha}`;
 };
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const colorOf = (name: string | undefined, table: Record<string, string>, fallback: string, label = 'colour'): string => {
@@ -125,9 +134,9 @@ const colorOf = (name: string | undefined, table: Record<string, string>, fallba
 };
 
 const lumOf = (hex: string): number => {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return 0.5;
-  const n = parseInt(m[1]!, 16);
+  const parsed = normalizeHex(hex);
+  if (!parsed) return 0.5;
+  const n = parseInt(parsed.rgb, 16);
   return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
 };
 /** Hair within 0.12 of the skin's brightness: darker when it is darker or equal, lighter when it is lighter. */
@@ -135,11 +144,11 @@ const separateHair = (hair: string, skin: string): string => {
   const dh = lumOf(hair) - lumOf(skin);
   if (Math.abs(dh) >= 0.12) return hair;
   if (dh <= 0) return shadeOf(hair, 0.45);
-  const m = /^#?([0-9a-f]{6})$/i.exec(hair.trim());
-  if (!m) return hair;
-  const n = parseInt(m[1]!, 16);
+  const parsed = normalizeHex(hair);
+  if (!parsed) return hair;
+  const n = parseInt(parsed.rgb, 16);
   const up = (v: number) => Math.min(255, Math.round(v + (255 - v) * 0.5));
-  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => up(v).toString(16).padStart(2, '0')).join('')}`;
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => up(v).toString(16).padStart(2, '0')).join('')}${parsed.alpha}`;
 };
 
 /** A small seeded generator: the same seed gives the same character. Every draw is taken in a fixed order. */
@@ -198,12 +207,19 @@ export const cast = (input: CastSpec = {}): Character => {
   const seeded = {
     skin: pick(Object.keys(SKINS)),
     hairStyle: pick(HAIR_POOL[kind]),
-    hairColor: pick(['black', 'brown', 'chestnut', 'brown', 'black', 'auburn'] as const),
+    hairColor:
+      spec.body === 'elder'
+        ? pick(['grey', 'silver', 'white', 'grey', 'brown'] as const)
+        : pick(['black', 'brown', 'chestnut', 'auburn', 'blond', 'red', 'ginger', 'brown', 'black', 'blond', 'grey'] as const),
     eyes: pick(['round', 'round', 'almond', 'sleepy', 'wide'] as FaceSpec['eyes'][]),
     brows: pick(['thin', 'thick', 'arched', 'thin'] as FaceSpec['brows'][]),
     nose: pick(['none', 'button', 'long', 'wide'] as FaceSpec['nose'][]),
+    marks: (spec.body === 'elder' ? 'wrinkles' : 'none') as FaceSpec['marks'],
     top: pick(['tshirt', 'hoodie', 'shirt', 'sweater']),
-    topColor: pick(['navy', 'teal', 'slate', 'plum', 'olive', 'sky', 'green', 'charcoal', 'bordeaux']),
+    topColor: pick([
+      'coral', 'mustard', 'yellow', 'mint', 'rose', 'orange', 'cyan',
+      'teal', 'sky', 'green', 'navy', 'plum', 'olive', 'bordeaux', 'slate', 'charcoal',
+    ]),
     legs: pick(['jeans', 'pants', 'pants']),
     legsColor: pick(['denim', 'black', 'khaki', 'grey', 'navy']),
     feetColor: pick(['black', 'white', 'brown', 'grey', 'navy']),
@@ -248,7 +264,7 @@ export const cast = (input: CastSpec = {}): Character => {
     eyes: spec.face?.eyes ?? seeded.eyes,
     brows: spec.face?.brows ?? seeded.brows,
     nose: spec.face?.nose ?? seeded.nose,
-    marks: spec.face?.marks ?? 'none',
+    marks: spec.face?.marks ?? seeded.marks,
     facial: explicitFacial ?? 'none',
   };
 

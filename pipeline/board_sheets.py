@@ -11,6 +11,7 @@ Prints one sheet path per line (relative to the project root) and writes out/<sl
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import unicodedata
@@ -132,6 +133,27 @@ def file_sha256_hex32(p: Path) -> str | None:
         return None
 
 
+def _canonicalize_json(value):
+    if isinstance(value, list):
+        return [_canonicalize_json(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _canonicalize_json(value[k]) for k in sorted(value.keys())}
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return value
+
+
+def timeline_sha256_hex32(p: Path) -> str | None:
+    try:
+        parsed = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            parsed = {k: v for k, v in parsed.items() if k != "audio"}
+        canonical = json.dumps(_canonicalize_json(parsed), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+    except (OSError, ValueError):
+        return file_sha256_hex32(p)
+
+
 def _collect_opening_source_files(root: Path, current: Path, skip_rel_posix: str, out: list[str]) -> None:
     try:
         entries = list(current.iterdir())
@@ -152,10 +174,10 @@ def _collect_opening_source_files(root: Path, current: Path, skip_rel_posix: str
 
 
 def compute_opening_input_sigs(project: Path, slug: str) -> tuple[str | None, str | None]:
-    """Canonical SHA-256 signatures of timeline.json and episode/engine sources (matching render_run.mjs & reviewer.ts)."""
+    """Canonical SHA-256 signatures of timeline.json (excluding audio) and episode/engine sources (matching render_run.mjs & reviewer.ts)."""
     tl_rel = f"src/episodes/{slug}/timeline.json"
     tl_path = project / "src" / "episodes" / slug / "timeline.json"
-    timeline_sig = file_sha256_hex32(tl_path) if tl_path.is_file() else None
+    timeline_sig = timeline_sha256_hex32(tl_path) if tl_path.is_file() else None
 
     ep_dir = project / "src" / "episodes" / slug
     if not ep_dir.is_dir():

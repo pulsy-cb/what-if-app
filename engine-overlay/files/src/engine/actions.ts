@@ -59,7 +59,17 @@ export type Stance = keyof typeof STANCES;
 // ---------------------------------------------------------------------------------------------- gestures
 
 const GESTURE_TABLE = {
-  idle: (w: number) => ({ armL: { a: 14 + w, b: 12 }, armR: { a: 14 - w, b: 12 } }),
+  idle: (w: number, _m: number, _w2: number, t = 0) => {
+    const breath = Math.sin(t * 0.085);
+    const microSway = Math.sin(t * 0.055 + 0.7);
+    return {
+      armL: { a: 14 + w * 1.6 + breath * 1.4, b: 12 + breath * 1.2 },
+      armR: { a: 14 - w * 1.6 + breath * 1.4, b: 12 + breath * 1.2 },
+      headTilt: microSway * 1.6,
+      squash: breath * 0.014,
+      sway: microSway * 2.2,
+    };
+  },
   talk: (w: number, m: number) => ({ armR: { a: 48 + w * 14, b: 42 + w * 10 }, armL: { a: 16, b: 10 }, headTilt: w * 3, talk: m }),
   explain: (w: number, m: number) => ({ armR: { a: 62 + w * 12, b: 36 }, armL: { a: 44 - w * 10, b: 32 }, headTilt: 3 + w * 2, talk: m }),
   question: (w: number, m: number) => ({ armR: { a: 68 + w * 10, b: 54 }, armL: { a: 28, b: 24 }, headTilt: 6, talk: m }),
@@ -209,14 +219,32 @@ const CLIP_TABLE = {
 export type Clip = keyof typeof CLIP_TABLE;
 export const CLIPS = Object.keys(CLIP_TABLE) as Clip[];
 
-/** One action through time, starting at frame `from`. Before it starts it holds its first pose, after it ends its last one. */
+/** Subtle breathing & micro-sway added after a one-shot clip or custom action finishes so the character never freezes. */
+const applyHoldBreath = (out: ActBits, overFrames: number, amp = 1, includeArms = true): ActBits => {
+  if (overFrames <= 0) return out;
+  const holdK = smooth(clamp01(overFrames / 12)) * amp;
+  const breath = Math.sin(overFrames * 0.09);
+  const microSway = Math.sin(overFrames * 0.06 + 0.5);
+  return {
+    ...out,
+    squash: (out.squash ?? 0) + breath * 0.013 * holdK,
+    headTilt: (out.headTilt ?? 0) + microSway * 1.2 * holdK,
+    sway: (out.sway ?? 0) + microSway * 1.8 * holdK,
+    ...(includeArms && out.armL ? { armL: { a: out.armL.a + breath * 1.5 * holdK, b: out.armL.b + breath * 1.0 * holdK } } : {}),
+    ...(includeArms && out.armR ? { armR: { a: out.armR.a + breath * 1.5 * holdK, b: out.armR.b + breath * 1.0 * holdK } } : {}),
+  };
+};
+
+/** One action through time, starting at frame `from`. Before it starts it holds its first pose, after it ends it breathes gently on its last pose. */
 export const clip = (name: Clip, t: number, opts: Ctx & { from?: number; dur?: number } = {}): ActBits => {
   const def = CLIP_TABLE[name];
   const tempo = opts.tempo ?? 1;
   const dur = Math.max(1, (opts.dur ?? def.dur) / tempo);
   const f = Math.max(0, t - (opts.from ?? 0));
   const yaw = opts.yaw ?? 0;
-  const out = def.fn(clamp01(f / dur), f * tempo, dur, { lean: leanDir(yaw), amp: opts.amp ?? 1 });
+  const amp = opts.amp ?? 1;
+  let out = def.fn(clamp01(f / dur), f * tempo, dur, { lean: leanDir(yaw), amp });
+  if (!def.loop && f > dur) out = applyHoldBreath(out, (f - dur) * tempo, amp);
   if (out.expr === undefined) delete out.expr;
   return mirrorHead(out, yaw);
 };
@@ -282,8 +310,9 @@ const own = (spec: OwnActionSpec, t: number, opts: Ctx & { from?: number; dur?: 
   if (spec.expr) out.expr = spec.expr;
   if (spec.handL) out.handL = spec.handL;
   if (spec.handR) out.handR = spec.handR;
+  const breathed = !spec.loop && f > dur ? applyHoldBreath(out, (f - dur) * tempo, opts.amp ?? 1, false) : out;
   // like a gesture: facing screen-left, the working arm is the near one
-  return mirrorHead(yaw < 0 ? swapArms(out) : out, yaw);
+  return mirrorHead(yaw < 0 ? swapArms(breathed) : breathed, yaw);
 };
 // The ones the stories asked for first (prof, 2026-11-12), written with the same tool anyone has:
 /** leans over a desk or a counter, one hand on it */

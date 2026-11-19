@@ -82,20 +82,56 @@ GLASSY = {"glass", "bottle", "mug", "cup", "keys", "key", "plate", "tray", "buck
 VFX_CLIP = {"shock": ("gasp", 0.22), "focus": ("sparkle", 0.18), "question": ("pop", 0.14), "anger": ("crack", 0.16), "idea": ("ding", 0.16)}
 
 
+def _iter_shot_sources(ep_dir: Path) -> list[tuple[str, str]]:
+    """Return [(shot_id, code), ...] from modular shots/S*.tsx, falling back to monolithic shots.tsx."""
+    shot_files = sorted((ep_dir / "shots").glob("S*.tsx")) if (ep_dir / "shots").is_dir() else []
+    if shot_files:
+        out: list[tuple[str, str]] = []
+        for f in shot_files:
+            try:
+                out.append((f.stem, f.read_text(encoding="utf-8")))
+            except OSError:
+                continue
+        return out
+    mono = ep_dir / "shots.tsx"
+    if not mono.is_file():
+        return []
+    try:
+        src = mono.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    matches = list(re.finditer(r"^export\s+const\s+(S\d+)\b", src, re.M))
+    out = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(src)
+        out.append((m[1], src[start:end]))
+    return out
+
+
 def real_places(ep_dir: Path) -> dict[str, str]:
     """Where each shot really is: the place its code uses, not the guess of the shot list.
 
     The shot list wrote `study` on shots that the code set in the classroom, and the ambience followed the guess."""
-    try:
-        shared = (ep_dir / "shared.tsx").read_text(encoding="utf-8")
-    except OSError:
+    shared_chunks: list[str] = []
+    for cand in (ep_dir / "shared.tsx", ep_dir / "shots.tsx"):
+        try:
+            if cand.is_file():
+                shared_chunks.append(cand.read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    if not shared_chunks:
         return {}
-    recipes = {m[1]: PLACE_ALIASES.get(m[2], m[2]) for m in re.finditer(r"export const (\w+)\s*=\s*place\(\s*'([\w-]+)'", shared)}
+    shared = "\n".join(shared_chunks)
+    recipes = {
+        m[1]: PLACE_ALIASES.get(m[3], m[3])
+        for m in re.finditer(r"(?:export\s+)?const\s+(\w+)\s*=\s*place\(\s*(['\"])([\w-]+)\2", shared)
+    }
     out: dict[str, str] = {}
-    for f in sorted((ep_dir / "shots").glob("S*.tsx")):
-        m = re.search(r"\bplace:\s*(\w+)", f.read_text(encoding="utf-8"))
+    for sid, code in _iter_shot_sources(ep_dir):
+        m = re.search(r"\bplace:\s*(\w+)", code)
         if m and m[1] in recipes:
-            out[f.stem] = recipes[m[1]]
+            out[sid] = recipes[m[1]]
     return out
 
 
@@ -105,12 +141,7 @@ def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
     The sound used to be decided from the shot list, before any shot was written: 701 shots of 891 had no sound at all
     while their code held 171 vfx, 89 tags, 82 walks and 22 bursts (26 episodes, 2026-11-16)."""
     out: dict[str, list[list]] = {}
-    for f in sorted((ep_dir / "shots").glob("S*.tsx")):
-        sid = f.stem
-        try:
-            code = f.read_text(encoding="utf-8")
-        except OSError:
-            continue
+    for sid, code in _iter_shot_sources(ep_dir):
         n = max(8, int(lens.get(sid, 60)))
         evs: list[list] = []
 
@@ -132,19 +163,19 @@ def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
             add(int(at[1]) if at else 2, "pop", 0.16)
         for obj in re.findall(r"\{[^{}]*\}", code):
             at = re.search(r"\bat:\s*(\d+)", obj)
-            kind = re.search(r"\bkind:\s*'([\w-]+)'", obj)
-            if at and kind and kind[1] in VFX_CLIP:
-                add(int(at[1]), VFX_CLIP[kind[1]][0], VFX_CLIP[kind[1]][1])
-            if at and re.search(r"\bact:\s*'(slam|bang)'", obj):
+            kind = re.search(r"\bkind:\s*(['\"])([\w-]+)\1", obj)
+            if at and kind and kind[2] in VFX_CLIP:
+                add(int(at[1]), VFX_CLIP[kind[2]][0], VFX_CLIP[kind[2]][1])
+            if at and re.search(r"\bact:\s*(['\"])(slam|bang)\1", obj):
                 add(int(at[1]) + 6, "land", 0.22)
-        if re.search(r"^\s*\{?[^\n]*\bact:\s*'(slam|bang)'", code, re.M) and not any(e[1] == "land" for e in evs):
+        if re.search(r"^\s*\{?[^\n]*\bact:\s*(['\"])(slam|bang)\1", code, re.M) and not any(e[1] == "land" for e in evs):
             add(6, "land", 0.22)
-        what = re.search(r"\bhold:\s*(?:\{\s*what:\s*)?'([\w-]+)'", code)
-        glassy = bool(what and what[1] in GLASSY)
+        what = re.search(r"\bhold:\s*(?:\{\s*what:\s*)?(['\"])([\w-]+)\1", code)
+        glassy = bool(what and what[2] in GLASSY)
         m = re.search(r"\brelease:\s*\{([^{}]*)\}", code)
         if m:
             at = re.search(r"\bat:\s*(\d+)", m[1])
-            thrown = re.search(r"how:\s*'(throw|drop)'", m[1])
+            thrown = re.search(r"how:\s*(['\"])(throw|drop)\1", m[1])
             dur = re.search(r"\bdur:\s*(\d+)", m[1])
             land_at = (int(at[1]) if at else 20) + (int(dur[1]) if dur else 14 if thrown else 0)
             add(land_at, "shatter" if glassy and thrown else "clink" if glassy else "paper_land", 0.24)
@@ -155,7 +186,7 @@ def code_events(ep_dir: Path, lens: dict[str, int]) -> dict[str, list[list]]:
         if "phoneShot(" in code:
             add(6, "pop", 0.22)
         if "tabletopShot(" in code:
-            add(3, "clink" if re.search(r"kind:\s*'(mug|glass|keys|ring|pills)'", code) else "paper_land", 0.22)
+            add(3, "clink" if re.search(r"kind:\s*(['\"])(mug|glass|keys|ring|pills)\1", code) else "paper_land", 0.22)
         if evs:
             # A short shot carries one sound, the one that matters most; under three seconds, two. Short formats ran at
             # 32 to 39 sounds a minute, one every 1.7 s (2026-11-17), and the ear stops telling them apart.
@@ -183,9 +214,9 @@ def auto_sound(ep: dict, tl: dict, ep_dir: Path, shots: list[dict], title_idx: i
     return snd
 
 
-def build_subtitles(words: list[dict], fps: int, total: int) -> list[dict]:
-    """Narration cues for the engine: 2 to 5 words each, cut after punctuation or a pause, in global frames.
-    Bracketed delivery tags ([tense]) are never shown."""
+def build_subtitles(words: list[dict], fps: int, total: int, max_words: int = 2, max_chars: int = 14) -> list[dict]:
+    """Narration cues for the engine: 1 to 2 words each (always a single line), cut after punctuation, a pause,
+    or when adding the next word would exceed max_chars, in global frames. Bracketed delivery tags ([tense]) are never shown."""
     toks = []
     for w in words or []:
         if not isinstance(w, dict):
@@ -204,7 +235,9 @@ def build_subtitles(words: list[dict], fps: int, total: int) -> list[dict]:
         nxt = toks[i + 1] if i + 1 < len(toks) else None
         punct = bool(re.search(r"[.,;:!?\u2026]$", t["w"]))
         pause = nxt is not None and nxt["s"] - t["e"] > 0.35
-        if nxt is None or len(cur) >= 5 or ((punct or pause) and len(cur) >= 2) or (punct and nxt is not None and len(cur) == 1 and re.search(r"[.!?\u2026]$", t["w"])):
+        cur_len = sum(len(x["w"]) for x in cur) + max(0, len(cur) - 1)
+        too_wide = nxt is not None and (cur_len + 1 + len(nxt["w"]) > max_chars)
+        if nxt is None or len(cur) >= max_words or punct or pause or too_wide:
             cues.append(cur)
             cur = []
     out = []
@@ -610,9 +643,11 @@ def main(argv: list[str]) -> int:
     voice_file = next((pub / f"voice.{ext}" for ext in ("wav", "mp3") if (pub / f"voice.{ext}").is_file()), None)
     L = {"sfx_lu": -4.5, "music_lu": -11.0}
     L.update(S.get("levels") or {})
-    v_lufs, _ = loudness(voice_file) if voice_file else (-16.0, -1.0)
+    v_lufs, v_peak = loudness(voice_file) if voice_file else (-16.0, -1.0)
     if not np.isfinite(v_lufs):
         v_lufs = -16.0
+    if not np.isfinite(v_peak):
+        v_peak = -1.0
     s_lufs, _ = loudness(pub / "sfx.wav")
     if not np.isfinite(s_lufs):
         s_lufs = -28.0
@@ -628,7 +663,15 @@ def main(argv: list[str]) -> int:
     if has_music:
         gain_db["music"] = min(-6.0, v_lufs + float(L["music_lu"]) - m_lufs)
     top = max(gain_db.values())
-    vols = {k: round(min(1.0, 0.8 * 10 ** ((g - top) / 20.0)), 4) for k, g in gain_db.items()}
+    # Target -16 LUFS for un-normalized quiet voice stems without clipping peaks above -1 dBFS (cap at 1.4x),
+    # while keeping the 0.8 headroom baseline for stems already at or above -16 LUFS.
+    if v_lufs < -16.0:
+        needed_vol = 10 ** ((-16.0 - v_lufs) / 20.0)
+        peak_cap = 10 ** ((-1.0 - v_peak) / 20.0)
+        voice_base = max(0.8, min(1.4, needed_vol, peak_cap))
+    else:
+        voice_base = 0.8
+    vols = {k: round(min(1.4, voice_base * 10 ** ((g - top) / 20.0)), 4) for k, g in gain_db.items()}
 
     audio = dict(tl.get("audio") or {})
     if voice_file:

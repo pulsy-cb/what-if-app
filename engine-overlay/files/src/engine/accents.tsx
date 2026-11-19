@@ -779,11 +779,32 @@ export const tabletopShot = (spec: TabletopSpec): React.FC<{ t: number; len: num
             if (dt < 0) return null;
             const enter = at > 0 ? backOut3(dt / 8) : 1;
             const slideY = at > 0 ? (1 - easeOut3(dt / 8)) * -90 : 0;
+            const dropHand = (spec.hands ?? []).find((h) => h.action === 'drop' && (h.target ?? 0) === idx);
+            let dropY = 0;
+            let dropScale = 1;
+            let dropRot = 0;
+            if (dropHand) {
+              const hdt = t - (dropHand.at ?? 6);
+              if (hdt >= 0) {
+                if (hdt < 10) {
+                  const lift = easeOut3(clamp01(hdt / 10));
+                  dropY = -28 * lift;
+                  dropScale = 1 + 0.1 * lift;
+                  dropRot = -7 * lift;
+                } else {
+                  const settle = easeOut3(clamp01((hdt - 10) / 8));
+                  const bounce = Math.sin(clamp01((hdt - 10) / 10) * Math.PI) * 0.05;
+                  dropY = -28 * (1 - settle);
+                  dropScale = 1 + 0.1 * (1 - settle) - bounce;
+                  dropRot = -7 * (1 - settle);
+                }
+              }
+            }
             const ix = 960 + (it.dx ?? 0);
-            const iy = 540 + (it.dy ?? 0) + slideY;
-            const sc = (it.scale ?? 1) * (at > 0 ? 0.82 + 0.18 * enter : 1);
+            const iy = 540 + (it.dy ?? 0) + slideY + dropY;
+            const sc = (it.scale ?? 1) * (at > 0 ? 0.82 + 0.18 * enter : 1) * dropScale;
             return (
-              <g key={idx} transform={`translate(${ix} ${iy}) rotate(${it.rot ?? 0}) scale(${sc})`}>
+              <g key={idx} transform={`translate(${ix} ${iy}) rotate(${(it.rot ?? 0) + dropRot}) scale(${sc})`}>
                 {renderTabletopItem(it, t, len)}
               </g>
             );
@@ -796,7 +817,11 @@ export const tabletopShot = (spec: TabletopSpec): React.FC<{ t: number; len: num
             const target = spec.items[h.target ?? 0] ?? { dx: 0, dy: 0 };
             const tx = 960 + (target.dx ?? 0);
             const ty = 540 + (target.dy ?? 0);
-            const reach = easeOut3(Math.min(1, dt / 12));
+            const isDrop = h.action === 'drop';
+            const reach = easeOut3(Math.min(1, dt / (isDrop ? 10 : 12)));
+            const openK = isDrop ? easeOut3(clamp01((dt - 10) / 7)) : 0;
+            const retract = isDrop ? easeOut3(clamp01((dt - 12) / 14)) * 0.34 : 0;
+            const travel = reach - retract;
             const tremble = h.action === 'tremble' ? Math.sin(t * 1.9) * 5 : 0;
             const side = h.side ?? 'bottom';
             const skin = h.skin ?? h.who?.skin ?? '#E9BE9A';
@@ -806,27 +831,31 @@ export const tabletopShot = (spec: TabletopSpec): React.FC<{ t: number; len: num
             const startY = side === 'bottom' ? VB.y + VB.h + 150 : ty + 60;
             const stopX = side === 'left' ? tx - 95 : side === 'right' ? tx + 95 : tx + 24;
             const stopY = side === 'bottom' ? ty + 115 : ty + 20;
-            const hx = startX + (stopX - startX) * reach + tremble;
-            const hy = startY + (stopY - startY) * reach;
+            const hx = startX + (stopX - startX) * travel + tremble;
+            const hy = startY + (stopY - startY) * travel;
             const ang = (Math.atan2(ty - hy, tx - hx) * 180) / Math.PI + 90;
 
             return (
               <g key={idx} transform={`translate(${hx} ${hy}) rotate(${ang})`}>
                 <ellipse cx={8} cy={40} rx={52} ry={160} fill="#000" opacity={0.2} />
                 <ellipse cx={0} cy={0} rx={44} ry={52} fill={skin} stroke={INK} strokeWidth={4} />
-                {[-24, -8, 10, 26].map((fx, fIdx) => (
-                  <rect
-                    key={fIdx}
-                    x={fx - 8}
-                    y={h.action === 'point' && fIdx !== 1 ? -46 : -78}
-                    width={16}
-                    height={h.action === 'point' && fIdx !== 1 ? 34 : 58}
-                    rx={8}
-                    fill={skin}
-                    stroke={INK}
-                    strokeWidth={3.5}
-                  />
-                ))}
+                {[-24, -8, 10, 26].map((fx, fIdx) => {
+                  const spread = (fIdx - 1.5) * openK;
+                  return (
+                    <rect
+                      key={fIdx}
+                      x={fx - 8 + spread * 6}
+                      y={h.action === 'point' && fIdx !== 1 ? -46 : -78 - openK * 4}
+                      width={16}
+                      height={h.action === 'point' && fIdx !== 1 ? 34 : 58 + openK * 4}
+                      rx={8}
+                      fill={skin}
+                      stroke={INK}
+                      strokeWidth={3.5}
+                      transform={openK > 0 ? `rotate(${spread * 8} ${fx} -20)` : undefined}
+                    />
+                  );
+                })}
                 <rect x={-48} y={38} width={96} height={380} rx={28} fill={sleeve} stroke={INK} strokeWidth={4} />
               </g>
             );

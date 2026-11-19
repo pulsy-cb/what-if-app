@@ -18,7 +18,7 @@ type Op =
  * Edits to one file, applied all together or not at all: if any anchor is missing (the engine copy differs), nothing
  * in the group is written and the reason is reported. `marker` is text that is present once the group has been applied.
  */
-type PatchGroup = { file: string; marker: string; ops: Op[] };
+type PatchGroup = { file: string; marker: string; ops: Op[]; optional?: boolean };
 
 const PATCHES: PatchGroup[] = [
   {
@@ -162,6 +162,26 @@ const PATCHES: PatchGroup[] = [
     marker: "export * from './views';",
     ops: [{ kind: 'after', anchor: "export * from './rig';\n", insert: "export * from './views';\n" }],
   },
+  {
+    // lighten the heavy 55% black vignette and eliminate the 6% white haze grain in Grade so episodes stay crisp and vivid
+    file: 'src/engine/episode.tsx',
+    marker: '0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.015 0',
+    optional: true,
+    ops: [
+      {
+        kind: 'replace',
+        find: '<stop offset="100%" stopColor="#000" stopOpacity={0.55} />',
+        replace: '<stop offset="100%" stopColor="#000" stopOpacity={0.2} />',
+        count: 1,
+      },
+      {
+        kind: 'replace',
+        find: 'values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0"',
+        replace: 'values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.015 0"',
+        count: 1,
+      },
+    ],
+  },
 ];
 
 /** The edited text, or the reason the group cannot be applied to this engine copy. */
@@ -223,7 +243,7 @@ export function applyEngineOverlay(projectRoot: string, opts: { dryRun?: boolean
   for (const g of PATCHES) {
     const target = path.join(projectRoot, g.file);
     if (!fs.existsSync(target)) {
-      report.skipped.push({ file: g.file, reason: 'file not found' });
+      if (!g.optional) report.skipped.push({ file: g.file, reason: 'file not found' });
       continue;
     }
     const src = fs.readFileSync(target, 'utf8');
@@ -233,7 +253,7 @@ export function applyEngineOverlay(projectRoot: string, opts: { dryRun?: boolean
     }
     const res = applyGroup(src, g);
     if ('error' in res) {
-      report.skipped.push({ file: g.file, reason: `${res.error} (this engine copy differs): nothing in this file was changed` });
+      if (!g.optional) report.skipped.push({ file: g.file, reason: `${res.error} (this engine copy differs): nothing in this file was changed` });
       continue;
     }
     if (!report.patched.includes(g.file)) report.patched.push(g.file);

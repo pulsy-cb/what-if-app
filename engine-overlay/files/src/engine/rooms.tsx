@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, makeRoom } from './room';
 import type { Room } from './room';
 import { RoomShell, FloorPlant, FloorShadow, WallFrame, WallClock, Pendant, pendantLight } from './furnish';
-import { LightVeil, Dust, Glow, RoomCorners } from './light';
+import { LightVeil, Dust, Glow } from './light';
 import { WallBoard, PinBoard } from './pieces';
 import { StageItem, roomGround } from './stage';
 import type { Ground } from './stage';
@@ -30,19 +30,19 @@ export type Mood = 'day' | 'dusk' | 'night';
 const solid = (top: string, front: string, side: string): Solid => ({ top, front, side });
 export const MOODS: Record<Mood, RoomTokens> = {
   day: {
-    wall: '#D8D0BE', side: '#C2B9A5', ceiling: '#EDE8DC', floor: '#A39580', floorLine: '#8C7F6A', floorKind: 'tiles', trim: '#6B5E4C',
-    wood: solid('#DDB67E', '#C99B63', '#A87D4C'), fabric: solid('#7FA3B8', '#6A8DA2', '#577888'), metal: '#8A8F99',
-    sky: ['#86C1EC', '#BDE0F4', '#EAF4E6'], frame: '#EDE8DC', curtain: '#B9A98C', board: '#2F5D50', boardFrame: '#8A6B4A', veil: 0.07, dust: 0.25, lamps: false,
+    wall: '#EFE8D8', side: '#DDD4C0', ceiling: '#FBF8F0', floor: '#C4AE8E', floorLine: '#A89172', floorKind: 'tiles', trim: '#7A6852',
+    wood: solid('#E8BE7D', '#D4A15A', '#AE7E3E'), fabric: solid('#66A7C7', '#4E90B2', '#3B7494'), metal: '#929BA8',
+    sky: ['#5DB4F2', '#A8DCF8', '#EFF8EE'], frame: '#F7F4EC', curtain: '#D4BEA0', board: '#266350', boardFrame: '#9B7449', veil: 0.02, dust: 0.16, lamps: false,
   },
   dusk: {
-    wall: '#443A4B', side: '#362E3E', ceiling: '#211B28', floor: '#3A3240', floorLine: '#2A2230', floorKind: 'boards', trim: '#231C29',
-    wood: solid('#7A5747', '#5B4038', '#3A2826'), fabric: solid('#5A5A7A', '#4A4A68', '#3A3A54'), metal: '#5E5A6C',
-    sky: ['#5A3A6E', '#E08A5E', '#FFC27A'], frame: '#1E1824', curtain: '#4E2F42', board: '#253C35', boardFrame: '#5A3A3E', veil: 0.42, dust: 0.5, lamps: true,
+    wall: '#5A4664', side: '#473650', ceiling: '#2D2238', floor: '#4D3D4E', floorLine: '#382B3A', floorKind: 'boards', trim: '#2B2032',
+    wood: solid('#A47154', '#86563E', '#5F3A2A'), fabric: solid('#6E6EA4', '#58588A', '#44446E'), metal: '#747088',
+    sky: ['#5E3B8A', '#ED8854', '#FFD07A'], frame: '#261D30', curtain: '#6B3B54', board: '#264A40', boardFrame: '#784E44', veil: 0.28, dust: 0.38, lamps: true,
   },
   night: {
-    wall: '#2C3856', side: '#232C45', ceiling: '#10141F', floor: '#1E2538', floorLine: '#151B2B', floorKind: 'boards', trim: '#141A28',
-    wood: solid('#5A4A52', '#463A44', '#332A34'), fabric: solid('#46507A', '#3A4468', '#2E3654'), metal: '#4E5468',
-    sky: ['#050914', '#0F1B3C', '#22335E'], frame: '#120F1A', curtain: '#2A2A48', board: '#1F2B2A', boardFrame: '#2B2F3A', veil: 0.55, dust: 0.3, lamps: true,
+    wall: '#2D3F68', side: '#233254', ceiling: '#121A2E', floor: '#1E2A44', floorLine: '#151E33', floorKind: 'boards', trim: '#141D30',
+    wood: solid('#725C62', '#5A474E', '#403239'), fabric: solid('#4E629C', '#3E4F82', '#2F3D68'), metal: '#5D6A86',
+    sky: ['#071026', '#132859', '#284582'], frame: '#141626', curtain: '#343A64', board: '#1E3634', boardFrame: '#3A3E52', veil: 0.4, dust: 0.25, lamps: true,
   },
 };
 
@@ -72,12 +72,22 @@ type PieceDef = {
 
 const tone = (c: string | undefined, fallback: Solid): Solid => {
   if (!c) return fallback;
-  const n = parseInt(c.slice(1), 16);
+  const hex = c.trim();
+  if (!hex.startsWith('#')) return fallback;
+  let raw = hex.slice(1);
+  if (raw.length === 3 || raw.length === 4) {
+    raw = raw.slice(0, 3).split('').map((ch) => ch + ch).join('');
+  } else if (raw.length === 8) {
+    raw = raw.slice(0, 6);
+  }
+  if (raw.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(raw)) return fallback;
+  const norm = `#${raw}`;
+  const n = parseInt(raw, 16);
   const k = (f: number) => {
     const ch = (v: number) => Math.max(0, Math.min(255, Math.round(v * f))).toString(16).padStart(2, '0');
     return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
   };
-  return solid(k(1.12), c, k(0.8));
+  return solid(k(1.12), norm, k(0.8));
 };
 const backX = (r: Room, u: number) => r.back.x0 + (r.back.x1 - r.back.x0) * u;
 const backY = (r: Room, v: number) => r.back.y0 + (r.back.y1 - r.back.y0) * v;
@@ -171,7 +181,7 @@ export const PIECES: Record<string, PieceDef> = {
       <g>
         <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={c.T.sky[0]} /><stop offset="70%" stopColor={c.T.sky[1]} /><stop offset="100%" stopColor={c.T.sky[2]} /></linearGradient></defs>
         <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill={`url(#${id})`} />
-        {c.opt.night || c.T.veil > 0.5 ? <circle cx={x0 + (x1 - x0) * 0.7} cy={y0 + 70} r={26} fill="#EEF0F8" /> : null}
+        {c.opt.night || c.T.veil >= 0.38 ? <circle cx={x0 + (x1 - x0) * 0.7} cy={y0 + 70} r={26} fill="#EEF0F8" /> : null}
         <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke={c.T.frame} strokeWidth={12} />
         <path d={`M ${(x0 + x1) / 2} ${y0} L ${(x0 + x1) / 2} ${y1} M ${x0} ${y0 + (y1 - y0) * 0.4} L ${x1} ${y0 + (y1 - y0) * 0.4}`} stroke={c.T.frame} strokeWidth={8} />
         {c.opt.curtains === false ? null : [x0 - 44, x1 - 26].map((x, i) => <rect key={i} x={x} y={y0 - 20} width={70} height={y1 - y0 + 100} fill={c.T.curtain} opacity={0.95} />)}
@@ -202,11 +212,12 @@ export type Recipe = {
   /** what hangs on the opposite wall, seen in the reverse view (view: 'reverse') */ front?: PieceSpec[];
   /** what hangs on the side walls when seen in 90-degree side views (view: 'left' | 'right') */ leftWall?: PieceSpec[]; rightWall?: PieceSpec[];
   /** an open-air place: sky and ground, no walls or ceiling */ outdoor?: boolean;
-  /** this recipe's own colours, before the episode's palette */ palette?: Partial<RoomTokens>;
+  /** this recipe's own colours, before the episode's palette */ palette?: Partial<Omit<RoomTokens, 'wood' | 'fabric'>> & { wood?: string | Solid; fabric?: string | Solid };
 };
 export const PLACES: Record<string, Recipe> = {
   classroom: {
     mood: 'day', floor: 'tiles', lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
+    palette: { wall: '#DCEFE8', side: '#C2DDD3', ceiling: '#F6FBF8', floor: '#CFC6B2', floorLine: '#B5AB96', trim: '#567068', wood: solid('#E6B873', '#CF9B52', '#AB7B3A'), board: '#1F5E48' },
     pieces: [
       { p: 'board', at: { u: 0.1 } }, { p: 'pinboard', at: { u: 0.64 } }, { p: 'clock', at: { u: 0.88 } }, { p: 'desk', id: 'teacher', at: { u: 0.12, w: 0.14 }, len: 0.24, deep: 0.09 },
       { p: 'desk', id: 'd1', at: { u: 0.3, w: 0.32 } }, { p: 'desk', id: 'd2', at: { u: 0.55, w: 0.32 } }, { p: 'desk', id: 'd3', at: { u: 0.25, w: 0.52 } }, { p: 'desk', id: 'd4', at: { u: 0.55, w: 0.52 } },
@@ -215,6 +226,7 @@ export const PLACES: Record<string, Recipe> = {
   },
   bedroom: {
     mood: 'night', floor: 'boards', lights: [{ u: 0.52, w: 0.2 }],
+    palette: { wall: '#3B4674', side: '#2D365E', ceiling: '#1A203C', floor: '#4F3C3A', floorLine: '#3A2B2A', trim: '#252A48', wood: solid('#8C6350', '#6E4B3C', '#4E342A'), fabric: solid('#8E6BB8', '#73519E', '#583B7E'), curtain: '#56427A' },
     pieces: [
       { p: 'window', at: { u: 0.56 } }, { p: 'frame', at: { u: 0.14 }, opt: { art: 1 } }, { p: 'frame', at: { u: 0.28 }, opt: { art: 2 } }, { p: 'rug', at: { u: 0.42, w: 0.42 } },
       { p: 'bed', at: { u: 0.12, w: 0 } }, { p: 'nightstand', at: { u: 0.49, w: 0 } }, { p: 'wardrobe', at: { u: 0.8, w: 0.1 } }, { p: 'plant', at: { u: 0.74, w: 0.1 } },
@@ -222,6 +234,7 @@ export const PLACES: Record<string, Recipe> = {
   },
   kitchen: {
     mood: 'day', floor: 'tiles', lights: [{ u: 0.5, w: 0.4 }],
+    palette: { wall: '#F8ECCE', side: '#E8D9B4', ceiling: '#FFFDF5', floor: '#D6B89B', floorLine: '#BD9D7F', trim: '#7D6852', wood: solid('#78B5A2', '#5E9B88', '#467D6C'), curtain: '#E89B6C' },
     pieces: [
       { p: 'window', at: { u: 0.22 }, len: 0.2 }, { p: 'clock', at: { u: 0.62 } }, { p: 'counter', at: { u: 0.02, w: 0 }, len: 0.62 }, { p: 'fridge', at: { u: 0.66, w: 0 } },
       { p: 'table', at: { u: 0.32, w: 0.42 } }, { p: 'chair', id: 'c1', at: { u: 0.36, w: 0.34 } }, { p: 'chair', id: 'c2', at: { u: 0.55, w: 0.34 } }, { p: 'plant', at: { u: 0.84, w: 0.2 } },
@@ -229,6 +242,7 @@ export const PLACES: Record<string, Recipe> = {
   },
   living: {
     mood: 'dusk', floor: 'boards', lights: [{ u: 0.5, w: 0.45 }],
+    palette: { wall: '#7C544E', side: '#65423E', ceiling: '#3A282B', floor: '#6B4E3E', floorLine: '#523A2D', trim: '#3D2924', wood: solid('#B47B52', '#945E3B', '#6F4428'), fabric: solid('#4F8EA4', '#3B748A', '#2B5B6E'), curtain: '#9E5448' },
     pieces: [
       { p: 'window', at: { u: 0.58 } }, { p: 'frame', at: { u: 0.1 }, opt: { art: 0 } }, { p: 'frame', at: { u: 0.24 }, opt: { art: 2 } }, { p: 'rug', at: { u: 0.26, w: 0.3 } },
       { p: 'bookshelf', at: { u: 0.4, w: 0 } }, { p: 'sofa', at: { u: 0.2, w: 0.24 }, len: 0.3 }, { p: 'coffee-table', at: { u: 0.26, w: 0.52 } }, { p: 'floor-lamp', at: { u: 0.8, w: 0.3 } }, { p: 'plant', at: { u: 0.78, w: 0.08 } },
@@ -236,6 +250,7 @@ export const PLACES: Record<string, Recipe> = {
   },
   office: {
     mood: 'day', floor: 'tiles', lights: [{ u: 0.35, w: 0.4 }, { u: 0.7, w: 0.4 }],
+    palette: { wall: '#D6E2EE', side: '#BCCCD9', ceiling: '#F4F8FC', floor: '#B5BFC9', floorLine: '#9BA6B2', trim: '#4A5B6E', wood: solid('#E2C79A', '#CBB082', '#A88E62'), metal: '#6E7C8C' },
     pieces: [
       { p: 'window', at: { u: 0.68 } }, { p: 'whiteboard', at: { u: 0.14 } }, { p: 'clock', at: { u: 0.6 } }, { p: 'table', id: 'd1', at: { u: 0.2, w: 0.4 }, len: 0.25, deep: 0.1 },
       { p: 'table', id: 'd2', at: { u: 0.55, w: 0.4 }, len: 0.25, deep: 0.1 }, { p: 'plant', at: { u: 0.86, w: 0.12 } }, { p: 'bin', at: { u: 0.5, w: 0.2 } },
@@ -243,6 +258,7 @@ export const PLACES: Record<string, Recipe> = {
   },
   restaurant: {
     mood: 'dusk', floor: 'boards', lights: [{ u: 0.3, w: 0.45 }, { u: 0.72, w: 0.45 }],
+    palette: { wall: '#6E3542', side: '#562733', ceiling: '#2E161E', floor: '#583932', floorLine: '#422924', trim: '#341B20', wood: solid('#A86A48', '#8A5034', '#663822'), curtain: '#8E384A' },
     pieces: [
       { p: 'window', at: { u: 0.38 } }, { p: 'frame', at: { u: 0.12 }, opt: { art: 1 } }, { p: 'frame', at: { u: 0.76 }, opt: { art: 0 } }, { p: 'table', id: 't1', at: { u: 0.2, w: 0.42 }, len: 0.25, deep: 0.14 },
       { p: 'table', id: 't2', at: { u: 0.55, w: 0.42 }, len: 0.25, deep: 0.14 }, { p: 'plant', at: { u: 0.13, w: 0.1 } }, { p: 'plant', at: { u: 0.87, w: 0.1 } },
@@ -420,10 +436,10 @@ Object.assign(PLACES, {
     pieces: [{ p: 'skyline', at: { u: -0.3 }, len: 1.6 }, { p: 'parapet', at: { u: -0.3, w: 0.02 }, len: 1.6 }, { p: 'bench', at: { u: 0.18, w: 0.4 } }, { p: 'plant', at: { u: 0.82, w: 0.3 } }],
     front: [{ p: 'facade', at: { u: 0.3 }, len: 0.4, color: '#7A6A62', opt: { floors: 1 } }] },
   // ---------------------------------------- corridors, offices, services
-  corridor: { mood: 'day', floor: 'tiles', lights: [{ u: 0.5, w: 0.25 }, { u: 0.5, w: 0.6 }],
+  corridor: { mood: 'day', floor: 'tiles', palette: { wall: '#D9E4DC', side: '#C0CFC5', ceiling: '#F2F6F3', floor: '#B0BAB6', floorLine: '#95A19C', trim: '#4F605A', wood: solid('#C9A276', '#AE875C', '#8C6A44') }, lights: [{ u: 0.5, w: 0.25 }, { u: 0.5, w: 0.6 }],
     pieces: [{ p: 'door', at: { u: 0.1 } }, { p: 'door', at: { u: 0.43 } }, { p: 'door', at: { u: 0.76 } }, { p: 'alarm', at: { u: 0.62 } }, { p: 'locker', id: 'lockers', at: { u: 0.0, w: 0.25 }, len: 0.05, deep: 0.5 }, { p: 'plant', at: { u: 0.9, w: 0.3 } }],
     front: [{ p: 'door', at: { u: 0.45 } }, { p: 'clock', at: { u: 0.2 } }] },
-  hallway: { mood: 'day', floor: 'tiles', lights: [{ u: 0.5, w: 0.3 }],
+  hallway: { mood: 'day', floor: 'tiles', palette: { wall: '#EFE0BE', side: '#DBC9A2', ceiling: '#FAF4E4', floor: '#C8BDA4', floorLine: '#AEA38A', trim: '#5B6478', fabric: solid('#4A7FB5', '#38689B', '#28517D') }, lights: [{ u: 0.5, w: 0.3 }],
     pieces: [{ p: 'locker', id: 'lockers', at: { u: 0.04, w: 0 }, len: 0.56 }, { p: 'door', at: { u: 0.72 } }, { p: 'pinboard', at: { u: 0.62 } }, { p: 'bin', at: { u: 0.9, w: 0.2 } }],
     front: [{ p: 'locker', at: { u: 0.3, w: 0 }, len: 0.4 }, { p: 'window', at: { u: 0.05 }, len: 0.2 }] },
   hospital: { mood: 'day', floor: 'tiles', palette: { wall: '#CFE6DE', side: '#B6D2C8', floor: '#C8CEC8' }, lights: [{ u: 0.5, w: 0.35 }],
@@ -438,7 +454,7 @@ Object.assign(PLACES, {
   cell: { mood: 'night', floor: 'tiles', palette: { wall: '#8C8E8A', side: '#767874', floor: '#5E605C' }, lights: [{ u: 0.5, w: 0.3 }],
     pieces: [{ p: 'bench', id: 'bench', at: { u: 0.2, w: 0.1 }, len: 0.3 }, { p: 'window', at: { u: 0.6 }, len: 0.1, opt: { curtains: false } }, { p: 'bars', at: { u: 0, w: 0.62 } }],
     front: [{ p: 'door', at: { u: 0.45 } }] },
-  shop: { mood: 'day', floor: 'tiles', lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
+  shop: { mood: 'day', floor: 'tiles', palette: { wall: '#F4DFCC', side: '#E2C8B0', ceiling: '#FDF7F0', floor: '#CFC4B4', floorLine: '#B5A896', trim: '#8B5E48', wood: solid('#E6B97A', '#CF9E5E', '#AC7E42') }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
     pieces: [{ p: 'shelf', at: { u: 0.04, w: 0 } }, { p: 'shelf', at: { u: 0.36, w: 0 } }, { p: 'counter', id: 'counter', at: { u: 0.62, w: 0.3 }, len: 0.3 }, { p: 'shelf', at: { u: 0.08, w: 0.4 }, len: 0.22 }],
     front: [{ p: 'window', at: { u: 0.1 }, len: 0.34, opt: { curtains: false } }, { p: 'door', at: { u: 0.6 } }] },
   diner: { mood: 'dusk', floor: 'tiles', palette: { wall: '#E4D6B8', floor: '#B05A4A' }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
@@ -461,7 +477,7 @@ Object.assign(PLACES, {
   auditorium: { mood: 'night', floor: 'boards', palette: { wall: '#2A2430', side: '#221C28' }, lights: [{ u: 0.5, w: 0.2 }],
     pieces: [{ p: 'screen', at: { u: 0.2 }, len: 0.6 }, { p: 'stage', at: { u: 0.05, w: 0 }, len: 0.9 }, { p: 'podium', id: 'podium', at: { u: 0.72, w: 0.08 } }, { p: 'seat-row', id: 'r1', at: { u: 0.1, w: 0.42 }, len: 0.8 }, { p: 'seat-row', id: 'r2', at: { u: 0.1, w: 0.56 }, len: 0.8 }],
     front: [{ p: 'door', at: { u: 0.1 } }, { p: 'door', at: { u: 0.78 } }] },
-  cafeteria: { mood: 'day', floor: 'tiles', lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
+  cafeteria: { mood: 'day', floor: 'tiles', palette: { wall: '#D4E8F2', side: '#B9D4E3', ceiling: '#F3FAFD', floor: '#D5C7AE', floorLine: '#BCAE94', trim: '#53768C', wood: solid('#E8BE78', '#D4A45B', '#B08440') }, lights: [{ u: 0.3, w: 0.35 }, { u: 0.7, w: 0.35 }],
     pieces: [{ p: 'counter', id: 'counter', at: { u: 0.04, w: 0 }, len: 0.56 }, { p: 'window', at: { u: 0.7 }, len: 0.22 }, { p: 'table', id: 't1', at: { u: 0.18, w: 0.42 }, len: 0.24, deep: 0.1 }, { p: 'table', id: 't2', at: { u: 0.56, w: 0.42 }, len: 0.24, deep: 0.1 }],
     front: [{ p: 'door', at: { u: 0.45 } }, { p: 'pinboard', at: { u: 0.1 } }] },
 });
@@ -656,24 +672,26 @@ export const yawForView = (yaw: number | undefined, view: PlaceView, walking = f
   return yaw;
 };
 
-const PLACE_ALIASES: Record<string, string> = { study: 'office', bureau: 'office', library: 'office', school: 'classroom', class: 'classroom', home: 'living', lounge: 'living', salon: 'living', cafe: 'restaurant', diner: 'restaurant', road: 'street', yard: 'garden', toilet: 'bathroom', restroom: 'bathroom', pub: 'bar' };
+const PLACE_ALIASES: Record<string, string> = { study: 'office', bureau: 'office', library: 'office', school: 'classroom', class: 'classroom', home: 'living', lounge: 'living', cafe: 'restaurant', road: 'street', yard: 'garden', toilet: 'bathroom', restroom: 'bathroom', pub: 'bar' };
 /** Build a place from a recipe name (see PLACES) and your changes. */
 export const place = (name: string, opts: PlaceOpts = {}): Placed => {
   // names the stories use for a place that exists under another name (a launch lost a pass on 'study', 2026-11-16)
   name = PLACE_ALIASES[name] ?? name;
   const base = PLACES[name];
-  if (!base) throw new Error(`unknown place "${name}". Places: ${Object.keys(PLACES).join(', ')}. For anything else use place('blank', { pieces: [...] }), or place('open', { pieces: [...] }) outdoors.`);
+  if (!base) throw new Error(`unknown place "${name}". Places: ${Object.keys(PLACES).join(', ')}. For anything else use place('blank', { pieces: [...] }), or an outdoor place like place('park', { pieces: [...] }).`);
   const outdoor = Boolean(base.outdoor);
   const moodName = opts.mood ?? base.mood;
   const mood = { ...MOODS[moodName], ...(outdoor ? OUTDOOR_MOODS[moodName] : {}) };
   const pal = opts.palette ?? {};
+  const baseWood = typeof base.palette?.wood === 'string' ? tone(base.palette.wood, mood.wood) : base.palette?.wood ?? mood.wood;
+  const baseFabric = typeof base.palette?.fabric === 'string' ? tone(base.palette.fabric, mood.fabric) : base.palette?.fabric ?? mood.fabric;
   const T: RoomTokens = {
     ...mood,
     floorKind: base.floor ?? mood.floorKind,
-    ...(base.palette ?? {}),
+    ...((base.palette as Partial<RoomTokens> | undefined) ?? {}),
     ...(pal as Partial<RoomTokens>),
-    wood: typeof pal.wood === 'string' ? tone(pal.wood, mood.wood) : pal.wood ?? mood.wood,
-    fabric: typeof pal.fabric === 'string' ? tone(pal.fabric, mood.fabric) : pal.fabric ?? mood.fabric,
+    wood: typeof pal.wood === 'string' ? tone(pal.wood, baseWood) : pal.wood ?? baseWood,
+    fabric: typeof pal.fabric === 'string' ? tone(pal.fabric, baseFabric) : pal.fabric ?? baseFabric,
   };
   const removed = new Set(opts.remove ?? []);
   const keep = (list: PieceSpec[]) => list.filter((x) => !removed.has(x.id ?? x.p) && !removed.has(x.p));
@@ -739,18 +757,18 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
     const ctx = (x: Resolved, t: number): DrawCtx => ({ r, T, t, u: x.u, w: x.w, len: x.len, deep: x.deep, color: x.color, opt: x.opt ?? {}, slot: opts.slots?.[x.id] });
     const walls = (t: number) => resolved.filter((x) => x.def.kind === 'wall').map((x, i) => <g key={`w${i}`}>{x.def.draw(ctx(x, t))}</g>);
     const flats = (t: number) => resolved.filter((x) => x.def.kind === 'flat').map((x, i) => <g key={`f${i}`}>{x.def.draw(ctx(x, t))}</g>);
-    const skyId = `sky${name}${view.replace(/[^a-z0-9]/gi, '')}`;
+    const skySuffix = `${name}${view.replace(/[^a-z0-9]/gi, '')}`;
     const Shell: Placed['Shell'] = ({ t, id = 'pl' }) =>
       outdoor ? (
         <g>
           <defs>
-            <linearGradient id={skyId} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={`${id}sky${skySuffix}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={T.sky[0]} />
               <stop offset="70%" stopColor={T.sky[1]} />
               <stop offset="100%" stopColor={T.sky[2]} />
             </linearGradient>
           </defs>
-          <rect x={-3000} y={-3000} width={9000} height={3000 + r.back.y1} fill={`url(#${skyId})`} />
+          <rect x={-3000} y={-3000} width={9000} height={3000 + r.back.y1} fill={`url(#${id}sky${skySuffix})`} />
           <rect x={-3000} y={r.back.y1} width={9000} height={4000} fill={T.floor} />
           {flats(t)}
           {walls(t)}
@@ -760,13 +778,8 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
       ) : (
         <g>
           <RoomShell r={r} id={id} wall={T.wall} side={T.side} floorC={T.floor} ceiling={T.ceiling} lines={T.floorLine} floor={T.floorKind} />
-          {/* the shell's noise texture reads as dirty clouds on a flat cartoon wall: paint most of it back to the plain colour */}
-          <g opacity={0.7}>
-            <rect x={r.back.x0} y={r.back.y0} width={r.back.x1 - r.back.x0} height={r.back.y1 - r.back.y0} fill={T.wall} />
-            <polygon points={r.Q([[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]])} fill={T.side} />
-            <polygon points={r.Q([[1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]])} fill={T.side} />
-          </g>
-          <RoomCorners x0={r.back.x0} x1={r.back.x1} y0={r.back.y0} y1={r.back.y1} />
+          {/* soften the back-wall noise texture without flattening the side-wall depth gradients */}
+          <rect x={r.back.x0} y={r.back.y0} width={r.back.x1 - r.back.x0} height={r.back.y1 - r.back.y0} fill={T.wall} opacity={0.45} />
           <rect x={r.back.x0} y={r.back.y1 - 14} width={r.back.x1 - r.back.x0} height={14} fill={T.trim} />
           {walls(t)}
           {flats(t)}

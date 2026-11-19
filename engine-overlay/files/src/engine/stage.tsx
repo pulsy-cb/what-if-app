@@ -37,12 +37,12 @@ export const planeGround = (g: { x0: number; x1: number; far: { y: number; scale
 export type Place = { u: number; w: number } | { x: number; y: number; scale?: number; w?: number };
 
 type Ctx = { ground?: Ground; focus?: number; fade: number; t?: number };
-const StageCtx = React.createContext<Ctx>({ fade: 1 });
+const StageCtx = React.createContext<Ctx>({ fade: 0.3 });
 
 /** Far things lose a little light and colour; things away from the focus go soft. */
 const depthLook = (w: number, c: Ctx): { style?: React.CSSProperties; filter?: string } => {
   const k = Math.max(0, 1 - w) * c.fade;
-  const style = k > 0.01 ? { filter: `brightness(${(1 - 0.28 * k).toFixed(3)}) saturate(${(1 - 0.35 * k).toFixed(3)})` } : undefined;
+  const style = k > 0.01 ? { filter: `brightness(${(1 - 0.1 * k).toFixed(3)}) saturate(${(1 - 0.12 * k).toFixed(3)})` } : undefined;
   let filter: string | undefined;
   if (c.focus !== undefined) {
     const d = Math.abs(w - c.focus);
@@ -81,7 +81,7 @@ const declaredDepth = (el: React.ReactNode): number | undefined => {
  * `ground`: how positions map to the screen. `focus`: the depth (w) that stays sharp; omit it to keep everything sharp.
  * `fade`: how much far things dim (0 for none). `t`: the shot's clock, needed by `act` and <Duo>.
  */
-export const Stage: React.FC<{ ground?: Ground; focus?: number; fade?: number; t?: number; children: React.ReactNode }> = ({ ground, focus, fade = 1, t, children }) => {
+export const Stage: React.FC<{ ground?: Ground; focus?: number; fade?: number; t?: number; children: React.ReactNode }> = ({ ground, focus, fade = 0.3, t, children }) => {
   let placed = false;
   const items = flatten(children).map((c, i) => {
     const d = declaredDepth(c);

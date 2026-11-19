@@ -69,9 +69,9 @@ const normalizeLimb = (limb: Limb | undefined | null, isLeg: boolean): Limb => {
     } else if (a >= 20 && b < -20) {
       b = Math.abs(b);
     }
-    // Prevent stiff, hyper-extended stick arms when an arm is raised to gesture, point, or hold an object
-    if (a > 26 && a < 132 && b > -12 && b < 28) {
-      b = 28 + (a - 26) * 0.18;
+    // Prevent backward-bending hyper-extended elbows when an arm is raised, while preserving intentional straight-arm poses (stop, push, give, lean, slam) and IK reaches
+    if (a > 26 && a < 132 && b < 0) {
+      b = Math.max(4, Math.abs(b));
     }
     a = Math.max(-25, Math.min(160, a));
     b = Math.max(-70, Math.min(125, b));
@@ -583,7 +583,7 @@ export const Person: React.FC<{
   handLProp?: React.ReactNode;
   handRProp?: React.ReactNode;
   children?: React.ReactNode;
-}> = ({ pose, body, look = LOOKS.pipHood as Look, shadow = 1, rimId = 'rimR', headGear, torsoGear, handLProp, handRProp, children }) => {
+}> = ({ pose, body, look = LOOKS.pipHood as Look, shadow = 1, rimId = '', headGear, torsoGear, handLProp, handRProp, children }) => {
   const c = (look as Partial<Character>).cast;
   const b = bodyOf(body ?? c?.body);
   const j = jointsOf(pose, b);
@@ -735,7 +735,7 @@ export const Person: React.FC<{
   return (
     <g>
       {shadow > 0 ? <ellipse cx={pose.x} cy={pose.y + legLen * pose.scale + 10} rx={70 * pose.scale} ry={12 * pose.scale} fill="#000" opacity={0.25 * shadow} /> : null}
-      <g transform={`translate(${pose.x} ${pose.y}) scale(${pose.scale}) rotate(${pose.spin} 0 -90)`} filter={`url(#${rimId})`}>
+      <g transform={`translate(${pose.x} ${pose.y}) scale(${pose.scale}) rotate(${pose.spin} 0 -90)`} filter={rimId ? `url(#${rimId})` : undefined}>
         <g transform={`translate(0 ${legLen}) scale(${1 + 0.6 * pose.squash} ${1 - pose.squash}) translate(0 ${-legLen})`}>
           {/* the far side is drawn first, so a turned body overlaps itself the right way */}
           {pose.yaw < 0 ? <>{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR, 1)}{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL, -1)}</> : <>{limb(j.legL, b.leg, false, legPaint)}{shoe(j.legL, -1)}{limb(j.legR, b.leg, false, legPaint)}{shoe(j.legR, 1)}</>}
