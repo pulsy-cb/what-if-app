@@ -7,6 +7,7 @@ import type { JsonSchema, ToolContext, ToolRegistry } from '../tools/index.js';
 import { readText } from '../tools/paths.js';
 import { extractShotIds, readEpisodeShots, sortShotIds } from '../tools/episode-source.js';
 import { formatStageCards } from '../tools/staging.js';
+import { readScriptState, recordScriptReview } from '../tools/script-check.js';
 import { detectEpisodeLanguage, directorSizeMismatches } from '../tools/whatif.js';
 import { episodePin, shotWordFrames } from '../orchestrator/context.js';
 import { engineDigest } from '../orchestrator/engine-digest.js';
@@ -17,7 +18,10 @@ import {
   accentMetrics,
   deltaReviewerSystemPrompt,
   formatReviewFeedback,
+  guardUnverifiedOpeningClaims,
   nextStrikes,
+  openingReviewBlock,
+  readOpeningStatus,
   refusedUnchanged,
   reviewerSystemPrompt,
   staticMetrics,
@@ -250,6 +254,37 @@ export function listMcpTools(registry: ToolRegistry): McpToolSpec[] {
       },
     },
     {
+      name: 'whatif_save_script_review',
+      description:
+        'Record the verdict of the Independent Reviewer subagent on the NARRATION, before the voice: it read out/<episode>/script-pack.md (original text, proposed script, reading card, contract). `pass: true` approves the script and opens `voice`; `pass: false` sends the issues back to the author, and a second refusal drops the story.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          episode: { type: 'string' },
+          project: { type: 'string' },
+          pass: { type: 'boolean' },
+          sameStory: { type: 'boolean', description: 'Mandatory fidelity verdict: true if the story/facts/payoff/narrator are preserved, false when invented, changed or lost.' },
+          sig: { type: 'string', description: 'Mandatory Submitted-Sig token read from out/<episode>/script-pack.md.' },
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                rule: { type: 'string', enum: ['histoire', 'ouverture', 'enjeu', 'voix', 'chute', 'balises'] },
+                quote: { type: 'string' },
+                problem: { type: 'string' },
+                fix: { type: 'string' },
+              },
+              required: ['problem'],
+            },
+          },
+          reviewerModel: { type: 'string' },
+        },
+        required: ['episode', 'pass', 'sameStory', 'sig'],
+        additionalProperties: false,
+      },
+    },
+    {
       name: 'whatif_status',
       description: 'Check completion state of an episode (script, voice, words, timeline, director, stills, board, review, sfx, render, final, LUFS report).',
       inputSchema: {
@@ -288,7 +323,69 @@ function resolveProjectForTool(
   throw new Error(`Project "${slug}" does not exist yet: call whatif_create_project { episode: "${slug}" } first.`);
 }
 
+export const MCP_JOURNAL_TITLE = 'MCP · journal';
+let mcpCallSeq = 0;
+
+/** Long strings (a whole file in whatif_write_file) are cut: the journal says what was asked, it is not a second copy of the project. */
+function journalArgs(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return value.length > 4000 ? `${value.slice(0, 4000)}… [${value.length} chars]` : value;
+  if (Array.isArray(value)) return depth > 4 ? '[…]' : value.slice(0, 60).map((v) => journalArgs(v, depth + 1));
+  if (value && typeof value === 'object') {
+    if (depth > 4) return '{…}';
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, journalArgs(v, depth + 1)]));
+  }
+  return value;
+}
+
+/**
+ * Every MCP call leaves two rows in the project's "MCP · journal" thread, in the shape the Studio's own agent writes
+ * (an assistant message carrying the tool call, then the tool result). An episode made over MCP used to leave nothing:
+ * 4 projects of 6 had no trace of their duration, failures or loops (2026-11-19). A journal that cannot be written
+ * never fails the call.
+ */
+function journalMcpCall(db: Db, name: string, rawArgs: Record<string, unknown>, res: McpToolResponse, ms: number): void {
+  try {
+    const rawId = String(rawArgs.project ?? rawArgs.episode ?? '').trim();
+    const fromPath = typeof rawArgs.path === 'string' ? /^src\/episodes\/([^/]+)\//.exec(rawArgs.path.replace(/^\/+/, ''))?.[1] : undefined;
+    const project = (rawId ? db.getProject(rawId) ?? db.getProject(slugify(rawId)) : null) ?? (fromPath ? db.getProject(fromPath) : null);
+    if (!project) return;
+    const thread = db.listThreads(project.id).find((t) => t.title === MCP_JOURNAL_TITLE) ?? db.createThread(project.id, MCP_JOURNAL_TITLE);
+    const id = `mcp-${Date.now().toString(36)}-${++mcpCallSeq}`;
+    db.addMessage(thread.id, 'assistant', '', { toolCalls: [{ id, name, args: journalArgs(rawArgs) }], via: 'mcp' });
+    const summary = String(res.summary ?? '');
+    db.addMessage(thread.id, 'tool', summary.length > 8000 ? `${summary.slice(0, 8000)}… [${summary.length} chars]` : summary, {
+      toolCallId: id,
+      name,
+      ok: res.ok,
+      artifacts: res.artifacts ?? [],
+      credits: 0,
+      ms,
+      via: 'mcp',
+    });
+  } catch {
+    /* the journal is a trace, not a condition */
+  }
+}
+
 export async function callMcpTool(
+  deps: { db: Db; bus: Bus; config: Config; registry: ToolRegistry },
+  name: string,
+  rawArgs: Record<string, unknown> = {},
+  signal?: AbortSignal,
+): Promise<McpToolResponse> {
+  const t0 = Date.now();
+  let res: McpToolResponse;
+  try {
+    res = await runMcpTool(deps, name, rawArgs, signal);
+  } catch (e) {
+    journalMcpCall(deps.db, name, rawArgs, { ok: false, summary: `ERROR ${e instanceof Error ? e.message : String(e)}` }, Date.now() - t0);
+    throw e;
+  }
+  journalMcpCall(deps.db, name, rawArgs, res, Date.now() - t0);
+  return res;
+}
+
+async function runMcpTool(
   deps: { db: Db; bus: Bus; config: Config; registry: ToolRegistry },
   name: string,
   rawArgs: Record<string, unknown> = {},
@@ -401,10 +498,19 @@ export async function callMcpTool(
         /* optional cost tracking */
       }
     }
+    // The second reading of the narration is a sub-agent's, as for the storyboard: the author of the corrections does not grade them
+    const scriptNeedsReview = step === 'script' && res.ok && Boolean((res.data as { needsReview?: boolean } | undefined)?.needsReview);
     return {
       ok: res.ok,
       projectRoot,
-      summary: res.summary,
+      summary: scriptNeedsReview
+        ? `${res.summary}\n` +
+          `NEXT, before any voice:\n` +
+          `1. Launch a read-only Reviewer subagent (define_subagent / invoke_subagent) that did not write the corrections,\n` +
+          `2. Have it read out/${episode}/script-pack.md with whatif_read_file and judge two things only: same story (no invented, changed or lost fact, same payoff, same narrator), and the contract written in the pack,\n` +
+          `3. Have it save its verdict with whatif_save_script_review({ episode: "${episode}", pass, sameStory, sig, issues }) (passing the mandatory Submitted-Sig token read from script-pack.md and explicit boolean sameStory),\n` +
+          `4. Accepted: run whatif_run({ episode: "${episode}", step: "voice" }). Refused: correct episode.json.script and script-card.json, run step "script" again.`
+        : res.summary,
       data: res.data,
       artifacts: res.artifacts,
     };
@@ -455,10 +561,11 @@ export async function callMcpTool(
   }
 
   if (name === 'whatif_read_file') {
+    const relPath = String(rawArgs.path ?? '');
     const res = await registry.run(
       'read_file',
       {
-        path: String(rawArgs.path ?? ''),
+        path: relPath,
         ...(typeof rawArgs.start === 'number' ? { start: rawArgs.start } : {}),
         ...(typeof rawArgs.end === 'number' ? { end: rawArgs.end } : {}),
       },
@@ -601,6 +708,8 @@ export async function callMcpTool(
     let systemPrompt = '';
     let dossier = '';
 
+    const openingStatus = readOpeningStatus(projectRoot, slug, timeline);
+
     if (useDelta && deltaTargetShots.length > 0) {
       for (const id of deltaTargetShots) {
         const rel = `out/${slug}/board/${id}.png`;
@@ -629,12 +738,20 @@ export async function callMcpTool(
         .filter(Boolean)
         .join('\n\n');
     } else {
+      const hasOpening = openingStatus.hasSheet;
       relativeImagePaths = sheetFiles.length
-        ? sheetFiles.map((n) => `out/${slug}/sheets/${n}`)
+        ? [...sheetFiles.map((n) => `out/${slug}/sheets/${n}`), ...(hasOpening ? [`out/${slug}/sheets/opening.jpg`] : [])]
         : fs.existsSync(path.join(outDir, 'storyboard.jpg'))
-          ? [`out/${slug}/storyboard.jpg`]
-          : [];
+          ? [`out/${slug}/storyboard.jpg`, ...(hasOpening ? [`out/${slug}/sheets/opening.jpg`] : [])]
+          : hasOpening
+            ? [`out/${slug}/sheets/opening.jpg`]
+            : [];
       systemPrompt = reviewerSystemPrompt(epLang);
+      const openBlock = hasOpening
+        ? openingReviewBlock(ep, scriptLines, openingStatus)
+        : ep?.opening || openingStatus.stale || fs.existsSync(path.join(sheetsDir, 'opening.json'))
+          ? openingReviewBlock(ep, scriptLines, { ...openingStatus, exact: [], hasSheet: false, verified: false })
+          : '';
       dossier = [
         `# Audit indépendant (Tour ${round}, mode=global) de "${slug}" (orientation: ${aspect}, langue: ${langUpper}, defaultSet: ${JSON.stringify(ep?.defaultSet ?? '')})`,
         `## 1. Script complet (narration ${langUpper})\n${scriptLines.slice(0, 22_000)}`,
@@ -643,6 +760,7 @@ export async function callMcpTool(
         `## 4. Note de réalisation (DIRECTOR.md)\n${directorRaw.slice(0, 14_000)}${cardsBlock}`,
         `## 5. Code des plans\n${summarizeShotsCode(epSrc, { shotTimings, perShotChars: 2_600 })}`,
         `## 6. Mesures automatiques\n${autoMetrics}`,
+        openBlock,
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -666,13 +784,66 @@ export async function callMcpTool(
         aspect,
         targetShots: useDelta ? deltaTargetShots : epSrc.exportedShotIds,
         relativeImagePaths,
+        openingFrames: {
+          exact: openingStatus.exact,
+          ...(openingStatus.unverified.length ? { unverified: openingStatus.unverified } : {}),
+          missing: openingStatus.missing,
+          verified: openingStatus.verified,
+          ...(openingStatus.stale ? { stale: true } : {}),
+          ...(openingStatus.reason ? { reason: openingStatus.reason } : {}),
+        },
       },
     };
+  }
+
+  if (name === 'whatif_save_script_review') {
+    const slug = String(rawArgs.episode ?? projectId).trim();
+    const state = readScriptState(projectRoot, slug);
+    if (!state || state.status !== 'review') {
+      return {
+        ok: false,
+        projectRoot,
+        summary: `no script is waiting for a review on "${slug}" (state: ${state?.status ?? 'none'}): run whatif_run({ episode: "${slug}", step: "script" }) first.`,
+      };
+    }
+    const explicitSig = typeof rawArgs.sig === 'string' && rawArgs.sig.trim() ? rawArgs.sig.trim() : '';
+    if (!explicitSig) {
+      return {
+        ok: false,
+        projectRoot,
+        summary: `[REVIEWER — TEXTE] Non validé : le paramètre obligatoire "sig" (Submitted-Sig lu dans out/${slug}/script-pack.md) est manquant.`,
+        data: state,
+      };
+    }
+    if (typeof rawArgs.pass !== 'boolean') {
+      return {
+        ok: false,
+        projectRoot,
+        summary: `[REVIEWER — TEXTE] Non validé : le booléen "pass" est obligatoire.`,
+        data: state,
+      };
+    }
+    const rec = recordScriptReview(projectRoot, slug, {
+      pass: rawArgs.pass,
+      sameStory: typeof rawArgs.sameStory === 'boolean' ? rawArgs.sameStory : undefined,
+      sig: explicitSig,
+      issues: Array.isArray(rawArgs.issues) ? (rawArgs.issues as { rule?: string; quote?: string; problem?: string; fix?: string }[]) : [],
+      model: String(rawArgs.reviewerModel ?? 'agy-subagent-reviewer'),
+    });
+    return { ok: rec.state.status === 'approved', projectRoot, summary: rec.summary, data: rec.state };
   }
 
   if (name === 'whatif_save_review') {
     const slug = String(rawArgs.episode ?? projectId).trim();
     const outDir = path.join(projectRoot, 'out', slug);
+    const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+    let timeline: any = null;
+    try {
+      timeline = JSON.parse(readText(epDir, 'timeline.json', 600_000) ?? 'null');
+    } catch {
+      timeline = null;
+    }
+    const openingStatus = readOpeningStatus(projectRoot, slug, timeline);
     const prevReview = readPreviousReview(outDir);
     const prevRound = typeof prevReview?.round === 'number' ? prevReview.round : 0;
     const round = typeof rawArgs.round === 'number' && rawArgs.round > 0 ? rawArgs.round : prevRound + 1;
@@ -686,29 +857,46 @@ export async function callMcpTool(
         problem: String(it.problem ?? '').trim(),
         fix: String(it.fix ?? '').trim(),
       }));
+    const mode = rawArgs.mode === 'delta' ? 'delta' : 'global';
+    if (mode === 'global' && openingStatus.stale) {
+      issues.unshift({
+        shot: 'S1',
+        severity: 'error',
+        problem: `Captures ou métadonnées d'ouverture obsolètes/invalides (${openingStatus.reason ?? 'stale'}) : les sources, timeline.json ou images out/${slug}/opening/ ne correspondent plus au dernier rendu.`,
+        fix: `Relancer whatif_run({ episode: "${slug}", step: "stills" }) puis whatif_run({ episode: "${slug}", step: "board" }) avant de valider.`,
+      });
+    }
     const hasError = issues.some((i) => i.severity === 'error');
     const pass = Boolean(rawArgs.pass) && !hasError;
     const model = String(rawArgs.reviewerModel ?? 'agy-subagent-reviewer');
-    const mode = rawArgs.mode === 'delta' ? 'delta' : 'global';
+    const rawSummary = String(rawArgs.summary ?? '').trim() || (pass ? 'Réalisation cohérente.' : `${issues.length} problème(s) détecté(s).`);
 
     const report: ReviewReport = {
       ok: true,
       pass,
       model,
       episode: slug,
-      summary: String(rawArgs.summary ?? '').trim() || (pass ? 'Réalisation cohérente.' : `${issues.length} problème(s) détecté(s).`),
+      summary: mode === 'global' ? guardUnverifiedOpeningClaims(rawSummary, openingStatus.missing, openingStatus) : rawSummary,
       issues,
       createdAt: new Date(Date.now() + 1_000).toISOString(),
       mode,
       round,
       sawImages: true,
+      openingFrames: {
+        exact: openingStatus.exact,
+        ...(openingStatus.unverified.length ? { unverified: openingStatus.unverified } : {}),
+        missing: openingStatus.missing,
+        verified: openingStatus.verified,
+        ...(openingStatus.stale ? { stale: true } : {}),
+        ...(openingStatus.reason ? { reason: openingStatus.reason } : {}),
+      },
     };
 
     const strikes = nextStrikes(prevReview?.ok && !prevReview.pass ? prevReview.strikes : undefined, report);
     report.strikes = strikes;
     const gaveUpOn = !report.pass ? Object.keys(strikes).filter((id) => strikes[id]! >= MAX_STRIKES) : [];
     if (gaveUpOn.length) report.gaveUpOn = gaveUpOn;
-    const isFinal = round >= maxRounds || gaveUpOn.length > 0;
+    const isFinal = (round >= maxRounds || gaveUpOn.length > 0) && !(mode === 'global' && openingStatus.stale);
     report.blocking = !report.pass && !isFinal;
     if (isFinal && !report.pass) {
       const defectsFile = writeUnresolvedDefects(projectRoot, slug, report);

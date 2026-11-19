@@ -22,10 +22,23 @@ Never stop halfway to ask "should I continue?". Run every step in order until `<
    - Note the returned `hostProjectRoot` (`/home/azy/Musique/2d/what-if-app/data/projects/<slug>`).
 2. **If a `:8005` `video` ID was provided**:
    - Call MCP `whatif_run` with `{ episode: "<slug>", step: "source", args: ["--pick", "hook", "--apply"] }`.
-   - **CRITICAL**: NEVER translate, shorten, summarize, or rewrite the `:8005` proposal — whether it is in **French (`fr`)** or **English (`en`)**, keep 100% of the proposal text and continue in that same language!
+   - **CRITICAL**: at import, NEVER translate, shorten or summarize the `:8005` proposal — whether it is in **French (`fr`)** or **English (`en`)**, keep the full text and continue in that same language. The only place where the text is corrected is step 1 bis.
    - Read `src/episodes/<slug>/episode.json` via `whatif_read_file` and set `"defaultSet"` to a clean short `place()` recipe slug (`"classroom"`, `"living"`, `"hospital"`, `"corridor"`, `"auditorium"`, `"street"`, `"office"`, `"bedroom"`, `"restaurant"`, etc.) via `whatif_write_file` (preserving `script`, `lang`, `voice`, `title`, and `aspect`).
 3. **If standalone (no `:8005` video ID)**:
    - Write `src/episodes/<slug>/episode.json` following the 7-beat What If formula with sourced `science: [{ claim, working, source }]`, clean `"defaultSet"` slug, and `"lang": "fr"` or `"en"`.
+
+### 1 bis. Read, Correct or Drop the Narration (Before `voice`)
+`whatif_run voice` mechanically refuses to run until the script is approved. On the channel's published videos, a first sentence that is a precise act kept 76 % of the viewers against 62 % for an explanation.
+
+1. `whatif_run { episode: "<slug>", step: "script" }` once: it freezes the original in `out/<slug>/script.orig.md` and returns the contract and the shape of the reading card.
+2. Read the script against the contract, then write `out/<slug>/script-card.json` with `whatif_write_file`:
+   - `"verdict": "good"`: the text respects the contract — do not touch it, do not correct for taste.
+   - `"verdict": "fix"`: correct `episode.json.script` wherever needed (any part, ElevenLabs acting tags included) and list every change in `changes: [{ before, after, rule }]`. Never invent a fact, change the payoff, the narrator or the language. Keep 75–110 % of the original words; a dropped name or number goes in `removed`.
+   - `"verdict": "discard"`: no payoff, no conflict, or not followable without the original pictures — give the `reason`, tell the user, and STOP (no voice). Never pass `--keep` yourself: it is the user's override.
+3. `whatif_run { episode: "<slug>", step: "script" }` again. When it answers that the Reviewer must read the text:
+   - launch the read-only `whatif-reviewer` subagent (it did not write the corrections) with the prompt: `"Review the narration of episode '<slug>': read out/<slug>/script-pack.md with whatif_read_file. Judge two things only: same story (no invented, changed or lost fact, same payoff, same narrator) and the contract written in the pack. Do not judge style. Save your verdict with whatif_save_script_review({ episode: '<slug>', pass, sameStory, sig, issues: [{ rule, quote, problem, fix }] }) (passing the mandatory Submitted-Sig token read from script-pack.md and explicit boolean sameStory) and report it."`
+   - accepted: go to step 2. Refused: correct what it names, update the card, run step `script` again. A second refusal drops the story.
+4. Never write `script-check.json`, `script-review.json` or `source.fit.md` yourself: the studio refuses it.
 
 ### 2. Voice, Shotlist & Timeline Plan
 1. `whatif_run { episode: "<slug>", step: "voice" }` (do **NOT** pass `--force`: it automatically picks **Léa** or **Hugo** from the FR/EN script content, reuses matching `:8005` audio, and aligns word timestamps via Deepgram in `fr` or `en`).

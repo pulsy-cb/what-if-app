@@ -287,6 +287,13 @@ def make_app(project: pathlib.Path):
                 board = out_dir / "board"
                 if board.is_dir():
                     out["stills"] = {p.stem: p.read_bytes() for p in sorted(board.glob("*.png"))}
+                opening_dir = out_dir / "opening"
+                if opening_dir.is_dir():
+                    out["opening"] = {
+                        p.name: p.read_bytes()
+                        for p in sorted(opening_dir.iterdir())
+                        if p.is_file() and (p.name == "manifest.json" or (p.name.startswith("f") and p.suffix == ".png"))
+                    }
             out["log"] = "\n".join(logs)[-8000:]
             out["timings"]["remote_total"] = round(time.perf_counter() - t0, 3)
             return out
@@ -602,12 +609,19 @@ def main(argv: list[str]) -> int:
         finally:
             shutil.rmtree(tmp_vid, ignore_errors=True)
         written.append(str(target))
-    elif args.mode == "stills" and res.get("stills"):
-        board = out_dir / "board"
-        board.mkdir(parents=True, exist_ok=True)
-        for name, data in res["stills"].items():
-            (board / f"{name}.png").write_bytes(data)
-            written.append(str(board / f"{name}.png"))
+    elif args.mode == "stills" and (res.get("stills") or res.get("opening")):
+        if res.get("stills"):
+            board = out_dir / "board"
+            board.mkdir(parents=True, exist_ok=True)
+            for name, data in res["stills"].items():
+                (board / f"{name}.png").write_bytes(data)
+                written.append(str(board / f"{name}.png"))
+        if res.get("opening"):
+            opening_dir = out_dir / "opening"
+            opening_dir.mkdir(parents=True, exist_ok=True)
+            for fname, data in res["opening"].items():
+                (opening_dir / fname).write_bytes(data)
+                written.append(str(opening_dir / fname))
 
     emit(done=4, total=4, stage="done", message=f"{len(written)} file(s) written")
     node = res.get("node_result") or {}

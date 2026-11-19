@@ -5,6 +5,7 @@ import type { MessageRow } from './db.js';
 import { readText, walk } from '../tools/paths.js';
 import { readEpisodeShots } from '../tools/episode-source.js';
 import { engineDigest } from './engine-digest.js';
+import { scriptGate } from '../tools/script-check.js';
 import { DIRECTOR_GUIDE, SHOT_GUIDE, STAGE_GUIDE, modernDirectorGuide } from './director-guide.js';
 
 /** Count spoken words in an episode script, stripping [audio tags] and <xml> markers consistently everywhere. */
@@ -49,16 +50,34 @@ commands for a human to paste: you call the tools.
    fetches the server's narration proposal — **whether in French (\`fr\`) OR in English (\`en\`)** (or generates one if none exist yet), selects the
    proposal on \`:8005\`, saves it in \`out/<episode>/source.fr.md\`, sets \`episode.json.lang\` (\`"fr"\` or \`"en"\`), and **automatically populates \`episode.json.script\`
    with the full narration**.
-   - **CRITICAL RULE FOR \`:8005\` VIDEOS (FRENCH OR ENGLISH)**: **NEVER block, stop, translate, rewrite, or shorten the server's narration proposal!**
+   - **CRITICAL RULE FOR \`:8005\` VIDEOS (FRENCH OR ENGLISH)**: **never translate or shorten the server's narration proposal at import, and never stop because of its language.** The only place where the text is corrected is step 1 bis.
      If the proposal or audio on \`:8005\` is in English, **continue the entire pipeline in English seamlessly**; if it is in French, continue in French.
      Episodes from \`:8005\` can be 30 seconds, 90 seconds, or several minutes long. Keep the complete narration
-     from \`source.fr.md\` in \`episode.json.script\` (the pipeline audit rejects any shortened script!). Only set
+     from \`source.fr.md\` in \`episode.json.script\` (the audit rejects a script under 75 % of the proposal). Only set
      \`"defaultSet"\` to a short \`place()\` recipe slug (\`"living"\`, \`"hospital"\`, \`"street"\`, \`"office"\`, \`"bedroom"\`, \`"restaurant"\`, \`"auditorium"\`, \`"corridor"\`, etc. — put rich prose descriptions in \`DIRECTOR.md\`, never a whole sentence in \`"defaultSet"\`) and preserve \`"aspect"\` (\`"9:16"\` or \`"16:9"\`).
 1. Standalone episodes (ONLY when there is NO \`:8005\` source video id):
    Write \`episode.json\` following the 7-beat What If formula in the language requested by the user (French by default, or English when requested; set \`"lang": "en"\` for English), with cold-open demos, premise/title card, sourced science turn in \`science: [{ claim, working, source }]\`, and closing question.
    **Location rule (\`set\`)**: every episode has its own world — put a clean set slug on \`"defaultSet"\` and on each beat's \`"set"\` when the scene shifts space (\`"living"\`, \`"corridor"\`, \`"street"\`, \`"vehicle"\`, \`"hospital"\`, \`"rooftop"\`, \`"bedroom"\`, etc.). Never use \`<Classroom>\` unless the story is about school!
+1 bis. whatif_run script — **the narration is read, corrected when it can be, read again by the Reviewer, and dropped when it cannot be saved, BEFORE the voice** (the voice step refuses to run until then).
+   On the published videos of the channel, a first sentence that is a precise act kept 76 % of the viewers against 62 % for an explanation; stories that end on their payoff were watched longer.
+   a. Run \`whatif_run { episode, step: "script" }\` once: it freezes the original text in \`out/<episode>/script.orig.md\` and returns the contract.
+   b. Read the script against the contract: (1) the first sentence is a precise, abnormal ACT by a person, one can draw it: not a rule of the world, a setting, a date or a moral;
+      (2) what the person risks appears within the first three sentences; (3) one sentence, one fact that can be shown; (4) the listener always knows who speaks, no telegraphic style;
+      (5) the payoff comes within the last four sentences, and after it there is a gesture or a consequence, never a moral, an explanation of what was just shown, or the opening sentence glued back on;
+      (6) acting tags (\`[tense]\`, \`[whispering]\`…) match what is said, no slow tag on the payoff.
+   c. Write \`out/<episode>/script-card.json\`: \`{ "verdict": "good" | "fix" | "discard", "opening": { "sentence": "…" }, "payoff": { "sentence": "…" }, "defects": [{ "rule", "quote", "where", "fix" }], "changes": [{ "before", "after", "rule" }], "removed": ["…"], "reason": "…" }\`.
+      \`good\`: the text respects the contract, do not touch it (most faithful translations of a strong source are already good: do not correct for taste).
+      \`fix\`: correct \`episode.json.script\` wherever it is needed (any part of the text, ElevenLabs acting tags included) and list every change. You may reorder the opening so it starts with the act, cut a moral or a glued loop after the payoff,
+      split a sentence, say who speaks, unfold a telegraphic passage, tighten a slow middle, add / remove / move tags. You may NOT invent a fact, a character or a line that changes the story, change the payoff, the narrator (je / il) or the language, or drop a fact the rest depends on.
+      The corrected text keeps 75 % to 110 % of the original words; every name and number of the original stays, or is listed in \`removed\`.
+      \`discard\`: the story has no payoff, no conflict, or cannot be followed without the original pictures: say why in \`reason\`. Nothing is spent on it.
+   d. Run \`whatif_run { episode, step: "script" }\` again. It checks the bounds, then the Reviewer reads the original, your text and your card. Accepted: go to the voice. Refused: correct what it names and run the step again; a second refusal drops the story.
+   e. A discarded story stops here: tell the user why and do not run \`voice\`. Only the user can keep it (\`args: ["--keep", "<reason>"]\`); never pass \`--keep\` on your own. Never write \`script-check.json\`, \`script-review.json\` or \`source.fit.md\` yourself.
 2. whatif_run voice — **ElevenLabs TTS by default** (\`provider: "elevenlabs"\`, multilingual model \`"eleven_v4"\`, default speed/\`speakingRate: 1.15\`) through the local \`:8005\` TTS API, on the same
    video id (Fish Audio remains available with \`provider: "fish"\`). \`source\` and \`voice\` **automatically detect the language (\`fr\` vs \`en\`), POV (\`first\` / \`second\` / \`third\`), and narrator gender cues from the proposal/translation content** in both French (*"je me suis allongée"*, *"elle"*) and English (*"I'm a woman"*, *"my boyfriend"*, narrator vocative names, 3rd-person *"she"* leads) to pick the matching voice: **Léa** (\`"KSyQzmsYhFbuOhqj1Xxv"\`, \`narratorGender: "female"\`) or **Hugo** (\`"3Tp5mYhT9wrfnry9pzvV"\`, \`narratorGender: "male"\`). **Gender-verified reuse of \`:8005\` audio (FR or EN)**: \`whatif_run { step: "voice" }\` checks \`GET /api/videos/<videoId>/tts/check\` on \`:8005\` and reuses an existing file ONLY when it is a user upload (\`"upload"\`) or already matches the detected target voice (\`Léa\` vs \`Hugo\`); if \`:8005\` had an old TTS with the wrong gender, \`voice\` automatically regenerates with the right narrator! Just run \`whatif_run { episode: "<slug>", step: "voice" }\` without \`--force\`; to override manually, pass \`args: ["--voice", "lea"]\` or \`["--voice", "hugo"]\` or set \`"locked": true\` in \`episode.json.voice\`. It writes \`public/<episode>/voice.wav\` and \`src/episodes/<episode>/words.json\` using Deepgram ASR in the episode's language (\`fr\` or \`en\`) (any \`[audio tags]\` like \`[whispers]\` or \`[excited]\` are sent to ElevenLabs v4 and automatically stripped from \`words.json\`).
+   **Narration tempo**: ElevenLabs stops at speed 1.2, so a faster narration is made after the take. \`whatif_run { step: "voice", args: ["--tempo", "1.3"] }\`
+   plays the finished take 1.3 times faster at the same pitch, moves the word times with it, keeps the value in \`episode.json.voice.tempo\` and costs no new take
+   (range 0.8–1.5). **A new episode is voiced at tempo 1.3 by default** (\`WHATIF_VOICE_TEMPO\` changes that default; an episode voiced before keeps 1). Change it only when the user asks, and run \`shotlist\` again afterwards: the cuts follow the word times.
 3. whatif_run shotlist — cuts the measured words into brisk clause-aligned shots (3-gear pace: fast cold-open hook in the first 25%, ~19–27 cuts/min even on multi-minute stories),
    distributes semantic \`insert\` shots alongside \`wide\`/\`medium\`/\`close\`/\`low angle\`, tags narrative accents (\`hook-title\`, \`stamp\`, \`tag\`, \`vfx:*\`),
    and seeds colour-grade \`look\` (\`memory\`, \`tension\`), mid-episode \`fx\` (\`flash\`, \`shake\`), and location-matched ambient + foley \`sound\` (no looped background music).
@@ -86,6 +105,8 @@ commands for a human to paste: you call the tools.
        - Donne à chaque épisode une palette de couleurs (\`palette\`), une ambiance lumineuse (\`mood\`) et des étalonnages (\`look: "memory" | "tension" | "revelation" | "nightmare"\` dans \`episode.json.edit\`) propres à son histoire pour que deux épisodes ne se ressemblent jamais.
        - Sur tout plan avec personnages qui dépasse \`90\` frames (3 s), ajoute au moins un changement de cadrage interne (\`beats: [{ at, cam: 'close', on, angle, shake }]\`) calé sur un mot-clé.
        - Le son (\`episode.json.sound\`) pose des ambiances continues fondues par lieu (\`room_tone\`, \`roof_wind\`, \`class_murmur\`) et des bruitages concrets : **n'ajoute PAS de boucle musicale de fond (\`"music"\`)** sauf demande explicite de l'utilisateur.
+       - Musique : option par épisode, **décochée par défaut** ; seul \`episode.json.music: true\` (choix de l'utilisateur) la pose, sous la voix (\`step: "sfx"\`).
+       - Sous-titres : le moteur les dessine seul depuis \`words.json\` (écrits dans \`timeline.json.subtitles\` par \`step: "sfx"\`) ; **ne les écris jamais à la main** ; \`episode.json.subtitles: false\` les coupe.
      - Quand deux personnages interagissent, utiliser des **plans à deux (two-shots)** en plan large/moyen et alterner avec des cadrages rapprochés cohérents (ne jamais faire disparaître le mobilier ou l'interlocuteur sans raison !).
      - **Prise et tenue d'objets (INTERDICTION des objets flottants)**: un objet tenu ou saisi ne doit **JAMAIS** être dessiné à des centaines de pixels de la main !
        - Pour un objet tenu en continu dans la main : passe-le à \`<Hero handRProp={<g>...</g>} />\` ou positionne-le à \`const H = handWorld(pose, 'R')\` (\`<g transform={\`translate(\${H.x} \${H.y})\`}>...\`).
@@ -398,6 +419,8 @@ export function episodeStatus(projectRoot: string): EpisodeStatus[] {
     const words = countScriptWords(ep.script);
     const steps: [string, boolean][] = [
       ['script', Array.isArray(ep.script) && ep.script.length > 0 && !JSON.stringify(ep.script).includes('TODO')],
+      // shown only while the door in front of the voice is closed: the text is not read and approved yet (step 1 bis)
+      ...(words > 0 && scriptGate(projectRoot, slug) ? ([['script-check', false]] as [string, boolean][]) : []),
       ['words', fs.existsSync(path.join(src, 'words.json'))],
       ['timeline', fs.existsSync(path.join(src, 'timeline.json')) && Number(ep?.shots?.length ?? 0) > 1],
       ['voice', fs.existsSync(path.join(projectRoot, 'public', slug, 'voice.wav'))],

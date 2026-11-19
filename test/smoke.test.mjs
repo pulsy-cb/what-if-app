@@ -207,7 +207,8 @@ test('whatif audits: episode formula/language and shots animation/framing checks
       script: [{ text: 'Un court résumé de quinze mots qui raccourcit complètement la traduction du serveur.' }],
       science: [],
     };
-    assert.match(episodeAudit(shortenedSourceEp, 'rdv') ?? '', /shortened or rewrote the :8005 translation proposal/);
+    // the bound is the same (75 % of the proposal); since 2026-11-19 the text may be corrected inside it, in step "script"
+    assert.match(episodeAudit(shortenedSourceEp, 'rdv') ?? '', /\(13 words\) is under 75 % of the :8005 proposal \(288 words\): a correction keeps the story, it does not cut it/);
 
     const fullWords = Array.from({ length: 240 }, (_, i) => `mot${i}`).join(' ');
     const fullSourceEp = {
@@ -565,7 +566,8 @@ test('engine overlay: adds the template classroom and the character views, patch
         "import { SetDefs } from './light';\n" +
         '<svg width={1920} height={1080} viewBox="0 0 1920 1080" a /><svg width={1920} height={1080} viewBox="0 0 1920 1080" b /><svg width={1920} height={1080} viewBox="0 0 1920 1080" c />\n' +
         '<rect width="1920" height="1080" fill="url(#epVig)" /><rect width="1920" height="1080" filter="url(#epGrain)" />\n' +
-        'const def = run ? looks[run.look] : undefined;\n',
+        'const def = run ? looks[run.look] : undefined;\n' +
+        '      {A.voice ? <Audio src={staticFile(A.voice)} /> : null}\n',
     );
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'index.ts'), "export * from './rig';\nexport * from './furnish';\nexport * from './ui';\n");
     fs.writeFileSync(path.join(dir, 'src', 'engine', 'sets', 'classroom.tsx'), 'export const Classroom = () => null; // the old one\n');
@@ -577,7 +579,7 @@ test('engine overlay: adds the template classroom and the character views, patch
   const read = (d, rel) => fs.readFileSync(path.join(d, rel), 'utf8');
   try {
     const dry = applyEngineOverlay(dir, { dryRun: true });
-    assert.ok(dry.added.includes('src/engine/pieces.tsx') && dry.added.includes('src/engine/views.tsx'));
+    assert.ok(dry.added.includes('src/engine/pieces.tsx') && dry.added.includes('src/engine/views.tsx') && dry.added.includes('src/engine/subtitles.tsx'));
     assert.ok(dry.replaced.includes('src/engine/sets/classroom.tsx'));
     assert.equal(fs.existsSync(path.join(dir, 'src', 'engine', 'views.tsx')), false, 'a dry run writes nothing');
     assert.match(overlaySummary(dry, false), /would be added/);
@@ -587,10 +589,11 @@ test('engine overlay: adds the template classroom and the character views, patch
     const framed = read(dir, 'src/engine/episode.tsx');
     assert.equal(framed.split('viewBox={VIEW_BOX}').length - 1, 3, 'every svg of an older engine follows the 9:16 frame');
     assert.doesNotMatch(framed, /viewBox="0 0 1920 1080"|width="1920"/);
-    assert.match(framed, /^import \{ AbsoluteFill \} from 'remotion';\nimport \{ STUDIO \} from '\.\.\/studio\.config';\n/);
+    assert.match(framed, /^import \{ AbsoluteFill \} from 'remotion';\nimport \{ Subtitles \} from '\.\/subtitles';\nimport \{ STUDIO \} from '\.\.\/studio\.config';\n/);
+    assert.match(framed, /<Subtitles tl=\{tl\} f=\{f\} \/>\n      \{A\.voice \? <Audio/);
     assert.match(read(dir, 'src/engine/sets/classroom.tsx'), /export const CLASS_DEFAULT/);
     assert.match(read(dir, 'src/engine/views.tsx'), /export const ViewHead/);
-    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/accents';\nexport \* from '\.\/shot';\nexport \* from '\.\/rooms';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
+    assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/rig';\nexport \* from '\.\/views';\nexport \* from '\.\/furnish';\nexport \* from '\.\/subtitles';\nexport \* from '\.\/accents';\nexport \* from '\.\/shot';\nexport \* from '\.\/rooms';\nexport \* from '\.\/actions';\nexport \* from '\.\/cast';\nexport \* from '\.\/person';\nexport \* from '\.\/stage';\nexport \* from '\.\/pieces';\nexport \* from '\.\/ui';/);
     assert.match(read(dir, 'src/engine/stage.tsx'), /export const Stage\b/);
     assert.match(read(dir, 'src/engine/person.tsx'), /export const Person\b/);
     assert.match(read(dir, 'src/engine/index.ts'), /export \* from '\.\/person';/);
@@ -2848,10 +2851,18 @@ test('step 2 — shotlist.py: 3-gear cold-open hook + brisk long 16:9 pace, sema
     assert.ok(fxShots.size >= 2, `mid-episode dramatic twists also receive fx, not only the last shot (${[...fxShots].join(', ')})`);
 
     const accents = ep.shots.map((s) => s.accent).filter(Boolean);
-    assert.equal(ep.shots[0].accent, 'hook-title', 'S1 receives hook-title accent on narrative :8005 episode');
+    assert.equal(ep.shots[0].accent, undefined, 'S1 has no hook-title by default on narrative :8005 episode (titleCard is opt-in)');
+    assert.ok(ep.opening && typeof ep.opening.type === 'string', 'shotlist records ep.opening from the first sentence');
+    assert.notEqual(ep.shots[0].size, 'wide', 'S1 follows opening_size instead of a blind wide establishing shot');
     assert.ok(accents.includes('stamp'), 'time/place jump receives stamp accent');
     assert.ok(accents.includes('tag'), 'numeric amount receives tag accent');
     assert.ok(accents.some((a) => a.startsWith('vfx:')), 'dramatic beat receives character vfx accent');
+
+    // When titleCard: true is explicitly enabled, S1 receives hook-title
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify({ ...ep, titleCard: true, shots: [] }));
+    execFileSync('python3', [path.resolve('pipeline/shotlist.py'), 'er-long', '--project', dir], { stdio: 'pipe' });
+    const epWithTitle = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+    assert.equal(epWithTitle.shots[0].accent, 'hook-title', 'S1 receives hook-title accent when titleCard: true');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -2983,7 +2994,9 @@ test('step 4 — director guide, continuity pin & reviewer: surfaces accents, ta
   assert.match(SHOT_GUIDE, /stamp:/);
   assert.match(SHOT_GUIDE, /tag:/);
   assert.match(SHOT_GUIDE, /mandatory on any character shot longer than 90 frames/);
-  assert.match(modernDirectorGuide(), /No subtitles\/captions of the narrator's voice/);
+  assert.match(modernDirectorGuide(), /Subtitles of the narration are drawn automatically by the engine: NEVER write them by hand/);
+  assert.match(modernDirectorGuide(), /place nothing important in the lower third of a vertical frame/);
+  assert.match(modernDirectorGuide(), /No comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard/);
   assert.match(modernDirectorGuide(), /tabletopShot/);
 
   const modPrompt = modernSystemPrompt();
@@ -3306,8 +3319,25 @@ print(json.dumps(out))
       if (req.method === 'POST' && u.includes('/tts/transcribe')) {
         req.resume();
         req.on('end', () => {
+          const fullText = "Je me suis allongée sur le brancard et j'étais pas assez inquiète.";
+          const toks = fullText.split(/\s+/);
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ transcript: [{ start: 0.05, end: 1.1, text: 'Je me suis allongée' }] }));
+          res.end(
+            JSON.stringify({
+              transcript: [
+                {
+                  start: 0.05,
+                  end: 1.15,
+                  text: fullText,
+                  words: toks.map((w, i) => ({
+                    word: w,
+                    start: Number((0.05 + i * 0.09).toFixed(3)),
+                    end: Number((0.05 + (i + 0.85) * 0.09).toFixed(3)),
+                  })),
+                },
+              ],
+            }),
+          );
         });
         return;
       }
@@ -3354,6 +3384,64 @@ print(json.dumps(out))
     assert.equal(generatedCalls.length, 1, 'uploaded user audio on :8005 is reused without calling ElevenLabs');
     const meta2 = JSON.parse(fs.readFileSync(path.join(dir, 'out', slug, 'voice_meta.json'), 'utf8'));
     assert.equal(meta2.audioPath, '/downloads/tts/old.mp3');
+
+    // 2c-bis. voice tempo: the finished take is played faster at the same pitch, the word times follow, and no new take is asked.
+    //         ElevenLabs stops at speed 1.2; Pulsy's videos that hold best speak at 4.5 words/s, the studio at 3.5 (2026-11-19).
+    const wavSeconds = () => (fs.statSync(path.join(dir, 'public', slug, 'voice.wav')).size - 44) / 2 / 44100;
+    const readWords = () => JSON.parse(fs.readFileSync(path.join(epDir, 'words.json'), 'utf8'));
+    // :8005 now holds a take in another voice: any change of the take's signature would ask ElevenLabs for a new one
+    checkVoiceTag = 'elevenlabs:3Tp5mYhT9wrfnry9pzvV';
+    const callsBefore = generatedCalls.length;
+    const epVoice = () => JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8')).voice;
+    assert.equal(epVoice().tempo, 1.3, 'a new episode is voiced at tempo 1.3 by default, and the value is written in the episode');
+    const durDefault = wavSeconds();
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug, '--tempo', '1'], { cwd: dir, env });
+    const dur1 = wavSeconds();
+    const words1 = readWords();
+    assert.ok(Math.abs(durDefault - dur1 / 1.3) < 0.05, `the default take is the unchanged one played 1.3 times faster: ${dur1.toFixed(3)} s -> ${durDefault.toFixed(3)} s`);
+    assert.ok(dur1 > 0.5 && words1.length > 1, 'a take and its words exist before the tempo test');
+    const fast = await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug, '--tempo', '1.3'], { cwd: dir, env });
+    assert.match(fast.stdout, /tempo 1\.3: .* same pitch/);
+    const dur13 = wavSeconds();
+    const words13 = readWords();
+    assert.ok(Math.abs(dur13 - dur1 / 1.3) < 0.05, `tempo 1.3 shortens the take: ${dur1.toFixed(3)} s -> ${dur13.toFixed(3)} s`);
+    assert.equal(words13.length, words1.length, 'the same words, only their times change');
+    const last1 = words1[words1.length - 1];
+    const last13 = words13[words13.length - 1];
+    assert.ok(Math.abs(last13.e - last1.e / 1.3) < 0.03, `the word times follow the audio: ${last1.e} -> ${last13.e}`);
+    assert.ok(last13.e <= dur13 + 0.01, 'the last word ends inside the audio');
+    assert.equal(generatedCalls.length, callsBefore, 'changing the tempo never asks for a new (paid) take');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8')).voice.tempo, 1.3, 'the tempo is kept in the episode');
+    // a later run without the argument gives the same audio: the shot list is cut on these word times
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: dir, env });
+    assert.ok(Math.abs(wavSeconds() - dur13) < 0.005, 'the kept tempo is applied again');
+    assert.deepEqual(readWords(), words13);
+    // out of range: refused, nothing rewritten
+    const tooFast = await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug, '--tempo', '3'], { cwd: dir, env }).catch((e) => e);
+    assert.match(String(tooFast.stdout || '') + String(tooFast.stderr || ''), /out of range \(expected 0\.8 to 1\.5/);
+    assert.ok(Math.abs(wavSeconds() - dur13) < 0.005, 'a refused tempo leaves the take as it was');
+    // back to 1: the take as it was before
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug, '--tempo', '1'], { cwd: dir, env });
+    assert.ok(Math.abs(wavSeconds() - dur1) < 0.005, 'tempo 1 gives the unchanged take back');
+    assert.deepEqual(readWords(), words1);
+    // an episode voiced before the tempo existed (a take, no voice.tempo) stays at 1: its shots are cut on those word times
+    const dropTempo = () => {
+      const e = JSON.parse(fs.readFileSync(path.join(epDir, 'episode.json'), 'utf8'));
+      delete e.voice.tempo;
+      fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(e, null, 2));
+    };
+    dropTempo();
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: dir, env });
+    assert.ok(Math.abs(wavSeconds() - dur1) < 0.005, 'an episode that already has its voice is not sped up behind its shots');
+    assert.equal(epVoice().tempo, 1);
+    // no take yet and no voice.tempo: the default again
+    dropTempo();
+    fs.rmSync(path.join(dir, 'public', slug, 'voice.wav'));
+    await execFileAsync('python3', [path.resolve('pipeline/voice_fish.py'), slug], { cwd: dir, env });
+    assert.ok(Math.abs(wavSeconds() - dur1 / 1.3) < 0.05, 'without a take the default tempo applies');
+    assert.equal(epVoice().tempo, 1.3);
+    assert.equal(generatedCalls.length, callsBefore);
+    checkVoiceTag = 'upload';
 
     // 2d. No English transcript and an audio track :8005 cannot read, but the French text is already there:
     //     the import takes it and never asks for a transcription
@@ -5613,7 +5701,10 @@ print(json.dumps({
     });
     const sysJoined = pinMsgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
     assert.match(sysJoined, /Language: English \(en\) — continue the entire pipeline in English/);
-    assert.match(modernSystemPrompt(), /NEVER block, stop, translate, rewrite, or shorten/);
+    // an English proposal still never stops the chain; "rewrite" left this rule on 2026-11-19: the text is corrected in step 1 bis, nowhere else
+    assert.match(modernSystemPrompt(), /never translate or shorten the server's narration proposal at import, and never stop because of its language/);
+    assert.match(modernSystemPrompt(), /1 bis\. whatif_run script — \*\*the narration is read, corrected when it can be, read again by the Reviewer, and dropped when it cannot be saved, BEFORE the voice/);
+    assert.match(modernSystemPrompt(), /never pass `--keep` on your own/);
     assert.match(modernDirectorGuide(), /### Choosing the place/);
     assert.match(reviewerSystemPrompt('en'), /tous les textes à l'écran DOIVENT être en anglais/);
     assert.match(reviewerSystemPrompt('fr'), /Aucun texte en anglais/);
@@ -5968,7 +6059,7 @@ print("PY_OK")
     assert.doesNotMatch(sfxSrc, /write_wav\(pub \/ "sfx\.wav", sfx, 0\.98\)/, 'the track is no longer brought to its own peak');
     assert.match(sfxSrc, /sfx_gain_db = min\(-0\.5, -1\.5 \+ max\(-6\.0, min\(3\.0, v_lufs \+ 18\.0\)\)/);
     assert.match(sfxSrc, /plays in its place/);
-    assert.match(fs.readFileSync(path.resolve('pipeline/master_run.py'), 'utf8'), /alimiter=limit=0\.84:level=false/);
+    assert.match(fs.readFileSync(path.resolve('pipeline/master_run.py'), 'utf8'), /alimiter=limit=0\.4:level=false/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -5992,6 +6083,110 @@ test('lot J: a curl climbs off the eye at three-quarter, a short chat fills the 
   assert.match(fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8'), /A gesture means something once/);
 });
 
+test('screenShot: a screen that shows another shot is an insert for the audit, with or without anyone on it', async () => {
+  const { shotsAudit } = await import('../dist/tools/whatif.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-screen-'));
+  try {
+    const slug = 'screen';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'shot.tsx'), 'export const shot = () => () => null;\nexport const screenShot = () => () => null;\n');
+    const ids = ['S1', 'S2', 'S3', 'S4'];
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const screen = defineEpisode("D", { timeline, shots: { ${ids.join(', ')} } });\n`);
+    const tl = { fps: 30, total: 240, segments: ids.map((id, i) => ({ shot: id, a: i * 60, b: (i + 1) * 60 })), shots: ids.map((id) => ({ id, len: 60, key: 18 })) };
+    const ep = {
+      aspect: '9:16',
+      script: Array.from({ length: 4 }, (_, i) => ({ beat: `b${i}`, text: 'Une histoire complète en français.' })),
+      shots: ids.map((id) => ({ id, size: id === 'S3' || id === 'S4' ? 'close' : 'medium', set: 'bedroom', note: 'action' })),
+    };
+    fs.writeFileSync(
+      path.join(epDir, 'shots.tsx'),
+      [
+        `export const S1 = shot({ place: BED, cam: 'wide', people: [{ who: A, act: 'explain', beats: [{ at: 18, face: 'worried' }] }] });`,
+        `export const S2 = shot({ place: BED, cam: 'medium', people: [{ who: B, act: 'think', beats: [{ at: 20, act: 'shrug' }] }] });`,
+        // an empty room on a surveillance monitor, the camera held still: no person, nothing "moves" in the code
+        `export const S3 = screenShot({ kind: 'cctv', label: 'CAM 604', live: 'EN DIRECT', show: shot({ place: FLAT, cam: 'wide', move: 'still' }) });`,
+        `export const S4 = screenShot({ kind: 'tv', label: 'JT', show: shot({ place: FLAT, cam: 'medium', people: [{ who: A, act: 'idle' }] }) });`,
+      ].join('\n'),
+    );
+    assert.equal(shotsAudit(dir, slug, ep, tl), null, 'a monitor with an empty room and a television with someone on it both pass');
+    const engine = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+    assert.match(engine, /export const screenShot = \(spec: ScreenSpec\)/);
+    assert.match(engine, /<Show t=\{t\} len=\{len\} f=\{t\} \/>/, 'the screen renders the shot it is given');
+    assert.match(fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8'), /screenShot\(\{ show, kind, label, live, time, back \}\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lot N: a phone chat is not empty at the key frame, a long stamp fits its box, the photo screen is centred', async () => {
+  const { phoneKeyErrors } = await import('../dist/tools/whatif.js');
+  const late = `export const S9 = phoneShot({ name: 'Filtre', messages: [{ at: 45, text: 'Connexion' }, { at: 64, text: 'Activée' }] });`;
+  assert.match(phoneKeyErrors('S9', late, 45)[0], /S9: the first message of this phoneShot appears at frame 45/);
+  assert.deepEqual(phoneKeyErrors('S9', late.replace('at: 45', 'at: 4'), 45), [], 'a first bubble at frame 4 is on the board');
+  assert.equal(phoneKeyErrors('S9', late.replace('at: 45', 'at: 20'), 12).length, 1, 'with a key frame at 12, a first bubble at 20 is too late');
+  assert.equal(phoneKeyErrors('S9', late.replace('at: 45', 'at: 20'), 40).length, 0, 'with a key frame at 40, frame 20 is in time');
+  assert.deepEqual(phoneKeyErrors('S2', `export const S2 = phoneShot({ name: 'A', screen: 'lock', notify: { at: 40, text: 'x' } });`, 18), [], 'a lock screen waits for its banner');
+  assert.deepEqual(phoneKeyErrors('S3', `export const S3 = shot({ place: P, people: [{ who: A, beats: [{ at: 50, act: 'nod' }] }] });`, 18), [], 'only phone shots');
+  const accents = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/accents.tsx'), 'utf8');
+  const m = /mainChars \* \(fs \* ([\d.]+) \+ ([\d.]+)\) \+ (\d+) \+ (\d+)/.exec(accents);
+  assert.ok(m, 'the stamp box counts the letter spacing');
+  // 'LE MATIN · COULOIR' (18 glyphs) at 34 px, spaced 2.5, starting 58 px into the box: the text must end inside it
+  const boxW = 18 * (34 * Number(m[1]) + Number(m[2])) + Number(m[3]) + Number(m[4]);
+  assert.ok(58 + 18 * (34 * 0.6 + 2.5) <= boxW - 12, `the text ends at least 12 px before the edge of a ${boxW} px box`);
+  const shotSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/shot.tsx'), 'utf8');
+  assert.match(shotSrc, /const top = H \* 0\.1 \+ Math\.max\(0, \(H \* 0\.84 - blockH\) \/ 2\);/, 'the photo block is centred in the screen');
+});
+
+test('variety: after five shots on a character the list asks for an evocation shot, and the card reviewer gets the figures', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(
+    'python3',
+    [
+      '-c',
+      `
+import sys, json
+sys.path.insert(0, "pipeline")
+import shotlist as sl
+mk = lambda n, sizes={}: [{"id": f"S{i+1}", "size": sizes.get(i, "medium"), "set": "living", "view": "3/4-left", "move": "track", "note": f"line {i+1}"} for i in range(n)]
+# fourteen shots on a character: the 6th and the 12th become evocations, never the last one
+a = mk(14)
+assert sl.add_evocations(a) == 2, [s["size"] for s in a]
+assert [s["id"] for s in a if s.get("evoke")] == ["S6", "S12"], [s["id"] for s in a if s.get("evoke")]
+assert a[5]["size"] == "insert" and a[5]["view"] == "front" and a[5]["move"] == "push" and a[5]["note"].startswith("evocation:") and a[5]["note"].endswith("line 6")
+# an insert already there starts the count again: nothing to add
+b = mk(14, {4: "insert", 9: "insert"})
+assert sl.add_evocations(b) == 0, [s["size"] for s in b]
+# a short episode is left alone, and so is a shot that carries an accent
+assert sl.add_evocations(mk(11)) == 0
+c = mk(14); c[5]["accent"] = "tag"
+assert sl.add_evocations(c) == 2 and [s["id"] for s in c if s.get("evoke")] == ["S7", "S13"], [s["id"] for s in c if s.get("evoke")]
+# the last shot stays on the character
+d = mk(12)
+assert [s["id"] for s in d if sl.add_evocations(d) is not None and s.get("evoke")] == ["S6"], d
+print("PY_OK")
+`,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.match(out, /PY_OK/);
+
+  const { varietyFigures } = await import('../dist/orchestrator/reviewer.js');
+  const card = (id, who, objects = []) => ({ id, set: 'living', stage: { people: who.map((w) => ({ who: w })), objects, zone: 'sofa' } });
+  const mono = varietyFigures([...Array.from({ length: 9 }, (_, i) => card(`S${i + 1}`, ['JULIEN'], ['phone'])), card('S10', []), card('S11', ['JULIEN', 'MARIE'])]);
+  assert.equal(mono.longestRun, 9);
+  assert.deepEqual([mono.runFrom, mono.runTo], ['S1', 'S9']);
+  assert.deepEqual([mono.places, mono.people, mono.topObject], [1, 2, 'phone']);
+  assert.ok(mono.topObjectShare > 0.8 && /phone/.test(mono.text) && /S1 à S9/.test(mono.text));
+  const varied = varietyFigures([card('S1', ['A']), card('S2', ['B']), card('S3', ['A', 'B']), card('S4', []), card('S5', ['A'])]);
+  assert.equal(varied.longestRun, 1, 'a change of people or an empty card starts the series again');
+  const src = fs.readFileSync(path.resolve('src/orchestrator/reviewer.ts'), 'utf8');
+  assert.match(src, /variety\.longestRun > 6 \|\| variety\.topObjectShare > 0\.4/);
+  assert.match(src, /\$\{varietyNote\}/, 'the figures go to the card reviewer');
+  assert.match(fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8'), /Evocation shots\./);
+});
+
 test('master: a final that lands under the target is brought up to it under a limiter, the peak stays safe', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-level-'));
@@ -6011,7 +6206,7 @@ test('master: a final that lands under the target is brought up to it under a li
       { stdio: 'pipe' },
     );
     const out = execFileSync('python3', [path.resolve('pipeline/master_run.py'), slug, '--skip-render'], { cwd: dir, encoding: 'utf8' });
-    assert.match(out, /level catch-up: \+/, 'the missing gain is applied');
+    assert.match(out, /level catch-up: peaks held, aim -1[34]\.\d -> -\d+\.\d LUFS, peak -\d+\.\d dBTP, kept/, 'the try is kept and says what it gave');
     const rep = JSON.parse(fs.readFileSync(path.join(outDir, 'report.json'), 'utf8'));
     assert.ok(Math.abs(rep.lufs + 14.0) <= 0.3, `expected the final within 0.3 dB of -14 LUFS, got ${rep.lufs}`);
     assert.ok(rep.true_peak_dbtp <= -0.9, `the peak stays under -0.9 dBTP, got ${rep.true_peak_dbtp}`);
@@ -6177,6 +6372,28 @@ test('whatif-studio MCP server + stdio bridge: exposes Studio tools, translates 
     const savedRev = JSON.parse(fs.readFileSync(path.join(outDir, 'review.json'), 'utf8'));
     assert.equal(savedRev.pass, true);
     assert.equal(savedRev.blocking, false);
+
+    // 3. Every call left its trace in the project: an episode made over MCP can be audited afterwards
+    const journal = app.db.listThreads('mcp-ep').find((t) => t.title === 'MCP · journal');
+    assert.ok(journal, 'the project has its MCP journal thread');
+    const rowsJ = app.db.listMessages(journal.id);
+    const callsJ = rowsJ.filter((m) => m.role === 'assistant').map((m) => JSON.parse(m.payload).toolCalls[0]);
+    const resultsJ = rowsJ.filter((m) => m.role === 'tool').map((m) => ({ ...JSON.parse(m.payload), content: m.content }));
+    assert.equal(callsJ.length, resultsJ.length, 'one result per call');
+    assert.deepEqual(callsJ.map((c) => c.id), resultsJ.map((r) => r.toolCallId), 'each result answers its call');
+    for (const expected of ['whatif_create_project', 'whatif_write_file', 'whatif_edit_shot', 'whatif_run', 'whatif_review_pack', 'whatif_save_review']) {
+      assert.ok(callsJ.some((c) => c.name === expected), `${expected} is in the journal`);
+    }
+    const refused = resultsJ.find((r) => r.name === 'whatif_run' && r.ok === false);
+    assert.ok(refused && refused.content.length > 20, 'the render refused before the review is kept, with its reason');
+    assert.ok(resultsJ.every((r) => typeof r.ms === 'number' && r.via === 'mcp'), 'each result says how long it took');
+    const longWrite = await rpc('tools/call', {
+      name: 'whatif_write_file',
+      arguments: { episode: 'mcp-ep', path: 'src/episodes/mcp-ep/NOTES.md', content: 'x'.repeat(9000) },
+    });
+    assert.equal(longWrite.result.isError, false);
+    const lastCall = JSON.parse(app.db.listMessages(journal.id).filter((m) => m.role === 'assistant').pop().payload).toolCalls[0];
+    assert.ok(lastCall.args.content.length < 4100 && /\[9000 chars\]$/.test(lastCall.args.content), 'a whole file is not copied into the journal');
   } finally {
     child.kill();
     await app.close();
@@ -6297,4 +6514,859 @@ test('beats carry things: hold, vfx and pose in a beat, picking a thing up on a 
   const guide = fs.readFileSync(path.resolve('src/orchestrator/director-guide.ts'), 'utf8');
   assert.match(guide, /hold: \{ what: 'keys', from: 'table' \}/);
   assert.match(guide, /until: 40/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The narration is read, corrected or dropped before the voice (Pulsy, 2026-11-19). On 29 published videos, a first
+// sentence that is a precise act kept 75.8 % of the viewers against 61.7 % for an explanation.
+const SCRIPT_ORIG =
+  "Il a arraché une étiquette de prix de banane et l'a collée sur une boîte de console. Puis il est passé à la caisse automatique. " +
+  "Le ticket est sorti, personne ne l'a arrêté. Alors il a recommencé trois fois dans le même magasin de Miami. Il les a vendues en ligne à bas prix. " +
+  "Mais quand un acheteur a connecté la console, Sony a retracé le numéro de série. La police a suivi la piste jusque chez lui. Chaque voleur finit par payer.";
+const SCRIPT_FIXED = SCRIPT_ORIG.replace(' Chaque voleur finit par payer.', '').replace('La police a suivi', '[tense] La police a suivi');
+const SCRIPT_OPENING = "Il a arraché une étiquette de prix de banane et l'a collée sur une boîte de console.";
+const SCRIPT_PAYOFF = 'La police a suivi la piste jusque chez lui.';
+const cardFix = (extra = {}) => ({
+  verdict: 'fix',
+  opening: { sentence: SCRIPT_OPENING },
+  payoff: { sentence: SCRIPT_PAYOFF },
+  defects: [{ rule: 5, quote: 'Chaque voleur finit par payer.', where: 'last sentence', fix: 'cut the moral' }],
+  changes: [
+    { before: 'Chaque voleur finit par payer.', after: '', rule: 5 },
+    { before: 'La police a suivi', after: '[tense] La police a suivi', rule: 6 },
+  ],
+  ...extra,
+});
+const cardGood = { verdict: 'good', opening: { sentence: SCRIPT_OPENING }, payoff: { sentence: 'Chaque voleur finit par payer.' } };
+
+test('script check: the bounds of a correction and the honesty of the reading card (no model)', async () => {
+  const { scriptCheckErrors, keyFacts, scriptSig, stripTags, SCRIPT_LIMITS } = await import('../dist/tools/script-check.js');
+  const errs = (o, c, card) => scriptCheckErrors(o, c, card).errors;
+
+  // no card, or a card with no verdict
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_ORIG, null).join('\n'), /reading card is missing/);
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_ORIG, { verdict: 'maybe' }).join('\n'), /reading card is missing/);
+
+  // "good": the text is left as it was
+  assert.deepEqual(errs(SCRIPT_ORIG, SCRIPT_ORIG, cardGood), []);
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED, { ...cardGood, payoff: { sentence: SCRIPT_PAYOFF } }).join('\n'), /verdict "good" on a script that differs/);
+  // a tag alone is a change too: the voice does not say the text the same way
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_ORIG.replace('La police', '[tense] La police'), cardGood).join('\n'), /verdict "good" on a script that differs/);
+  assert.notEqual(scriptSig(SCRIPT_ORIG), scriptSig(SCRIPT_ORIG.replace('La police', '[tense] La police')));
+  assert.equal(stripTags('[tense] La  police <break/> arrive'), 'La police arrive');
+
+  // "fix": a real correction, declared and made, passes
+  assert.deepEqual(errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix()), []);
+  // ...the card must tell the truth
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_ORIG, cardFix({ payoff: { sentence: SCRIPT_PAYOFF } })).join('\n'), /"fix" but the script is still the original/);
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix({ changes: [] })).join('\n'), /needs the list of "changes"/);
+  assert.match(
+    errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix({ changes: [{ before: 'Puis il est passé', after: 'Puis il a couru vers la sortie', rule: 3 }] })).join('\n'),
+    /declared and not made/,
+  );
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix({ changes: [{ before: 'Une phrase jamais écrite', after: '', rule: 3 }] })).join('\n'), /"before" is not in the original/);
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix({ opening: { sentence: 'Tout commence un mardi.' } })).join('\n'), /opening sentence quoted in the card is not in the script/);
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED, cardFix({ payoff: { sentence: '' } })).join('\n'), /must quote the payoff sentence/);
+
+  // ...and stay inside its bounds: it keeps the story, it does not pad
+  const short = SCRIPT_ORIG.split(' ').slice(0, 30).join(' ') + '.';
+  assert.match(errs(SCRIPT_ORIG, short, cardFix({ payoff: { sentence: '' } })).join('\n'), /keeps at least 75 % of the story/);
+  const padded = SCRIPT_FIXED + ' Il a regretté. Il a pleuré. Il a juré de ne jamais recommencer. Sa mère a pleuré aussi.';
+  assert.match(errs(SCRIPT_ORIG, padded, cardFix()).join('\n'), /does not pad/);
+  assert.equal(SCRIPT_LIMITS.minRatio, 0.75);
+
+  // a name or a number of the original is not lost in silence
+  assert.deepEqual(keyFacts(SCRIPT_ORIG).names.sort(), ['Miami', 'Sony']);
+  assert.ok(keyFacts(SCRIPT_ORIG).numbers.includes('trois'));
+  assert.deepEqual(keyFacts('« Tu viens ? » Mais elle part. Alors Paul attend. Elle sait. Mais non.').names, ['Paul'], 'a capital after a quote or at a sentence start is not a name');
+  const noSony = SCRIPT_FIXED.replace('Sony a retracé', 'le fabricant a retracé');
+  assert.match(errs(SCRIPT_ORIG, noSony, cardFix()).join('\n'), /name\(s\) of the original no longer in the script.*Sony/);
+  assert.deepEqual(errs(SCRIPT_ORIG, noSony, cardFix({ removed: ['Sony'] })), []);
+  const noThree = SCRIPT_FIXED.replace('recommencé trois fois', 'recommencé');
+  assert.match(errs(SCRIPT_ORIG, noThree, cardFix()).join('\n'), /number\(s\) of the original no longer in the script.*trois/);
+
+  // acting tags: short English cues
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_FIXED.replace('[tense]', '[il parle très lentement, comme épuisé]'), cardFix({ changes: cardFix().changes.slice(0, 1) })).join('\n'), /short English cues/);
+  assert.match(
+    errs(SCRIPT_ORIG, SCRIPT_FIXED.replace('[tense]', '[slow and low and sad and tired and broken and lost and quiet]'), cardFix({ changes: cardFix().changes.slice(0, 1) })).join('\n'),
+    /tag too long/,
+  );
+
+  // "discard" says why
+  assert.match(errs(SCRIPT_ORIG, SCRIPT_ORIG, { verdict: 'discard' }).join('\n'), /needs a "reason"/);
+  assert.deepEqual(errs(SCRIPT_ORIG, SCRIPT_ORIG, { verdict: 'discard', reason: 'no payoff' }), []);
+
+  // The length of a sentence is NOT a bound: the two best videos of the channel (27 324 and 25 343 views) open on a
+  // sentence of 23 words and hold sentences of 24 to 31 words. A limit at 17 or 22 words would have refused them.
+  const best =
+    "J'ai remarqué cette femme au rayon des céréales parce qu'elle a pris exactement la boîte que je venais de poser dans mon chariot. " +
+    "Elle m'a suivie jusqu'à la caisse. Vous avez oublié la glace de votre mari, a-t-elle dit en brandissant son propre pot. Il m'avait dit qu'il vous quittait.";
+  assert.equal(best.split('. ')[0].split(' ').length, 23);
+  const bestCard = { verdict: 'good', opening: { sentence: best.split('. ')[0] + '.' }, payoff: { sentence: "Il m'avait dit qu'il vous quittait." } };
+  assert.deepEqual(scriptCheckErrors(best, best, bestCard), { errors: [], notes: [] });
+  // only a sentence nobody can say in one breath is reported, to the Reviewer, without refusing the text
+  const long = best.replace("Elle m'a suivie jusqu'à la caisse.", "Elle m'a suivie " + 'dans le rayon suivant puis '.repeat(8) + "jusqu'à la caisse.");
+  const longRes = scriptCheckErrors(long, long, bestCard);
+  assert.deepEqual(longRes.errors, []);
+  assert.match(longRes.notes.join('\n'), /a sentence of \d+ words/);
+});
+
+function scriptProject(script = SCRIPT_ORIG, { video = 'vid-1', voiced = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-script-'));
+  const slug = 'ep';
+  fs.mkdirSync(path.join(root, 'src', 'episodes', slug), { recursive: true });
+  fs.mkdirSync(path.join(root, 'out', slug), { recursive: true });
+  const setScript = (text) =>
+    fs.writeFileSync(
+      path.join(root, 'src', 'episodes', slug, 'episode.json'),
+      JSON.stringify({ id: 'Ep', lang: 'fr', ...(video ? { source: { provider: 'nouveau', videoId: video, words: SCRIPT_ORIG.split(' ').length } } : {}), script: [{ text }] }),
+    );
+  setScript(script);
+  if (video) fs.writeFileSync(path.join(root, 'out', slug, 'source.fr.md'), SCRIPT_ORIG + '\n');
+  if (voiced) {
+    fs.mkdirSync(path.join(root, 'public', slug), { recursive: true });
+    fs.writeFileSync(path.join(root, 'public', slug, 'voice.wav'), 'RIFF');
+  }
+  const setCard = (card) => fs.writeFileSync(path.join(root, 'out', slug, 'script-card.json'), JSON.stringify(card));
+  const out = (f) => path.join(root, 'out', slug, f);
+  return { root, slug, setScript, setCard, out };
+}
+
+test('script step: the voice stays closed until the text is approved, kept by the user, or the story is dropped', async () => {
+  const { runScriptStep, recordScriptReview, recordScriptReviewFailure, scriptGate, readScriptState, approveWithoutReviewer } = await import('../dist/tools/script-check.js');
+
+  // 1. a new episode: the door is closed, the first run freezes the original and asks for the card
+  const a = scriptProject();
+  assert.match(scriptGate(a.root, a.slug), /has not been read and approved yet/);
+  const first = runScriptStep(a.root, a.slug);
+  assert.equal(first.ok, false);
+  assert.match(first.summary, /script-card\.json/);
+  assert.match(first.summary, /first sentence is a precise, abnormal ACT/);
+  assert.equal(fs.readFileSync(a.out('script.orig.md'), 'utf8').trim(), SCRIPT_ORIG);
+
+  // 2. the bounds are checked before the Reviewer is asked anything
+  a.setScript(SCRIPT_FIXED);
+  a.setCard(cardFix({ changes: [] }));
+  const bad = runScriptStep(a.root, a.slug);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.needsReview, false);
+  assert.match(bad.summary, /needs the list of "changes"/);
+  assert.equal(readScriptState(a.root, a.slug).status, 'blocked');
+
+  // 3. bounds passed: the Reviewer must read; the door is still closed
+  a.setCard(cardFix());
+  const ready = runScriptStep(a.root, a.slug);
+  assert.equal(ready.ok, true);
+  assert.equal(ready.needsReview, true);
+  const pack = fs.readFileSync(a.out('script-pack.md'), 'utf8');
+  assert.match(pack, /## Original text\n.*Chaque voleur finit par payer\./);
+  assert.match(pack, /## Script proposed for the voice\n.*\[tense\] La police/);
+  assert.match(scriptGate(a.root, a.slug), /has not been read and approved yet/);
+  assert.equal(fs.existsSync(a.out('source.fit.md')), false);
+
+  // 4. accepted: approved at once, the approved text is written, the door opens
+  const okRec = recordScriptReview(a.root, a.slug, { pass: true, sameStory: true, sig: ready.state.submittedSig, issues: [], model: 'fake' });
+  assert.equal(okRec.state.status, 'approved');
+  assert.equal(okRec.state.reviewer, 'ok');
+  assert.equal(fs.readFileSync(a.out('source.fit.md'), 'utf8').trim(), SCRIPT_FIXED);
+  assert.equal(scriptGate(a.root, a.slug), null);
+  assert.equal(runScriptStep(a.root, a.slug).ok, true, 'running the step again on an approved text changes nothing');
+  // ...and closes again when the text changes afterwards
+  a.setScript(SCRIPT_FIXED.replace('à bas prix', 'pour presque rien'));
+  assert.match(scriptGate(a.root, a.slug), /changed after it was approved/);
+
+  // 5. "pass" with another story is a refusal; refused twice, the story is dropped; only the user keeps it
+  const b = scriptProject(SCRIPT_FIXED);
+  b.setCard(cardFix());
+  const bStep1 = runScriptStep(b.root, b.slug);
+  assert.equal(bStep1.needsReview, true);
+  const r1 = recordScriptReview(b.root, b.slug, {
+    pass: true,
+    sameStory: false,
+    sig: bStep1.state.submittedSig,
+    issues: [{ rule: 'histoire', quote: 'x', problem: 'la chute a changé', fix: 'remets la chute' }],
+  });
+  assert.equal(r1.state.status, 'blocked', 'a verdict that says the story changed never approves');
+  assert.match(r1.summary, /Refusé \(tour 1 sur 2\)/);
+  assert.match(r1.summary, /la chute a changé/);
+  const same = runScriptStep(b.root, b.slug);
+  assert.equal(same.ok, false, 'the exact text the Reviewer refused is not sent to it again');
+  assert.equal(same.needsReview, false);
+  b.setScript(SCRIPT_FIXED.replace('[tense] ', '[whispering] '));
+  b.setCard(cardFix({ changes: [cardFix().changes[0], { before: 'La police a suivi', after: '[whispering] La police a suivi', rule: 6 }] }));
+  const bStep2 = runScriptStep(b.root, b.slug);
+  assert.equal(bStep2.needsReview, true);
+  const r2 = recordScriptReview(b.root, b.slug, {
+    pass: false,
+    sameStory: true,
+    sig: bStep2.state.submittedSig,
+    issues: [{ rule: 'chute', problem: 'toujours une morale', fix: '' }],
+  });
+  assert.equal(r2.state.status, 'discarded');
+  assert.match(r2.summary, /ÉCARTÉE avant la voix/);
+  assert.match(scriptGate(b.root, b.slug), /story was discarded/);
+  assert.match(runScriptStep(b.root, b.slug).summary, /STORY DISCARDED: the Reviewer refused the script 2 times/);
+  const kept = runScriptStep(b.root, b.slug, ['--keep', 'je la veux quand même']);
+  assert.equal(kept.ok, true);
+  assert.equal(kept.state.status, 'kept');
+  assert.equal(kept.state.keptReason, 'je la veux quand même');
+  assert.equal(scriptGate(b.root, b.slug), null);
+
+  // 6. the author says "discard": nothing goes to the voice
+  const c = scriptProject();
+  c.setCard({ verdict: 'discard', reason: 'no payoff: the story stops before anything happens' });
+  const dropped = runScriptStep(c.root, c.slug);
+  assert.equal(dropped.ok, false);
+  assert.match(dropped.summary, /STORY DISCARDED before the voice.*no payoff/);
+  assert.match(scriptGate(c.root, c.slug), /story was discarded/);
+
+  // 7. the Reviewer gives no verdict: once, the door stays closed; twice, the text goes on and it is written down
+  const d = scriptProject();
+  d.setCard(cardGood);
+  const dStep = runScriptStep(d.root, d.slug);
+  assert.equal(dStep.needsReview, true);
+  const f1 = recordScriptReviewFailure(d.root, d.slug, 'timeout', dStep.state.submittedSig);
+  assert.equal(f1.state.status, 'review');
+  assert.match(scriptGate(d.root, d.slug), /has not been read and approved yet/);
+  const f2 = recordScriptReviewFailure(d.root, d.slug, 'timeout', dStep.state.submittedSig);
+  assert.equal(f2.state.status, 'approved');
+  assert.equal(f2.state.reviewer, 'skipped');
+  assert.match(f2.summary, /seule lecture de l'agent/);
+  assert.equal(scriptGate(d.root, d.slug), null);
+  // no Reviewer configured at all: same end, said at once
+  const e = scriptProject();
+  e.setCard(cardGood);
+  runScriptStep(e.root, e.slug);
+  assert.equal(approveWithoutReviewer(e.root, e.slug, 'aucun Reviewer configuré').state.reviewer, 'skipped');
+  assert.equal(scriptGate(e.root, e.slug), null);
+
+  // the agent's todo list names the step while the door is closed, and only then
+  const { pipelineTodo } = await import('../dist/orchestrator/context.js');
+  const todoOpen = scriptProject();
+  assert.equal(pipelineTodo(todoOpen.root)[0], 'script-check', 'a new episode: the text is the first thing to do');
+  assert.ok(!pipelineTodo(a.root).includes('script-check') || scriptGate(a.root, a.slug), 'the step leaves the list once the text is approved');
+  a.setScript(SCRIPT_FIXED);
+  assert.equal(scriptGate(a.root, a.slug), null);
+  assert.ok(!pipelineTodo(a.root).includes('script-check'));
+
+  // 8. what the door leaves alone: an episode voiced before this step existed, and the standalone science format
+  assert.equal(scriptGate(scriptProject(SCRIPT_ORIG, { voiced: true }).root, 'ep'), null);
+  assert.equal(scriptGate(scriptProject(SCRIPT_ORIG, { video: '' }).root, 'ep'), null);
+});
+
+test('script review: the Reviewer accepts, refuses, or gives no verdict — an unreadable answer is never an acceptance', async () => {
+  const { runScriptStep, readScriptState, scriptGate } = await import('../dist/tools/script-check.js');
+  const { reviewScript, SCRIPT_REVIEW_SYSTEM } = await import('../dist/orchestrator/reviewer.js');
+  const seen = [];
+  const fake = (answer) => ({
+    model: 'fake-reviewer',
+    chat: async ({ messages }) => {
+      seen.push(messages);
+      if (answer instanceof Error) throw answer;
+      return { text: answer };
+    },
+  });
+  const ready = () => {
+    const p = scriptProject(SCRIPT_FIXED);
+    p.setCard(cardFix());
+    assert.equal(runScriptStep(p.root, p.slug).needsReview, true);
+    return p;
+  };
+
+  // accepted
+  const a = ready();
+  const note = await reviewScript(fake('Voici mon verdict : {"pass": true, "sameStory": true, "issues": []}'), a.root, a.slug);
+  assert.match(note, /Accepté/);
+  assert.equal(readScriptState(a.root, a.slug).status, 'approved');
+  assert.equal(JSON.parse(fs.readFileSync(a.out('script-review.json'), 'utf8')).model, 'fake-reviewer');
+  // what it was given: the contract, the original, the proposed text and the card
+  const sent = seen.at(-1);
+  assert.equal(sent[0].content, SCRIPT_REVIEW_SYSTEM);
+  assert.match(SCRIPT_REVIEW_SYSTEM, /MÊME HISTOIRE/);
+  assert.match(SCRIPT_REVIEW_SYSTEM, /la première phrase est un acte précis et anormal/);
+  assert.match(sent[1].content, /## Original text[\s\S]*## Script proposed for the voice[\s\S]*## Reading card/);
+  // nothing waits for a review any more: no second call
+  const calls = seen.length;
+  assert.equal(await reviewScript(fake('{"pass": true}'), a.root, a.slug), null);
+  assert.equal(seen.length, calls);
+
+  // refused, with what to correct
+  const b = ready();
+  const refused = await reviewScript(fake('{"pass": false, "sameStory": true, "issues": [{"rule": "ouverture", "quote": "Il a arraché", "problem": "ouvre sur un résumé", "fix": "commence par le geste"}]}'), b.root, b.slug);
+  assert.match(refused, /Refusé \(tour 1 sur 2\)[\s\S]*ouvre sur un résumé[\s\S]*commence par le geste/);
+  assert.equal(readScriptState(b.root, b.slug).status, 'blocked');
+  assert.ok(scriptGate(b.root, b.slug));
+
+  // no verdict: a sentence, a JSON without "pass", a breakdown. Never approved on the first one.
+  for (const answer of ['Le texte me semble très bien, bravo.', '{"ok": true}', new Error('503 overloaded')]) {
+    const c = ready();
+    const n = await reviewScript(fake(answer), c.root, c.slug);
+    assert.match(n, /Pas de verdict/);
+    assert.equal(readScriptState(c.root, c.slug).status, 'review');
+    assert.ok(scriptGate(c.root, c.slug), 'no verdict leaves the voice closed');
+    const again = await reviewScript(fake(answer), c.root, c.slug);
+    assert.match(again, /seule lecture de l'agent/);
+    assert.equal(readScriptState(c.root, c.slug).reviewer, 'skipped');
+  }
+});
+
+test('agent loop: after the script step the Reviewer reads the narration; without a Reviewer the text goes on and it is written down', async () => {
+  const { runTurn } = await import('../dist/orchestrator/agent.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { runScriptStep, readScriptState, scriptGate } = await import('../dist/tools/script-check.js');
+  const turn = async (reviewProvider) => {
+    const p = scriptProject(SCRIPT_FIXED);
+    p.setCard(cardFix());
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-loop-script-'));
+    const db = new Db(path.join(dir, 'app.db'));
+    // the real step behind the tool name: the loop reads `needsReview` in its result
+    const whatifRun = {
+      name: 'whatif_run',
+      description: 'run',
+      policy: 'auto',
+      schema: { type: 'object' },
+      run: async (input) => {
+        const r = runScriptStep(p.root, p.slug, input.args ?? []);
+        return { ok: r.ok, summary: r.summary, data: { ...(r.state ?? {}), needsReview: r.needsReview } };
+      },
+    };
+    db.createProject('p', 'p', p.root);
+    const th = db.createThread('p', 't');
+    db.addMessage(th.id, 'user', 'go');
+    let step = 0;
+    const provider = { id: 'x', label: 'x', model: 'm', chat: async () => (++step === 1 ? { text: '', toolCalls: [{ id: 'a', name: 'whatif_run', args: { episode: p.slug, step: 'script' } }] } : { text: 'fini', toolCalls: [] }) };
+    const config = { ...loadConfig(), maxSteps: 4, reviewMaxRounds: 2, approvalsMode: 'off', contextChars: 90_000 };
+    await runTurn({ db, bus: { emit() {} }, config, registry: new ToolRegistry([whatifRun]), approvals: null, provider: () => provider, reviewProvider }, th.id, new AbortController().signal);
+    return { p, said: db.listMessages(th.id).map((m) => String(m.content ?? '')).join('\n') };
+  };
+
+  let reviewerCalls = 0;
+  const reviewer = { model: 'r', label: 'r', chat: async () => (reviewerCalls++, { text: '{"pass": true, "sameStory": true, "issues": []}', toolCalls: [] }) };
+  const read = await turn(() => reviewer);
+  assert.equal(reviewerCalls, 1, 'the Reviewer is asked once, right after the step');
+  assert.equal(readScriptState(read.p.root, read.p.slug).status, 'approved');
+  assert.equal(readScriptState(read.p.root, read.p.slug).reviewer, 'ok');
+  assert.equal(scriptGate(read.p.root, read.p.slug), null);
+  assert.match(read.said, /\[REVIEWER — TEXTE\] Accepté/, 'the author of the corrections is told the verdict');
+
+  const refusing = { model: 'r', label: 'r', chat: async () => ({ text: '{"pass": false, "sameStory": true, "issues": [{"rule": "chute", "problem": "une morale après la chute", "fix": "coupe-la"}]}', toolCalls: [] }) };
+  const refused = await turn(() => refusing);
+  assert.equal(readScriptState(refused.p.root, refused.p.slug).status, 'blocked');
+  assert.ok(scriptGate(refused.p.root, refused.p.slug), 'a refused text keeps the voice closed');
+  assert.match(refused.said, /Refusé \(tour 1 sur 2\)[\s\S]*une morale après la chute/);
+
+  const alone = await turn(() => null);
+  assert.equal(readScriptState(alone.p.root, alone.p.slug).reviewer, 'skipped');
+  assert.match(alone.said, /Pas de relecture \(aucun Reviewer configuré\)/);
+});
+
+test('script step over MCP: the voice is refused, the verdict files are not the author\'s to write, a sub-agent saves the verdict', async () => {
+  const { spawn } = await import('node:child_process');
+  const { scriptGate } = await import('../dist/tools/script-check.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-'));
+  const skill = path.join(dir, 'skill');
+  fs.mkdirSync(path.join(skill, 'studio', 'src', 'episodes'), { recursive: true });
+  fs.writeFileSync(path.join(skill, 'studio', 'package.json'), JSON.stringify({ name: 'studio', private: true }));
+  fs.writeFileSync(path.join(skill, 'studio', 'src', 'episodes', 'index.ts'), 'export const EPISODES = [];\n');
+  const app = createApp({ ...loadConfig(), dataRoot: dir, dbPath: path.join(dir, 'app.db'), projectsDir: path.join(dir, 'projects'), skillDir: skill });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const child = spawn('node', [path.resolve('dist/mcp/stdio.js')], {
+    env: { ...process.env, WHATIF_PORT: String(app.server.address().port), WHATIF_STUDIO_HOST: '127.0.0.1', WHATIF_HOST_DATA: dir },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const pending = new Map();
+  let buf = '';
+  child.stdout.on('data', (chunk) => {
+    buf += chunk.toString('utf8');
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      const msg = JSON.parse(line);
+      if (msg.id !== undefined && pending.has(msg.id)) {
+        pending.get(msg.id)(msg);
+        pending.delete(msg.id);
+      }
+    }
+  });
+  let nextId = 1;
+  const rpc = (method, params = {}) =>
+    new Promise((resolve) => {
+      const id = nextId++;
+      pending.set(id, resolve);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+  const call = async (name, args) => {
+    const r = await rpc('tools/call', { name, arguments: args });
+    return { error: r.result.isError, text: r.result.content[0]?.text ?? '' };
+  };
+  const slug = 'txt-ep';
+  try {
+    await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy-test', version: '1.0' } });
+    assert.ok((await rpc('tools/list')).result.tools.some((t) => t.name === 'whatif_save_script_review'));
+    const created = await call('whatif_create_project', { episode: slug, video: 'vid-9', aspect: '9:16' });
+    assert.equal(created.error, false, created.text);
+    const root = path.join(dir, 'projects', slug);
+    const epFile = path.join(root, 'src', 'episodes', slug, 'episode.json');
+    const setScript = (text) => {
+      const ep = JSON.parse(fs.readFileSync(epFile, 'utf8'));
+      fs.writeFileSync(epFile, JSON.stringify({ ...ep, lang: 'fr', script: [{ text }] }, null, 2));
+    };
+    setScript(SCRIPT_ORIG);
+    fs.mkdirSync(path.join(root, 'out', slug), { recursive: true });
+    fs.writeFileSync(path.join(root, 'out', slug, 'source.fr.md'), SCRIPT_ORIG + '\n');
+
+    // the voice is the first credit spent: refused until the text is read
+    const voice = await call('whatif_run', { episode: slug, step: 'voice' });
+    assert.equal(voice.error, true);
+    assert.match(voice.text, /cannot run voice yet — the script has not been read and approved yet: run whatif_run \{ step: "script" \}/);
+
+    // first run: the original is frozen, the contract and the card are asked for
+    const first = await call('whatif_run', { episode: slug, step: 'script' });
+    assert.equal(first.error, true);
+    assert.match(first.text, /script-card\.json[\s\S]*payoff comes within the last four sentences/);
+
+    // the verdict files are the studio's and the Reviewer's
+    for (const f of ['script-check.json', 'script-review.json', 'source.fit.md', 'script.orig.md']) {
+      const forged = await call('whatif_write_file', { episode: slug, path: `out/${slug}/${f}`, content: '{"status":"approved"}' });
+      assert.equal(forged.error, true, `${f} must not be writable by the author`);
+      assert.match(forged.text, /refused: this file is written by whatif_run \{ step: "script" \} and by the Reviewer/);
+    }
+    assert.ok(scriptGate(root, slug), 'a forged approval opened nothing');
+
+    // the card is the author's
+    const card = await call('whatif_write_file', { episode: slug, path: `out/${slug}/script-card.json`, content: JSON.stringify(cardGood) });
+    assert.equal(card.error, false, card.text);
+    const ready = await call('whatif_run', { episode: slug, step: 'script' });
+    assert.equal(ready.error, false, ready.text);
+    assert.match(ready.text, /Launch a read-only Reviewer subagent[\s\S]*script-pack\.md[\s\S]*whatif_save_script_review/);
+
+    const readPackSig = async () => {
+      const r = await call('whatif_read_file', { episode: slug, path: `out/${slug}/script-pack.md` });
+      assert.equal(r.error, false, r.text);
+      const m = /Submitted-Sig:\s*(\S+)/.exec(r.text);
+      assert.ok(m, `expected Submitted-Sig in script-pack.md, got: ${r.text}`);
+      return m[1];
+    };
+
+    // the sub-agent refuses: back to the author, the voice stays closed
+    const sig1 = await readPackSig();
+    const no = await call('whatif_save_script_review', { episode: slug, pass: false, sameStory: true, sig: sig1, issues: [{ rule: 'chute', quote: 'Chaque voleur finit par payer.', problem: 'une morale après la chute', fix: 'coupe la dernière phrase' }] });
+    assert.equal(no.error, true);
+    assert.match(no.text, /Refusé \(tour 1 sur 2\)[\s\S]*une morale après la chute/);
+    assert.ok(scriptGate(root, slug));
+    // a verdict with nothing waiting for it is refused
+    const stray = await call('whatif_save_script_review', { episode: slug, pass: true, sameStory: true, sig: sig1 });
+    assert.equal(stray.error, true);
+    assert.match(stray.text, /no script is waiting for a review/);
+    assert.ok(scriptGate(root, slug), 'a stray "pass" approved nothing');
+
+    // corrected, read again, accepted
+    setScript(SCRIPT_FIXED);
+    assert.equal((await call('whatif_write_file', { episode: slug, path: `out/${slug}/script-card.json`, content: JSON.stringify(cardFix()) })).error, false);
+    assert.equal((await call('whatif_run', { episode: slug, step: 'script' })).error, false);
+    const sig2 = await readPackSig();
+    const yes = await call('whatif_save_script_review', { episode: slug, pass: true, sameStory: true, sig: sig2, issues: [] });
+    assert.equal(yes.error, false, yes.text);
+    assert.match(yes.text, /Accepté/);
+    assert.equal(fs.readFileSync(path.join(root, 'out', slug, 'source.fit.md'), 'utf8').trim(), SCRIPT_FIXED);
+    assert.equal(scriptGate(root, slug), null);
+    assert.match((await call('whatif_status', { episode: slug })).text, /"scriptCheck": "approved"/);
+  } finally {
+    child.kill();
+    await app.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('subtitles & music opt-in: sfx_run.py builds timed cues without delivery tags, renders <Subtitles> in 16:9 & 9:16, and gates music on episode.json.music', NEEDS_NUMPY, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const ts = await import('typescript');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-subs-music-'));
+  try {
+    const slug = 'subs-ep';
+    const epDir = path.join(dir, 'src', 'episodes', slug);
+    const pubDir = path.join(dir, 'public', slug);
+    const libDir = path.join(dir, 'library', 'sfx');
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.mkdirSync(pubDir, { recursive: true });
+    fs.mkdirSync(libDir, { recursive: true });
+
+    const makeMp3 = (name, freq, secs, amp = 0.25) => {
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${freq}:duration=${secs}:sample_rate=44100`, '-af', `volume=${amp}`, path.join(libDir, `${name}-cached01.mp3`)],
+        { stdio: 'pipe' },
+      );
+    };
+    makeMp3('room_tone', 180, 4.0, 0.2);
+    makeMp3('music', 330, 5.0, 0.35);
+    makeMp3('pop', 660, 0.4, 0.3);
+    makeMp3('drone_hit', 110, 1.2, 0.35);
+    makeMp3('switch_off', 300, 0.4, 0.3);
+
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=6:sample_rate=44100', '-af', 'volume=0.45', path.join(pubDir, 'voice.wav')],
+      { stdio: 'pipe' },
+    );
+
+    const words = [
+      { w: '[tense]', p: '', s: 0.0, e: 0.05 },
+      { w: 'Il', p: '', s: 0.1, e: 0.25 },
+      { w: 'arrache', p: '', s: 0.25, e: 0.55 },
+      { w: "l'étiquette,", p: ',', s: 0.55, e: 0.9 },
+      // pause > 0.35s triggers a cue boundary, and single-word question gets its own cue
+      { w: 'Pourquoi', p: '?', s: 1.4, e: 1.8 },
+      { w: 'La', p: '', s: 2.0, e: 2.15 },
+      { w: 'caisse', p: '', s: 2.15, e: 2.4 },
+      { w: 'sonne', p: '', s: 2.4, e: 2.65 },
+      { w: 'trois', p: '', s: 2.65, e: 2.9 },
+      { w: 'fois', p: '', s: 2.9, e: 3.15 },
+      { w: 'devant', p: '', s: 3.15, e: 3.4 },
+      { w: 'lui', p: '.', s: 3.4, e: 3.7 },
+    ];
+    const shots = [
+      { id: 'S1', set: 'shop', size: 'insert', note: 'Étiquette sur la boîte' },
+      { id: 'S2', set: 'shop', size: 'medium', note: 'À la caisse' },
+    ];
+    const tlBase = {
+      fps: 30,
+      total: 180,
+      segments: [{ shot: 'S1', a: 0, b: 90 }, { shot: 'S2', a: 90, b: 180 }],
+      shots: [{ id: 'S1', len: 90, key: 18 }, { id: 'S2', len: 90, key: 18 }],
+      audio: {},
+    };
+    fs.writeFileSync(path.join(epDir, 'words.json'), JSON.stringify(words, null, 2));
+    fs.writeFileSync(path.join(epDir, 'timeline.json'), JSON.stringify(tlBase, null, 2));
+
+    // 1. Default: subtitles generated, music stays off even if sound.music was written in episode.json
+    const baseEp = {
+      id: 'SubsEp',
+      slug,
+      aspect: '9:16',
+      shots,
+      edit: [{ shot: 'S1' }, { shot: 'S2' }],
+      fx: [],
+      sound: { auto: true, clips: {}, events: [], music: { clip: 'music' } },
+    };
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(baseEp, null, 2));
+    execFileSync('python3', [path.resolve('pipeline/sfx_run.py'), slug], { cwd: dir, stdio: 'pipe' });
+    const tl1 = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+    assert.equal(tl1.audio.music, undefined, 'sound.music alone never enables music when episode.json.music !== true');
+    assert.equal(fs.existsSync(path.join(pubDir, 'music.wav')), false);
+    assert.ok(Array.isArray(tl1.subtitles) && tl1.subtitles.length === 4, `expected 4 subtitle cues, got ${JSON.stringify(tl1.subtitles)}`);
+    const allSubWords = tl1.subtitles.flatMap((c) => c.words.map((w) => w.w));
+    assert.ok(!allSubWords.some((w) => w.includes('tense') || w.includes('[')), 'delivery tags are stripped from subtitles');
+    assert.deepEqual(tl1.subtitles[0].words.map((w) => w.w), ['Il', 'arrache', "l'étiquette,"], 'punctuation p is not duplicated');
+    assert.deepEqual(tl1.subtitles[1].words.map((w) => w.w), ['Pourquoi?'], 'single-word sentence forms its own cue');
+    assert.equal(tl1.subtitles[2].words.length, 5, 'long clause splits cleanly at 5 words');
+    assert.deepEqual(tl1.subtitles[3].words.map((w) => w.w), ['devant', 'lui.']);
+    for (let i = 0; i < tl1.subtitles.length - 1; i++) {
+      assert.ok(tl1.subtitles[i].b <= tl1.subtitles[i + 1].a, 'consecutive cues never overlap in frames');
+    }
+
+    // 2. Transpile & render subtitles.tsx in 9:16 and 16:9 across frames
+    const subSrc = fs.readFileSync(path.resolve('engine-overlay/files/src/engine/subtitles.tsx'), 'utf8');
+    const transpiled = ts.default.transpileModule(subSrc, {
+      compilerOptions: { module: ts.default.ModuleKind.CommonJS, jsx: ts.default.JsxEmit.ReactJSX, esModuleInterop: true },
+    }).outputText;
+    for (const portrait of [true, false]) {
+      const mod = { exports: {} };
+      const el = (type, props) => ({ type, props });
+      new Function('exports', 'require', 'module', transpiled)(
+        mod.exports,
+        (id) => {
+          if (id === 'react') return { createElement: el };
+          if (id === 'react/jsx-runtime') return { jsx: el, jsxs: el };
+          if (id === '../studio.config') return { STUDIO: portrait ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 } };
+          throw new Error(`unexpected import ${id}`);
+        },
+        mod,
+      );
+      const { Subtitles } = mod.exports;
+      assert.equal(Subtitles({ tl: tl1, f: 0 }), null, 'no subtitle before first cue');
+      const active = Subtitles({ tl: tl1, f: 10 }); // frame 10 (~0.33s): inside cue 0, word "arrache" (a=8, b=16)
+      assert.ok(active && active.type === 'div', 'renders lower-third container');
+      assert.equal(active.props.style.top, portrait ? '68%' : '76%');
+      const spans = active.props.children;
+      assert.equal(spans.length, 3);
+      assert.equal(spans[0].props.style.color, '#F6EFE3', 'spoken word stays cream');
+      assert.equal(spans[1].props.style.color, '#FFE27A', 'current word highlights in gold');
+      assert.equal(spans[1].props.style.transform, 'scale(1.08)');
+      assert.equal(spans[2].props.style.color, '#F6EFE3');
+    }
+
+    // 3. episode.json.music: true (without needing sound.music) lays & ducks music.wav; subtitles: false removes subtitles
+    const optEp = { ...baseEp, music: true, subtitles: false, sound: { auto: true, clips: {}, events: [] } };
+    fs.writeFileSync(path.join(epDir, 'episode.json'), JSON.stringify(optEp, null, 2));
+    execFileSync('python3', [path.resolve('pipeline/sfx_run.py'), slug], { cwd: dir, stdio: 'pipe' });
+    const tl2 = JSON.parse(fs.readFileSync(path.join(epDir, 'timeline.json'), 'utf8'));
+    assert.equal(tl2.subtitles, undefined, 'subtitles: false removes timeline.subtitles');
+    assert.equal(tl2.audio.music, `${slug}/music.wav`, 'episode.json.music: true lays music.wav');
+    assert.ok(tl2.audio.musicVol > 0 && tl2.audio.musicVol < tl2.audio.voiceVol, 'music sits under the voice');
+    const musicBuf = fs.readFileSync(path.join(pubDir, 'music.wav'));
+    const pcm = new Int16Array(musicBuf.buffer, musicBuf.byteOffset + 44, (musicBuf.byteLength - 44) >> 1);
+    const rmsSlice = (s0, s1) => {
+      const a = Math.floor(s0 * 44100);
+      const b = Math.min(pcm.length, Math.floor(s1 * 44100));
+      let sum = 0;
+      for (let i = a; i < b; i++) sum += (pcm[i] / 32768) ** 2;
+      return Math.sqrt(sum / Math.max(1, b - a));
+    };
+    assert.ok(rmsSlice(2.2, 3.4) < rmsSlice(4.3, 5.4) * 0.72, 'music ducks while words are spoken and rises in the silence after 3.7s');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('opening plan, title lines & opening audit: classifies first sentences, strips hashtags/emojis/trailing function words, and enforces active 0-60f openings', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const pyCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-py-open-'));
+  fs.mkdirSync(path.join(pyCwd, 'src', 'episodes'), { recursive: true });
+  fs.writeFileSync(path.join(pyCwd, 'package.json'), '{}');
+  let pyOut = '';
+  try {
+    pyOut = execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+import sys, json, tempfile
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(path.resolve('pipeline'))})
+import shotlist as sl
+import source_import as si
+
+def words_of(sentence):
+    out = []
+    for i, raw in enumerate(sentence.split()):
+        w = raw.rstrip(".,!?")
+        p = raw[len(w):]
+        out.append({"w": w, "p": p, "s": round(i * 0.25, 2), "e": round(i * 0.25 + 0.2, 2)})
+    return out
+
+assert sl.opening_plan(words_of("Il a arraché une étiquette de banane sur la boîte."), [0], {})["type"] == "objet"
+assert sl.opening_plan(words_of("J'ai reçu un SMS inconnu à trois heures."), [0], {})["type"] == "ecrit"
+assert sl.opening_plan(words_of("Elle m'a giflé devant toute la classe."), [0], {})["type"] == "choc"
+assert sl.opening_plan(words_of("Ce diamant est dix fois plus grand que ma main."), [0], {})["type"] == "contraste"
+weak = sl.opening_plan(words_of("Chaque victoire ajoute dix minutes sur son bras."), [0], {})
+assert weak["type"] == "situation" and weak.get("weak") is True, weak
+idiom = sl.opening_plan(words_of("Marc a pris la tête de la course tranquillement."), [0], {})
+assert idiom["type"] == "situation", idiom
+
+# Sibling projects opening variety note triggers when the 3 latest siblings share the same opening type
+with tempfile.TemporaryDirectory() as td:
+    base = Path(td)
+    cur = base / "p-cur"
+    cur.mkdir()
+    for idx in range(3):
+        ep_f = base / f"p-{idx}" / "src" / "episodes" / f"p-{idx}" / "episode.json"
+        ep_f.parent.mkdir(parents=True)
+        ep_f.write_text(json.dumps({"opening": {"type": "objet"}}), encoding="utf-8")
+    assert "3 latest projects also opened on 'objet'" in sl.opening_variety_note(cur.resolve(), "objet")
+    assert sl.opening_variety_note(cur.resolve(), "ecrit") == ""
+
+# Title lines: hashtags/emojis removed, never ending a line on a function word
+l1 = si.make_title_lines("Il vole dans un magasin 🍌 #histoirevraie #fyp", "fr")
+assert "#" not in " ".join(l1) and "🍌" not in " ".join(l1), l1
+for line in l1:
+    assert line.split()[-1] not in si.TITLE_FUNCTION_WORDS, l1
+l2 = si.make_title_lines("She hid a camera in the kitchen 🔥 #storytime", "en")
+for line in l2:
+    assert line.split()[-1] not in si.TITLE_FUNCTION_WORDS, l2
+print("PY_OPENING_OK")
+`,
+      ],
+      { cwd: pyCwd, encoding: 'utf8' },
+    );
+  } finally {
+    fs.rmSync(pyCwd, { recursive: true, force: true });
+  }
+  assert.match(pyOut, /PY_OPENING_OK/);
+
+  const { openingErrors, shotsAudit } = await import('../dist/tools/whatif.js');
+  const tlShots = [
+    { id: 'S1', first: 0, len: 36, size: 'medium' },
+    { id: 'S2', first: 36, len: 40, size: 'medium' },
+    { id: 'S3', first: 76, len: 50, size: 'insert' },
+  ];
+  const passiveBodies = {
+    S1: `export const S1 = shot({ place: ROOM, cam: 'medium', people: [{ who: A, act: 'talk' }] });`,
+    S2: `export const S2 = shot({ place: ROOM, cam: 'close', people: [{ who: B, act: 'idle' }] });`,
+    S3: `export const S3 = tabletopShot({ surface: 'desk', items: [{ kind: 'keys' }] });`,
+  };
+  // Legacy episode without `opening`: untouched
+  assert.deepEqual(openingErrors({ shots: [{ id: 'S1', size: 'medium' }] }, tlShots, passiveBodies), []);
+
+  // With `opening`: passive S1+S2 in 0..60f (even though S3 at f:76 is an insert) is refused
+  const epOpen = {
+    opening: { type: 'objet', why: 'handles an object' },
+    shots: [
+      { id: 'S1', size: 'medium' },
+      { id: 'S2', size: 'medium' },
+      { id: 'S3', size: 'insert' },
+    ],
+  };
+  assert.match(openingErrors(epOpen, tlShots, passiveBodies)[0] ?? '', /opening \(objet\): the shots of the first 2 seconds \(S1, S2\) show no insert and no gesture/);
+
+  // Active gesture on S1 or insert on S2 passes
+  assert.deepEqual(
+    openingErrors(epOpen, tlShots, { ...passiveBodies, S1: `export const S1 = shot({ place: ROOM, cam: 'medium', people: [{ who: A, act: 'point' }] });` }),
+    [],
+  );
+  assert.deepEqual(
+    openingErrors(
+      { ...epOpen, shots: [{ id: 'S1', size: 'medium' }, { id: 'S2', size: 'insert' }, { id: 'S3', size: 'insert' }] },
+      tlShots,
+      { ...passiveBodies, S2: `export const S2 = phoneShot({ name: 'Marc', messages: [{ at: 4, text: 'Ouvre' }] });` },
+    ),
+    [],
+  );
+
+  // Title card rules when titleCard: true
+  const badTitleEp = {
+    ...epOpen,
+    titleCard: true,
+    title: ['VOLÉ DANS', 'UN MAGASIN 🔥 #choc'],
+    shots: [{ id: 'S1', size: 'wide', accent: 'hook-title' }, { id: 'S2', size: 'insert' }, { id: 'S3', size: 'insert' }],
+  };
+  const titleErrs = openingErrors(badTitleEp, tlShots, {
+    ...passiveBodies,
+    S1: `export const S1 = shot({ place: ROOM, cam: 'wide', title: { lines: ['VOLÉ DANS', 'UN MAGASIN'] }, people: [{ who: A, act: 'point' }] });`,
+  }).join('\n');
+  assert.match(titleErrs, /contains a hashtag/);
+  assert.match(titleErrs, /contains an emoji/);
+  assert.match(titleErrs, /ends on a function word \("DANS"\)/);
+  assert.match(titleErrs, /carries the title on a wide establishing shot/);
+
+  // End-to-end shotsAudit surfaces openingErrors
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-open-audit-'));
+  try {
+    const epDir = path.join(dir, 'src', 'episodes', 'op');
+    fs.mkdirSync(path.join(dir, 'src', 'engine'), { recursive: true });
+    fs.mkdirSync(epDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'engine', 'shot.tsx'), 'export const shot = () => () => null;\nexport const tabletopShot = () => () => null;\n');
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), 'export const op = defineEpisode("Op", { timeline, shots: { S1, S2, S3 } });\n');
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), Object.values(passiveBodies).join('\n'));
+    const tl = { fps: 30, total: 126, segments: [{ shot: 'S1', a: 0, b: 36 }, { shot: 'S2', a: 36, b: 76 }, { shot: 'S3', a: 76, b: 126 }], shots: tlShots.map((s) => ({ ...s, key: 12 })) };
+    const auditErr = shotsAudit(dir, 'op', { ...epOpen, aspect: '9:16', script: [{ text: 'Il arrache le ticket.' }] }, tl);
+    assert.match(auditErr ?? '', /shots of the first 2 seconds \(S1, S2\) show no insert/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('opening sheet & reviewer batches: board_sheets.py renders opening.jpg with luma, multi-batch review keeps sheet-06 shots, and MCP review pack attaches opening.jpg', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { reviewEpisodeBoard } = await import('../dist/orchestrator/reviewer.js');
+  const { callMcpTool } = await import('../dist/mcp/service.js');
+  const { Db } = await import('../dist/orchestrator/db.js');
+  const { Bus } = await import('../dist/orchestrator/bus.js');
+  const { loadConfig } = await import('../dist/orchestrator/config.js');
+  const { defaultRegistry } = await import('../dist/tools/index.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-opening-sheet-'));
+  try {
+    const slug = 'open-rev';
+    const proj = path.join(dir, 'projects', slug);
+    const epDir = path.join(proj, 'src', 'episodes', slug);
+    const outDir = path.join(proj, 'out', slug);
+    fs.mkdirSync(path.join(epDir, 'shots'), { recursive: true });
+    fs.mkdirSync(path.join(outDir, 'board'), { recursive: true });
+    fs.mkdirSync(path.join(outDir, 'opening'), { recursive: true });
+
+    // Create 49 9:16 PNG stills (7 sheets of 8 shots: S1..S40 on sheets 1..5, S41..S48 on sheet 6, S49 on sheet 7)
+    // plus an exact f0000.png render to verify exact-vs-keyframe selection and mean_luma
+    execFileSync(
+      'python3',
+      [
+        '-c',
+        `
+from pathlib import Path
+from PIL import Image
+out = Path(${JSON.stringify(outDir)})
+for i in range(1, 50):
+    Image.new("RGB", (540, 960), (40 + (i % 5) * 20, 60, 90)).save(out / "board" / f"S{i}.png")
+Image.new("RGB", (540, 960), (200, 180, 140)).save(out / "opening" / "f0000.png")
+`,
+      ],
+      { stdio: 'pipe' },
+    );
+
+    const ids = Array.from({ length: 49 }, (_, i) => `S${i + 1}`);
+    const tlShots = ids.map((id, i) => ({ id, first: i * 30, len: 30, key: 12, size: i === 0 ? 'insert' : 'medium' }));
+    fs.writeFileSync(
+      path.join(epDir, 'timeline.json'),
+      JSON.stringify({ fps: 30, total: 49 * 30, segments: ids.map((id, i) => ({ shot: id, a: i * 30, b: (i + 1) * 30 })), shots: tlShots }),
+    );
+    fs.writeFileSync(
+      path.join(epDir, 'episode.json'),
+      JSON.stringify({
+        id: 'OpenRev',
+        slug,
+        aspect: '9:16',
+        lang: 'fr',
+        opening: { type: 'objet', why: 'the person handles an object', sentence: "Il arrache l'étiquette du flacon." },
+        script: [{ text: "Il arrache l'étiquette du flacon. Personne ne le voit dans le rayon." }],
+        shots: ids.map((id, i) => ({ id, size: i === 0 ? 'insert' : 'medium', set: 'shop', note: `plan ${id}` })),
+      }),
+    );
+    fs.writeFileSync(path.join(epDir, 'DIRECTOR.md'), '# Réalisation\nOuverture sur les mains et le flacon.\n');
+    fs.writeFileSync(path.join(epDir, 'shared.tsx'), `export const SHOP = {};\n`);
+    for (const id of ids) {
+      fs.writeFileSync(path.join(epDir, 'shots', `${id}.tsx`), `export const ${id} = () => <g data-marker="MARKER_${id}" />;\n`);
+    }
+    fs.writeFileSync(path.join(epDir, 'shots.tsx'), ids.map((id) => `export { ${id} } from './shots/${id}';`).join('\n') + '\n');
+    fs.writeFileSync(path.join(epDir, 'index.tsx'), `export const ep = defineEpisode("OpenRev", { timeline, shots: { ${ids.join(', ')} } });\n`);
+
+    const sheetStdout = execFileSync('python3', [path.resolve('pipeline/board_sheets.py'), proj, slug], { encoding: 'utf8' });
+    assert.match(sheetStdout, /out\/open-rev\/sheets\/opening\.jpg/);
+    const dims = JSON.parse(
+      execFileSync(
+        'python3',
+        ['-c', `import json; from PIL import Image; im = Image.open(${JSON.stringify(path.join(outDir, 'sheets', 'opening.jpg'))}); print(json.dumps([im.width, im.height]))`],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(dims[0], 3 * 360 + 4 * 10, 'opening.jpg lays f:0, f:30, f:60 side by side at 360 px width');
+
+    // Multi-batch reviewEpisodeBoard with opening.jpg: batch 1 gets 5 sheets + opening.jpg (= 6 images),
+    // and batch 2 starts at sheet-06 (S41..S48) without dropping sheet-06's shot code!
+    const seen = [];
+    const provider = {
+      model: 'vision-mock',
+      label: 'vision-mock',
+      async chat({ messages }) {
+        seen.push(messages);
+        return { text: '{"pass":true,"summary":"Ouverture lisible sans le son.","issues":[]}', toolCalls: [], finishReason: 'stop' };
+      },
+    };
+    const report = await reviewEpisodeBoard(provider, proj, slug);
+    assert.equal(report.pass, true);
+    assert.equal(seen.length, 2, '7 sheets + opening.jpg split into 2 batches (5+opening, then 2)');
+    const b1 = seen[0].find((m) => m.role === 'user');
+    const b2 = seen[1].find((m) => m.role === 'user');
+    assert.equal(b1.images.length, 6, 'batch 1 holds 5 contact sheets + opening.jpg');
+    assert.equal(b2.images.length, 2, 'batch 2 holds sheet-06 and sheet-07');
+    assert.match(b1.content, /## 7\. Ouverture sans le son[\s\S]*Il arrache l'étiquette du flacon\./);
+    assert.match(b1.content, /planches 1 à 5 sur 7, couvrant S1\.\.S40/);
+    assert.match(b2.content, /planches 6 à 7 sur 7, couvrant S41\.\.S49/);
+    assert.match(b2.content, /MARKER_S41/, 'sheet-06 shots (S41..S48) are preserved in batch 2 code summary');
+    assert.doesNotMatch(b1.content, /MARKER_S41/);
+    assert.doesNotMatch(b2.content, /## 7\. Ouverture sans le son/, 'opening sheet is judged once in batch 1');
+
+    // MCP whatif_review_pack also attaches opening.jpg and the opening review block in global mode
+    const db = new Db(path.join(dir, 'app.db'));
+    db.createProject(slug, slug, proj);
+    const config = { ...loadConfig(dir), dataRoot: dir, projectsRoot: path.join(dir, 'projects') };
+    const pack = await callMcpTool({ db, bus: new Bus(), config, registry: defaultRegistry() }, 'whatif_review_pack', { episode: slug });
+    assert.equal(pack.ok, true);
+    assert.ok(pack.data.relativeImagePaths.includes(`out/${slug}/sheets/opening.jpg`), 'MCP review pack includes opening.jpg');
+    assert.match(pack.summary, /## 7\. Ouverture sans le son/);
+    db.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

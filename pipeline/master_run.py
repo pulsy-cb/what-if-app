@@ -112,56 +112,61 @@ def main(argv: list[str]) -> int:
             return 0
 
     I_TARGET, TP_TARGET, LRA_TARGET = -14.0, -1.2, 11.0
+    BAD = ("", "-inf", "inf", "nan", "NaN")
 
-    # Pass 1: audio-only (`-vn`) loudnorm analysis — skips decoding 1080p video frames (~6.3x faster)
-    first_stderr = subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-nostats", "-vn", "-i", str(raw),
-            "-af", f"loudnorm=I={I_TARGET}:TP={TP_TARGET}:LRA={LRA_TARGET}:print_format=json",
-            "-f", "null", "-",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-    ).stderr
-    j_start = first_stderr.rfind("{")
-    j_end = first_stderr.rfind("}") + 1
-    m = json.loads(first_stderr[j_start:j_end]) if j_start >= 0 and j_end > j_start else {}
+    def normalise(out: Path, pre: str, aim: float) -> bool:
+        """Two-pass loudnorm of the raw render towards `aim`, after the optional `pre` filter. Audio-only analysis (`-vn`)."""
+        head = f"{pre}," if pre else ""
+        first_stderr = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-nostats", "-vn", "-i", str(raw),
+                "-af", f"{head}loudnorm=I={aim}:TP={TP_TARGET}:LRA={LRA_TARGET}:print_format=json",
+                "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        ).stderr
+        j_start = first_stderr.rfind("{")
+        j_end = first_stderr.rfind("}") + 1
+        try:
+            m = json.loads(first_stderr[j_start:j_end]) if j_start >= 0 and j_end > j_start else {}
+        except ValueError:
+            m = {}
+        vals = [str(m.get(k, "-inf")) for k in ("input_i", "input_tp", "input_lra", "input_thresh")] + [str(m.get("target_offset", "0.0"))]
+        in_i = float(vals[0]) if vals[0] not in BAD else -99.0
+        in_tp = float(vals[1]) if vals[1] not in BAD else -3.0
+        if m and all(v not in BAD for v in vals) and in_i > -70.0:
+            # linear only when the true-peak headroom lets a plain gain reach the target; otherwise the dynamic mode
+            can_linear = (in_tp + (aim - in_i)) <= (TP_TARGET + 0.05)
+            filt = (
+                f"{head}loudnorm=I={aim}:TP={TP_TARGET}:LRA={LRA_TARGET}"
+                f":measured_I={vals[0]}:measured_TP={vals[1]}:measured_LRA={vals[2]}"
+                f":measured_thresh={vals[3]}:offset={vals[4]}"
+                f":linear={'true' if can_linear else 'false'}"
+            )
+        else:
+            filt = f"{head}loudnorm=I={aim}:TP={TP_TARGET}:LRA={LRA_TARGET}"
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error", "-i", str(raw),
+                    "-c:v", "copy", "-af", filt, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
+                    "-movflags", "+faststart", str(out),
+                ],
+                check=True,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
 
-    raw_in_i = str(m.get("input_i", "-inf"))
-    raw_in_tp = str(m.get("input_tp", "-inf"))
-    raw_in_lra = str(m.get("input_lra", "-inf"))
-    raw_in_thresh = str(m.get("input_thresh", "-inf"))
-    raw_offset = str(m.get("target_offset", "0.0"))
-    valid_two_pass = all(v not in ("", "-inf", "inf", "nan", "NaN") for v in (raw_in_i, raw_in_tp, raw_in_lra, raw_in_thresh, raw_offset))
-
-    in_i = float(raw_in_i) if raw_in_i not in ("", "-inf", "inf", "nan", "NaN") else -99.0
-    in_tp = float(raw_in_tp) if raw_in_tp not in ("", "-inf", "inf", "nan", "NaN") else -3.0
-
-    if m and valid_two_pass and in_i > -70.0:
-        # Use linear=true only when true-peak headroom allows reaching -14 LUFS; otherwise dynamic 2-pass hits -14.0 LUFS cleanly
-        can_linear = (in_tp + (I_TARGET - in_i)) <= (TP_TARGET + 0.05)
-        filt = (
-            f"loudnorm=I={I_TARGET}:TP={TP_TARGET}:LRA={LRA_TARGET}"
-            f":measured_I={raw_in_i}:measured_TP={raw_in_tp}:measured_LRA={raw_in_lra}"
-            f":measured_thresh={raw_in_thresh}:offset={raw_offset}"
-            f":linear={'true' if can_linear else 'false'}"
-        )
-    else:
-        filt = f"loudnorm=I={I_TARGET}:TP={TP_TARGET}:LRA={LRA_TARGET}"
-
-    # Pass 2: write atomically via a temporary file so a failed/interrupted encode never poisons the mtime cache
+    # Written through a temporary file so a failed or interrupted encode never poisons the mtime cache
     tmp_final = final.with_name(f".{slug}-final.tmp.mp4")
     try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-v", "error", "-i", str(raw),
-                "-c:v", "copy", "-af", filt, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
-                "-movflags", "+faststart", str(tmp_final),
-            ],
-            check=True,
-        )
+        if not normalise(tmp_final, "", I_TARGET):
+            print(f"master failed on {raw}", file=sys.stderr)
+            return 1
         os.replace(tmp_final, final)
     finally:
         if tmp_final.exists():
@@ -170,36 +175,31 @@ def main(argv: list[str]) -> int:
             except OSError:
                 pass
 
-    # Single audio-only (`-vn`) verification pass for both LUFS and True Peak (replaces 2 full video decodes)
     lufs, true_peak = measure_ebur128_audio_only(final)
-    # Catch-up: the second pass lands low more often than not (41 finals: median -14.5 LUFS, 7 under -14.8), and its
-    # peak already sits at the ceiling, so a plain gain has no room. The missing gain is applied under a limiter that
-    # holds the peaks where they are; the result replaces the final only when it is nearer the target and still safe.
-    if lufs > -70.0 and abs(lufs - I_TARGET) > 0.3:
-        trim_db = max(-6.0, min(3.0, I_TARGET - lufs))
-        chain = f"volume={trim_db:.2f}dB"
-        if true_peak + trim_db > -1.0:
-            chain += ",alimiter=limit=0.84:level=false:attack=5:release=50"
-        tmp_trim = final.with_name(f".{slug}-final.trim.mp4")
+    # Catch-up. The mix of a real episode sits near -21 LUFS with peaks already at -1.3 dBTP (six episodes, 2026-11-19):
+    # no gain can bring it to -14, and the pass above lands at -15. The peaks are held 8 dB down before the
+    # normalisation, then the aim is raised by what is still missing. A try replaces the final only when it is nearer the
+    # target with a safe peak (one real file came out at +1.0 dBTP), and every try says what it gave.
+    PRE = "alimiter=limit=0.4:level=false:attack=5:release=60"
+    tmp_try = final.with_name(f".{slug}-final.try.mp4")
+    aim = I_TARGET
+    for _ in range(2):
+        if not (lufs > -70.0 and abs(lufs - I_TARGET) > 0.3):
+            break
         try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-v", "error", "-i", str(final),
-                    "-c:v", "copy", "-af", chain, "-ar", "48000", "-c:a", "aac", "-b:a", "256k",
-                    "-movflags", "+faststart", str(tmp_trim),
-                ],
-                check=True,
-            )
-            new_lufs, new_peak = measure_ebur128_audio_only(tmp_trim)
-            if abs(new_lufs - I_TARGET) < abs(lufs - I_TARGET) and new_peak <= -0.9:
-                os.replace(tmp_trim, final)
-                print(f"level catch-up: {trim_db:+.2f} dB ({lufs:.1f} -> {new_lufs:.1f} LUFS, peak {new_peak:.1f} dBTP)")
+            if not normalise(tmp_try, PRE, aim):
+                print(f"level catch-up: try at {aim:.1f} LUFS failed to encode")
+                break
+            new_lufs, new_peak = measure_ebur128_audio_only(tmp_try)
+            kept = abs(new_lufs - I_TARGET) < abs(lufs - I_TARGET) and new_peak <= -0.9
+            print(f"level catch-up: peaks held, aim {aim:.1f} -> {new_lufs:.1f} LUFS, peak {new_peak:.1f} dBTP, {'kept' if kept else 'rejected'} (was {lufs:.1f} LUFS)")
+            if kept:
+                os.replace(tmp_try, final)
                 lufs, true_peak = new_lufs, new_peak
-        except subprocess.CalledProcessError:
-            pass
+            aim = min(I_TARGET + 1.2, aim + max(0.2, I_TARGET - new_lufs))
         finally:
-            if tmp_trim.exists():
-                tmp_trim.unlink()
+            if tmp_try.exists():
+                tmp_try.unlink()
     dur = probe_duration(final)
     tl = load_json(ep_dir / "timeline.json", {}) or {}
     costs = load_json(od / "costs.json", []) or []

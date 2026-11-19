@@ -183,6 +183,47 @@ def auto_sound(ep: dict, tl: dict, ep_dir: Path, shots: list[dict], title_idx: i
     return snd
 
 
+def build_subtitles(words: list[dict], fps: int, total: int) -> list[dict]:
+    """Narration cues for the engine: 2 to 5 words each, cut after punctuation or a pause, in global frames.
+    Bracketed delivery tags ([tense]) are never shown."""
+    toks = []
+    for w in words or []:
+        if not isinstance(w, dict):
+            continue
+        text = re.sub(r"\[[^\]]*\]", "", str(w.get("w") or "")).strip()
+        if not text or text.startswith("[") or text.endswith("]"):
+            continue
+        p = str(w.get("p") or "")
+        if p and not text.endswith(p):
+            text += p
+        toks.append({"w": text, "s": float(w.get("s") or 0.0), "e": float(w.get("e") or 0.0)})
+    cues: list[list[dict]] = []
+    cur: list[dict] = []
+    for i, t in enumerate(toks):
+        cur.append(t)
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        punct = bool(re.search(r"[.,;:!?\u2026]$", t["w"]))
+        pause = nxt is not None and nxt["s"] - t["e"] > 0.35
+        if nxt is None or len(cur) >= 5 or ((punct or pause) and len(cur) >= 2) or (punct and nxt is not None and len(cur) == 1 and re.search(r"[.!?\u2026]$", t["w"])):
+            cues.append(cur)
+            cur = []
+    out = []
+    for c in cues:
+        a = max(0, int(round(c[0]["s"] * fps)))
+        b = min(total, int(round(c[-1]["e"] * fps)) + 4)
+        if b <= a:
+            continue
+        ws = []
+        for j, t in enumerate(c):
+            wa = max(a, int(round(t["s"] * fps)))
+            wb = int(round(c[j + 1]["s"] * fps)) if j + 1 < len(c) else b
+            ws.append({"w": t["w"], "a": wa, "b": max(wa + 1, wb)})
+        out.append({"a": a, "b": b, "words": ws})
+    for k in range(len(out) - 1):
+        out[k]["b"] = min(out[k]["b"], out[k + 1]["a"])
+    return out
+
+
 def duck_under_words(x: np.ndarray, words: list[dict], depth_db: float = -5.0) -> np.ndarray:
     """A music bed goes down while someone speaks and comes back in the silences (0.35 s and more)."""
     if not len(x) or not words:
@@ -528,12 +569,13 @@ def main(argv: list[str]) -> int:
             put(sfx, start + int(r.get("every") or 2) * i, shifted, gain, fps)
 
     music = np.zeros(int(dur * SR))
-    M = S.get("music")
+    # music is an option per episode, off by default: only `episode.json.music: true` lays the bed
+    M = (S.get("music") if isinstance(S.get("music"), dict) else {"clip": "music"}) if ep.get("music") is True else None
     has_music = False
     if isinstance(M, dict) and M.get("clip"):
         m_clip_name = str(M.get("clip"))
         if m_clip_name not in clips and "music" in LIBRARY_CLIPS:
-            p = find_library_clip(lib_dir, m_clip_name, LIBRARY_CLIPS["music"][0], LIBRARY_CLIPS["music"][1])
+            p = find_library_clip(lib_dir, m_clip_name, LIBRARY_CLIPS["music"][0], LIBRARY_CLIPS["music"][1], allow_fuzzy=False)
             if p is not None:
                 x = decode(p)
                 clips[m_clip_name] = x / max(1e-9, float(np.abs(x).max()))
@@ -601,6 +643,11 @@ def main(argv: list[str]) -> int:
         audio.pop("music", None)
         audio.pop("musicVol", None)
     tl["audio"] = audio
+    # narration subtitles drawn by the engine, on by default; `episode.json.subtitles: false` turns them off
+    if ep.get("subtitles") is False:
+        tl.pop("subtitles", None)
+    else:
+        tl["subtitles"] = build_subtitles(words, fps, int(tl.get("total") or 0))
     save_json(tl_path, tl)
 
     print(f"[sfx] voice {v_lufs:.1f} LUFS, sfx {s_lufs:.1f} LUFS, music {m_lufs:.1f} LUFS -> volumes {vols}")

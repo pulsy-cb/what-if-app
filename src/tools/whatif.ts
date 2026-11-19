@@ -12,6 +12,7 @@ import type { Artifact, Tool, ToolResult } from './types.js';
 import { kindOf, mimeOf, relOf, safeJoin } from './paths.js';
 import { readEpisodeShots, syncShotsBarrel } from './episode-source.js';
 import { applyCardAngles, missingCards, stagingCodeProblems, usesStaging } from './staging.js';
+import { readScriptState, runScriptStep, scriptGate } from './script-check.js';
 
 /** Relative luminance of a #RRGGBB hex colour (0 = black, 1 = white). */
 function hexLuminance(hex: string): number | null {
@@ -276,9 +277,9 @@ export function episodeAudit(episode: any, slug: string): string | null {
   const sourceWords = Number(episode?.source?.words ?? 0);
   if (hasSourceVideo && sourceWords >= 40 && scriptWords < Math.floor(sourceWords * 0.75)) {
     return (
-      `episode.json.script (${scriptWords} words) shortened or rewrote the :8005 translation proposal (${sourceWords} words). ` +
-      `Do NOT shorten or rewrite the server's translation proposal (projects can last several minutes): keep the full narration from out/${slug}/source.fr.md ` +
-      `by running whatif_run { episode: "${slug}", step: "source", args: ["--pick", "hook", "--apply"] }.`
+      `episode.json.script (${scriptWords} words) is under 75 % of the :8005 proposal (${sourceWords} words): a correction keeps the story, it does not cut it. ` +
+      `Restore the full narration of out/${slug}/source.fr.md with whatif_run { episode: "${slug}", step: "source", args: ["--pick", "hook", "--apply"] }, ` +
+      `then correct it inside the bounds of whatif_run { step: "script" }.`
     );
   }
 
@@ -467,7 +468,7 @@ export function portraitFramingErrors(
   const usesCamT = /\bcamT\s*\(/.test(shotsSource);
   for (const id of ids) {
     const body = checkBodies[id] ?? '';
-    if (!body || /\b(?:shot|phoneShot|tabletopShot)\s*\(/.test(body)) continue;
+    if (!body || /\b(?:shot|phoneShot|tabletopShot|screenShot)\s*\(/.test(body)) continue;
     const size = String(epShots[id]?.size ?? '').toLowerCase();
     if (size.includes('establishing') || size.includes('title')) continue;
     let badZoom: { y: number; z: number } | null = null;
@@ -619,6 +620,85 @@ export function castErrors(src: string, wanted: string[]): string[] {
     }
     const hit = /(\b(?:act|face|stance|cam|view|move|hold|kind|how)\s*:\s*'[^']*')\s+as\s+(?:never|any)\b/.exec(code);
     if (hit) out.push(`${id}: remove "as never" after ${hit[1]}. A name the engine knows needs no cast; one it does not know is refused here with the list of valid names, which is how you find the right one.`);
+  }
+  return out;
+}
+
+/**
+ * A phone conversation whose first bubble comes after the key frame gives a black screen on the board, and a second of
+ * empty phone in the film (custom-shortlist-086, S9). The first message is there when the shot opens.
+ */
+export function phoneKeyErrors(id: string, body: string, key: number | undefined): string[] {
+  if (!/\bphoneShot\s*\(/.test(body) || /\bscreen\s*:\s*'(?:lock|photo)'/.test(body) || /\bnotify\s*:/.test(body)) return [];
+  const list = /\bmessages\s*:\s*\[([\s\S]*?)\]/.exec(body);
+  if (!list) return [];
+  const ats = [...list[1]!.matchAll(/\bat\s*:\s*(\d+)/g)].map((m) => Number(m[1]));
+  if (!ats.length) return [];
+  const first = Math.min(...ats);
+  // a bubble takes 6 frames to come in: it has to start that much before the key frame, and never later than frame 24
+  const limit = Math.max(4, Math.min(24, (Number.isFinite(key) ? Number(key) : 18) - 6));
+  if (first <= limit) return [];
+  return [
+    `${id}: the first message of this phoneShot appears at frame ${first}: the screen is empty until then, and on the board (key frame ${Number.isFinite(key) ? key : 18}). Give the first message at: 4 or less than ${limit + 1} (the next ones keep their own frames).`,
+  ];
+}
+
+const OPENING_PASSIVE_ACTS = new Set(['idle', 'wait', 'waiting', 'stand', 'standing', 'talk', 'talking', 'speak', 'speaking', 'listen', 'listening', 'none', 'still']);
+const TITLE_FUNCTION_WORDS = new Set(
+  'UN UNE LE LA LES DE DES DU D\' L\' ET OU A À AU AUX DANS SUR SOUS PAR POUR AVEC SANS EN SE SA SON SES MON MA MES QUI QUE QU\' CE CETTE IL ELLE FAIT THE AN OF TO IN ON AT AND OR FOR WITH BY MY HIS HER IS WAS GETS'.split(' '),
+);
+
+/**
+ * Opening rules (lot V2-1), only for episodes whose shot list carries `opening` (older projects are not concerned):
+ * among the shots covering the first 60 frames, one is an insert or shows a gesture other than waiting or talking.
+ * When a title is displayed (`titleCard: true`): no hashtag, no emoji, no line ending on a function word, and never on
+ * a wide establishing first shot.
+ */
+export function openingErrors(
+  episode: any,
+  tlShots: { id: string; len: number; size?: string; first?: number }[],
+  bodies: Record<string, string>,
+): string[] {
+  const out: string[] = [];
+  if (!episode?.opening || typeof episode.opening !== 'object') return out;
+  const epShots: Record<string, any> = {};
+  for (const s of Array.isArray(episode?.shots) ? episode.shots : []) if (s?.id) epShots[String(s.id)] = s;
+  let at = 0;
+  const covering: string[] = [];
+  for (const sh of tlShots) {
+    const first = Number.isFinite(Number(sh.first)) ? Number(sh.first) : at;
+    if (first >= 60) break;
+    covering.push(String(sh.id));
+    at = first + Number(sh.len ?? 0);
+  }
+  const shows = (id: string): boolean => {
+    const body = bodies[id] ?? '';
+    const size = String(epShots[id]?.size ?? '').toLowerCase();
+    if (size.includes('insert') || size.includes('macro') || /\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body)) return true;
+    if (/\b(?:actPose|poseAt|grabAt|walkPose|handRProp|throwAt)\s*\(|<Duo\b|\bduo\s*:/.test(body)) return true;
+    const acts = [...body.matchAll(/\bact\s*:\s*['"]([\w-]+)['"]/g)].map((m) => m[1]!.toLowerCase());
+    return acts.some((a) => !OPENING_PASSIVE_ACTS.has(a)) || /\bact\s*:\s*\{/.test(body);
+  };
+  if (covering.length && !covering.some(shows)) {
+    out.push(
+      `opening (${episode.opening.type ?? '?'}): the shots of the first 2 seconds (${covering.join(', ')}) show no insert and no gesture other than waiting or talking: open on the act of the first sentence (an insert on the hands/object/message, or a person doing the gesture from frame 0)`,
+    );
+  }
+  if (episode?.titleCard === true) {
+    const lines: string[] = (Array.isArray(episode?.title) ? episode.title : [episode?.title ?? '']).map((l: any) => String(l ?? '').trim()).filter(Boolean);
+    const joined = lines.join(' ');
+    if (/#\S/.test(joined)) out.push(`title "${joined}" contains a hashtag: remove it`);
+    if (/\p{Extended_Pictographic}/u.test(joined)) out.push(`title "${joined}" contains an emoji: remove it`);
+    for (const l of lines) {
+      const last = (l.toUpperCase().split(/\s+/).pop() ?? '').replace(/[.,;:!?…]+$/, '');
+      if (TITLE_FUNCTION_WORDS.has(last)) out.push(`title line "${l}" ends on a function word ("${last}"): cut the line after a full word group`);
+    }
+    const s1 = tlShots[0] ? String(tlShots[0].id) : '';
+    const s1Size = String(epShots[s1]?.size ?? tlShots[0]?.size ?? '').toLowerCase();
+    const titleOnS1 = String(epShots[s1]?.accent ?? '') === 'hook-title' || /<(?:TitleCard|HookTitle)\b|\btitle\s*:\s*\{/.test(bodies[s1] ?? '');
+    if (s1 && titleOnS1 && (s1Size.includes('wide') || s1Size.includes('establishing'))) {
+      out.push(`${s1} carries the title on a wide establishing shot: put the title on a shot that shows the act, or drop it`);
+    }
   }
   return out;
 }
@@ -799,7 +879,7 @@ export function shotsAudit(
     const size = String(epShot.size ?? sh.size ?? '').toLowerCase();
     const note = String(epShot.note ?? '');
     const isTitle = size.includes('title') || /<(?:TitleCard|HookTitle)\b|\btitle\s*:\s*\{/.test(body);
-    const isPhoneOrTabletop = /\b(?:phoneShot|tabletopShot)\s*\(/.test(body);
+    const isPhoneOrTabletop = /\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body);
     const isInsert = size.includes('insert') || size.includes('macro') || isPhoneOrTabletop;
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
@@ -852,7 +932,7 @@ export function shotsAudit(
       /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
       // shot(), phoneShot(), and tabletopShot() push in slowly unless told to hold
       ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body)) ||
-      (/\b(?:phoneShot|tabletopShot)\s*\(/.test(body) && (!/\bpush\s*:\s*false\b/.test(body) || /\b(messages|notify|typing|hands|items|tag|stamp)\s*:/.test(body)));
+      (/\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body) && (!/\bpush\s*:\s*false\b/.test(body) || /\b(messages|notify|typing|hands|items|tag|stamp)\s*:/.test(body)));
     if (!hasMotion) {
       errors.push(`${id} is static: give someone an act, let shot() move the camera (no move: 'still'), or animate with kf(t, ...), poseAt(t, ...), faceAt(t, ...) or DrawOn`);
     }
@@ -862,6 +942,8 @@ export function shotsAudit(
     if (decOffset) {
       errors.push(`${id} uses "${decOffset[0]}" — clock \`t\` is in FRAMES at 30 fps (0..${len}), not seconds! Multiply seconds by 30 (e.g. t - 12, not t - 0.4)`);
     }
+
+    errors.push(...phoneKeyErrors(id, body, sh.key));
 
     // Catch keyframes scheduled past the shot's length `len` (e.g. faceAt(t, [[90, 'happy']]) or t={t - 90} in a 55-frame shot)
     const lateFrames: number[] = [];
@@ -1107,9 +1189,9 @@ process.stdout.write(JSON.stringify({ errors, framing }));
   // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
   if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
     const framed = wanted.filter(
-      (id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')) && !/\b(?:phoneShot|tabletopShot)\s*\(/.test(bodies[id]!),
+      (id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')) && !/\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(bodies[id]!),
     );
-    const byHand = framed.filter((id) => !/\b(?:shot|phoneShot|tabletopShot)\s*\(/.test(bodies[id]!));
+    const byHand = framed.filter((id) => !/\b(?:shot|phoneShot|tabletopShot|screenShot)\s*\(/.test(bodies[id]!));
     if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
       errors.push(
         `${byHand.length}/${framed.length} shots with people are written by hand instead of shot({...}) (${byHand.slice(0, 10).join(', ')}): rewrite them as export const Sx = shot({ place, people, cam, beats }) — shot() frames 9:16 correctly, seats people on real chairs and lets the audit and the reviewer see who is on screen. Keep hand-written code for what shot() cannot draw (a phone screen, a diagram), at most half the shots.`,
@@ -1144,6 +1226,7 @@ process.stdout.write(JSON.stringify({ errors, framing }));
     ...(fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx')) ? stagingCodeProblems(epShotList, bodies, staged, projectAspect(projectRoot, episode)) : []),
   ];
   errors.unshift(...stagingErrs.slice(0, 8));
+  errors.unshift(...openingErrors(episode, tlShots, bodies));
 
   if (errors.length) {
     return `shots.tsx failed the animation & composition check:\n- ${errors.slice(0, 10).join('\n- ')}`;
@@ -1213,6 +1296,11 @@ function prerequisite(projectRoot: string, slug: string, step: string): string |
     if (!scriptWords) return `episode.json has no script yet: write the script first (${slug})`;
     const epErr = episodeAudit(episode, slug);
     if (epErr) return epErr;
+  }
+  // The voice is the first credit spent on an episode: its text is read, corrected or dropped before (step "script").
+  if (step === 'voice') {
+    const gate = scriptGate(projectRoot, slug);
+    if (gate) return gate;
   }
   if (step === 'shotlist' || step === 'plan') {
     if (!words?.length) return `src/episodes/${slug}/words.json is missing: run whatif_run { step: "voice" } first, it is what the plan times itself on`;
@@ -1295,6 +1383,7 @@ const STEPS: Record<string, { py?: string; node?: string; own?: boolean; timeout
     timeoutMs: 1_200_000,
     desc: 'nouveau video id -> English transcript -> French narration proposals (needs a video id)',
   },
+  script: { desc: 'read the narration against the contract before the voice: reading card, bounds of the correction, then the Reviewer; drops a story with no payoff' },
   voice: { py: 'voice_fish.py', own: true, timeoutMs: 900_000, desc: 'ElevenLabs TTS (default: eleven_v4, Hugo/Léa) or Fish Audio through :8005 + Deepgram word timings' },
   shotlist: {
     py: 'shotlist.py',
@@ -1448,7 +1537,7 @@ const newProject: Tool = {
 const runStep: Tool = {
   name: 'whatif_run',
   description:
-    'Run one pipeline step on an episode: source (import a nouveau video id), voice (ElevenLabs v4 TTS by default through the local :8005 API), shotlist (auto shot list from the measured words), plan, stills (Modal), board, sfx (ElevenLabs or cached studio library/sfx), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
+    'Run one pipeline step on an episode: source (import a nouveau video id), script (read and correct the narration before the voice; args ["--keep","<reason>"] is the user\'s override), voice (ElevenLabs v4 TTS by default through the local :8005 API), shotlist (auto shot list from the measured words), plan, stills (Modal), board, sfx (ElevenLabs or cached studio library/sfx), mixcheck, motiongrid, master, render (Modal) or install. Returns the new artifacts (board stills, sheets, videos) you can look at.',
   policy: 'ask',
   schema: {
     type: 'object',
@@ -1456,7 +1545,7 @@ const runStep: Tool = {
       episode: { type: 'string' },
       step: {
         type: 'string',
-        enum: ['install', 'source', 'voice', 'shotlist', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'],
+        enum: ['install', 'source', 'script', 'voice', 'shotlist', 'plan', 'stills', 'board', 'sfx', 'mixcheck', 'motiongrid', 'master', 'render'],
       },
       args: { type: 'array', items: { type: 'string' }, description: 'Extra argv, e.g. ["--pick","hook"] or ["S2","S5"].' },
     },
@@ -1493,6 +1582,14 @@ const runStep: Tool = {
     }
     const blocked = prerequisite(ctx.projectRoot, slug, input.step);
     if (blocked) throw new Error(`cannot run ${input.step} yet — ${blocked}`);
+    if (input.step === 'script') {
+      // no process to run: the bounds are checked here, the judgment is the agent's card and the Reviewer's verdict
+      const r = runScriptStep(ctx.projectRoot, slug, extra);
+      const files = ['script-check.json', 'script-card.json', 'script-pack.md', 'source.fit.md']
+        .filter((f) => fs.existsSync(path.join(ctx.projectRoot, 'out', slug, f)))
+        .map((f) => ({ kind: 'file' as const, path: `out/${slug}/${f}`, mime: f.endsWith('.json') ? 'application/json' : 'text/markdown' }));
+      return { ok: r.ok, summary: r.summary, data: { ...(r.state ?? {}), needsReview: r.needsReview }, artifacts: files };
+    }
     const before = snapshot(ctx.projectRoot);
     const renderMode = (process.env.WHATIF_RENDER ?? 'modal').toLowerCase();
     const rawMp4 = `out/${slug}/${slug}-raw.mp4`;
@@ -1594,10 +1691,24 @@ const runStep: Tool = {
       const step = STEPS[input.step]!;
       const dir = step.own ? PIPELINE : scripts;
       if (input.step === 'stills') {
-        argv =
-          renderMode === 'local'
-            ? ['node', path.join(scripts, 'stills.mjs'), slug, ...extra]
-            : [PY, path.join(PIPELINE, 'modal_render.py'), slug, '--mode', 'stills', '--project', '.', '--scale', '0.5', ...extra];
+        if (renderMode === 'local') {
+          const scaleIdx = extra.indexOf('--scale');
+          const scaleVal = scaleIdx >= 0 && extra[scaleIdx + 1] ? extra[scaleIdx + 1]! : '0.5';
+          const shotFilter = extra.filter((a, i) => !a.startsWith('--') && extra[i - 1] !== '--scale');
+          argv = [
+            'node',
+            path.join(PIPELINE, 'render_run.mjs'),
+            '--mode',
+            'stills',
+            '--slug',
+            slug,
+            '--scale',
+            scaleVal,
+            ...(shotFilter.length ? ['--shots', shotFilter.join(',')] : []),
+          ];
+        } else {
+          argv = [PY, path.join(PIPELINE, 'modal_render.py'), slug, '--mode', 'stills', '--project', '.', '--scale', '0.5', ...extra];
+        }
       } else if (step.py) argv = [PY, path.join(dir, step.py), slug, ...extra];
       else if (step.node) argv = ['node', path.join(dir, step.node), slug, ...extra];
       else throw new Error(`step ${input.step} has no command`);
@@ -1771,6 +1882,7 @@ const status: Tool = {
     const stills = has(boardDir) ? fs.readdirSync(boardDir).filter((f) => f.endsWith('.png')) : [];
     const steps = {
       script: Boolean(ep && !JSON.stringify(ep.script ?? '').includes('TODO')),
+      scriptCheck: readScriptState(ctx.projectRoot, input.episode)?.status ?? null,
       words: has(path.join(dir, 'words.json')),
       timeline: Boolean(tl && (tl.segments?.length ?? 0) > 0 && (tl.shots?.length ?? 0) > 0),
       voice: has(path.join(pub, 'voice.wav')) || has(path.join(pub, 'voice.mp3')),

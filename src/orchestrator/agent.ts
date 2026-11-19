@@ -8,7 +8,8 @@ import type { Approvals } from './approvals.js';
 import type { ToolRegistry, ToolResult, ToolContext } from '../tools/index.js';
 import type { Provider } from './providers/types.js';
 import { activeEpisodeSlug, buildMessages, pipelineTodo, shotWordFrames, toolMessageContent } from './context.js';
-import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, giveUpReview, refusedUnchanged, reopenReview, reviewEpisodeBoard, reviewStageCards } from './reviewer.js';
+import { clearReviewBlock, extractReviewShotIds, formatReviewFeedback, giveUpReview, refusedUnchanged, reopenReview, reviewEpisodeBoard, reviewScript, reviewStageCards } from './reviewer.js';
+import { approveWithoutReviewer } from '../tools/script-check.js';
 import { pickImages } from './image-pick.js';
 
 export type AgentDeps = {
@@ -474,6 +475,26 @@ export async function runTurn(deps: AgentDeps, threadId: string, signal: AbortSi
               } catch {
                 /* advisory: a failed reading changes nothing */
               }
+            }
+          }
+
+          // The narration is read a second time, by the Reviewer, before any voice credit is spent (text only)
+          if (call.name === 'whatif_run' && String(call.args?.step ?? '') === 'script' && result.ok && (result.data as { needsReview?: boolean } | undefined)?.needsReview) {
+            const scriptSlug = String(call.args?.episode ?? '').trim();
+            const scriptReviewer = scriptSlug && deps.reviewProvider ? deps.reviewProvider() : null;
+            let note: string | null = null;
+            if (scriptSlug && scriptReviewer) {
+              try {
+                note = await reviewScript(scriptReviewer, project.root, scriptSlug, signal);
+              } catch {
+                note = null;
+              }
+            } else if (scriptSlug) {
+              note = approveWithoutReviewer(project.root, scriptSlug, 'aucun Reviewer configuré').summary || null;
+            }
+            if (note) {
+              heldNotes.push(note);
+              bus.emit(threadId, 'notice', { text: note });
             }
           }
 

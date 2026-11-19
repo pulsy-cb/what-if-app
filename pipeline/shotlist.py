@@ -612,14 +612,16 @@ def infer_shot_size(
     prev_size: str,
     insert_count: int,
     since_insert: int = 99,
+    opening_size: str = "",
 ) -> str:
     """Choose camera framing from the narrative semantics of the clause (never blind % len cycling)."""
     if is_title:
         return "title, wide"
     if room == DIAGRAM:
         return "schematic"
-    if idx == 0:
-        return "wide"
+    # The first shot follows the opening type (see opening_plan), never a blind establishing wide shot.
+    if idx == 0 and opening_size:
+        return opening_size
 
     tokens = {bare_ascii(str(w.get("w") or "")) for w in chunk if bare_ascii(str(w.get("w") or ""))}
     raw_join = " ".join(str(w.get("w") or "") for w in chunk)
@@ -662,6 +664,113 @@ def infer_shot_size(
     if cand == prev_size:
         cand = "medium" if prev_size != "medium" else ("close" if speech_hits >= wide_hits else "wide")
     return cand
+
+
+OPENING_OBJECT_WORDS = {
+    "arrache", "colle", "pris", "prend", "attrape", "tient", "tenait", "pose", "glisse", "cache", "ouvre", "ouvert",
+    "decoupe", "coupe", "vole", "volé", "echange", "remplace", "etiquette", "boite", "sac", "cle", "billet", "gateau",
+    "grabbed", "took", "picked", "held", "holding", "stuck", "glued", "peeled", "swapped", "hid", "opened", "cut",
+    "stole", "label", "box", "bag", "key", "cake", "bottle", "bouteille", "valise", "suitcase", "carte", "card",
+    # calibrated on 29 real first sentences (2026-11-19): a hand on a detail is an insert too
+    "souleve", "soulevait", "fouille", "fouillais", "fouillait", "mis", "mets", "coupais", "coupait", "tendu", "tend",
+    "remarque", "assiette", "flacon", "portefeuille", "poches", "lifted", "searched", "noticed", "handed", "wallet",
+}
+OPENING_WRITTEN_WORDS = {
+    "message", "messages", "sms", "texto", "ecrit", "ecrire", "note", "mot", "lettre", "serviette", "ecran", "telephone",
+    "mail", "email", "notification", "affiche", "panneau", "post", "commentaire", "wrote", "written",
+    "text", "texted", "letter", "napkin", "sign", "comment", "dm", "chat", "whiteboard",
+}
+OPENING_CONTRAST_WORDS = {
+    "plus", "grand", "grande", "enorme", "geant", "geante", "minuscule", "immense", "fois", "million", "milliers",
+    "bigger", "larger", "huge", "giant", "tiny", "times", "thousand", "million", "taller", "smaller", "entire", "tout",
+}
+OPENING_SHOCK_WORDS = {
+    "lance", "jete", "gifle", "frappe", "pousse", "renverse", "ecrase", "crache", "tire", "mord", "arrose", "attaque",
+    "threw", "thrown", "slapped", "hit", "pushed", "shoved", "smashed", "spat", "kicked", "bit", "punched", "dumped",
+    "poured", "grabbed", "attacked", "tripped", "pousse", "bouscule", "reveille", "reveillait", "woke",
+}
+# The sentence explains a rule, a time span or a moral: whatever object it names, it is not an act (calibration 2026-11-19:
+# "Chaque victoire ajoute…", "Etre prive de telephone sauve…", "Dix ans sans toucher sa vieille Xbox.")
+OPENING_EXPLAIN_RE = re.compile(
+    r"^(chaque|etre|quand|si|dans ce monde|il etait une fois|every|each|being|when|if|in this world|"
+    r"(un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+) (ans|annees|jours|mois|semaines|years|days|months|weeks))\b"
+)
+OPENING_SIZE = {"objet": "insert", "ecrit": "insert", "contraste": "medium", "choc": "medium", "situation": "medium"}
+
+
+def first_sentence(words: list[dict]) -> list[dict]:
+    """Words of the narration's first sentence (up to the first . ! ? or 30 words)."""
+    out: list[dict] = []
+    for w in words[:30]:
+        out.append(w)
+        tail = str(w.get("p") or w.get("w") or "")
+        if any(c in tail for c in ".!?"):
+            break
+    return out
+
+
+def opening_plan(words: list[dict], bounds: list[int], ep: dict) -> dict:
+    """Choose the opening type from what the first sentence does (simple FR/EN word lists).
+
+    objet: someone handles an object -> insert on hands/object; ecrit: a message or screen -> readable
+    phoneShot/tabletopShot/screenShot; contraste: a disproportion -> a shot showing both terms; choc: someone acts on
+    someone -> medium shot on both at the gesture; situation: the sentence explains -> medium shot, flagged weak.
+    """
+    sent = first_sentence(words)
+    text = " ".join(str(w.get("w") or "") for w in sent)
+    tokens = {bare_ascii(str(w.get("w") or "")) for w in sent if bare_ascii(str(w.get("w") or ""))}
+    flat = " ".join(bare_ascii(str(w.get("w") or "")) for w in sent)
+    if "pris la tete" in flat or "took the lead" in flat:  # an idiom, not a hand on an object
+        tokens -= {"pris", "took"}
+    explains = bool(OPENING_EXPLAIN_RE.match(flat))
+    shock = tokens & OPENING_SHOCK_WORDS
+    written = tokens & OPENING_WRITTEN_WORDS
+    obj = tokens & OPENING_OBJECT_WORDS
+    contrast = tokens & OPENING_CONTRAST_WORDS
+    has_number = bool(re.search(r"\d", text))
+    two_people = bool(tokens & {"m", "me", "moi", "lui", "elle", "il", "eleve", "prof", "me", "him", "her", "my", "mon", "ma"})
+    # "le plus chic" is a superlative, not a comparison: a disproportion needs "plus … que" / "-er than" or a number
+    compares = bool(re.search(r"\bplus \w+( \w+)? que\b|\b\w+er than\b|\bfois\b|\btimes\b", flat))
+    if explains:
+        kind, why = "situation", "the first sentence states a rule, a span of time or a moral: weak opening (see the text check)"
+    elif shock and two_people:
+        kind, why = "choc", f"someone acts on someone ({', '.join(sorted(shock))})"
+    elif written:
+        kind, why = "ecrit", f"a written message or screen ({', '.join(sorted(written))})"
+    elif obj:
+        kind, why = "objet", f"the person handles an object ({', '.join(sorted(obj))})"
+    elif contrast and (compares or has_number):
+        kind, why = "contraste", f"a disproportion ({', '.join(sorted(contrast))})"
+    elif shock:
+        kind, why = "choc", f"a sudden gesture ({', '.join(sorted(shock))})"
+    else:
+        kind, why = "situation", "the first sentence explains or describes: weak opening (see the text check)"
+    plan = {"type": kind, "why": why, "sentence": text.strip()}
+    if kind == "situation":
+        plan["weak"] = True
+    return plan
+
+
+def opening_variety_note(root: Path, kind: str) -> str:
+    """Note (never a refusal) when the 3 latest sibling projects all opened with this same type."""
+    try:
+        siblings = [p for p in root.parent.iterdir() if p.is_dir() and p.resolve() != root]
+    except OSError:
+        return ""
+    found: list[tuple[float, str]] = []
+    for proj in siblings:
+        for ep_file in (proj / "src" / "episodes").glob("*/episode.json"):
+            try:
+                data = json.loads(ep_file.read_text(encoding="utf-8"))
+                t = str(((data or {}).get("opening") or {}).get("type") or "")
+                if t:
+                    found.append((ep_file.stat().st_mtime, t))
+            except (OSError, ValueError, AttributeError):
+                continue
+    last = [t for _m, t in sorted(found, reverse=True)[:3]]
+    if len(last) == 3 and all(t == kind for t in last):
+        return f"the 3 latest projects also opened on '{kind}': if another type fits the first sentence, consider it"
+    return ""
 
 
 def infer_clause_accent(
@@ -828,6 +937,40 @@ def build_default_sound(
     }
 
 
+EVOKE_EVERY = 6
+
+
+def add_evocations(shots: list[dict]) -> int:
+    """No more than five shots on a character in a row: the sixth shows what the line talks about instead.
+
+    An episode of 43 shots held one man, his phone and his living room from the first shot to the last, with five
+    inserts in all (custom-shortlist-086, 2026-11-19): every shot was right and the whole was one picture. The sets
+    written here are no guide (that episode had two on paper and one on screen), so the rule counts shots, not rooms."""
+    def on_character(s: dict) -> bool:
+        size = str(s.get("size") or "")
+        return not any(k in size for k in ("insert", "title", "establishing", "schematic"))
+
+    if len(shots) < 12:
+        return 0
+    made = 0
+    run = 0
+    for i, s in enumerate(shots):
+        if not on_character(s):
+            run = 0
+            continue
+        run += 1
+        if run >= EVOKE_EVERY and 0 < i < len(shots) - 1 and not s.get("accent"):
+            s["size"] = "insert"
+            s["evoke"] = True
+            s["view"] = "front"
+            if s.get("move") not in ("push", "still"):
+                s["move"] = "push"
+            s["note"] = f"evocation: show what this line talks about, not the person saying it — {s.get('note', '')}".strip()
+            made += 1
+            run = 0
+    return made
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("slug")
@@ -906,6 +1049,13 @@ def main() -> int:
     elif not has_source_video and title_idx < 0 and len(bounds) >= 4:
         title_idx = min(3, len(bounds) - 2)
 
+    opening = opening_plan(words, bounds, ep)
+    variety = opening_variety_note(root, opening["type"])
+    if variety:
+        opening["note"] = variety
+    ep["opening"] = opening
+    opening_size = OPENING_SIZE.get(opening["type"], "medium")
+
     raw_title = ep.get("title") or []
     title_str = " ".join(raw_title) if isinstance(raw_title, list) else str(raw_title)
     has_non_todo_title = bool(title_str.strip()) and "todo" not in title_str.lower() and "… ?" not in title_str
@@ -983,7 +1133,7 @@ def main() -> int:
         run = run + 1 if same_room else 1
         previous_set = room
 
-        size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count, since_insert)
+        size = infer_shot_size(chunk, i, len(bounds), is_title, room, prev_size, insert_count, since_insert, opening_size)
         prev_size = size
         if size == "insert":
             insert_count += 1
@@ -994,7 +1144,7 @@ def main() -> int:
             label = f"title card: {label}"
 
         accent_hint, look_name, drama_score = infer_clause_accent(
-            chunk, i, len(bounds), is_title, size, has_non_todo_title and title_idx < 0
+            chunk, i, len(bounds), is_title, size, has_non_todo_title and title_idx < 0 and ep.get("titleCard") is True
         )
         if drama_score >= 3 and 1 <= i < len(bounds) - 1:
             drama_candidates.append((drama_score, i))
@@ -1077,6 +1227,7 @@ def main() -> int:
             look_counts[look_name] = look_counts.get(look_name, 0) + 1
         edit.append(edit_entry)
 
+    evoked = add_evocations(shots)
     ep["shots"] = shots
     ep["edit"] = edit
     last_id = shots[-1]["id"]
@@ -1113,6 +1264,11 @@ def main() -> int:
     print(
         f"{len(shots)} shot(s) for {seconds:.1f}s ({seconds / max(1, len(shots)):.2f}s avg, {cuts_per_min:.0f} cuts/min)"
     )
+    print(f"opening: {opening['type']} ({opening['why']})" + (" [weak opening]" if opening.get("weak") else ""))
+    if opening.get("note"):
+        print(f"  note: {opening['note']}")
+    if evoked:
+        print(f"{evoked} evocation shot(s): after five shots on a character, the next one shows what the line talks about")
     for s, e in zip(shots, edit):
         print(f"  {s['id']:<4} {e['at']:<18} {s['size']:<18} {s['set']:<10} (key f:{s['key']}) {s['note']}")
     print("RESULT_JSON:" + json.dumps({"ok": True, "shots": len(shots), "seconds": round(seconds, 2), "cutsPerMin": round(cuts_per_min, 1)}))

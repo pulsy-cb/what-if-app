@@ -6,13 +6,14 @@
  */
 /** The default way to write a shot. Sent only when the project's engine has src/engine/shot.tsx (the overlay). */
 export const SHOT_GUIDE = `## shot(): describe a shot, the engine draws it (the default in this project)
-import { shot, phoneShot, tabletopShot, place, cast, definePiece } from '../../engine';
+import { shot, phoneShot, tabletopShot, screenShot, place, cast, definePiece } from '../../engine';
 
 const ROOM = place('classroom', { mood: 'day', slots: { board: <text y={20} textAnchor="middle" fontSize={64} fill="#EDE8DE">x = 2y + 3</text> } });
 const LOU = cast({ seed: 'lou', body: 'teen', kind: 'fem', hair: 'long', outfit: ['hoodie:rose', 'jeans'] });
 const PROF = cast({ seed: 'prof', kind: 'masc', hair: 'buzz', outfit: ['shirt:cream', 'pants:navy', 'tie:red'], acc: ['glasses:square'] });
 
-export const S1 = shot({ place: ROOM, cam: 'establishing', title: { lines: ['LA QUESTION', 'INTERDITE'], accent: 'INTERDITE' } });
+// S1 opens on the act of the first sentence (Lou points at the board to catch the teacher out), no establishing wide shot, no title
+export const S1 = shot({ place: ROOM, cam: 'medium', people: [{ who: LOU, on: 'd4', yaw: -1, act: 'point', face: 'smug' }] });
 export const S2 = shot({ place: ROOM, cam: 'wide', stamp: { text: 'LYCÉE NORD · 08H12', at: 2, tone: 'amber' }, people: [
   { who: PROF, at: { u: 0.22, w: 0.3 }, yaw: 0.45, act: 'explain', face: 'happy' },
   { who: LOU, on: 'd4', yaw: -2 },
@@ -62,10 +63,11 @@ Once the board exists, the card of a coded shot is frozen: when a check says the
   - person \`beats: [{ at, act, face, yaw, look, reach }]\`: from that frame the person does that (a clip like startle starts there; reach: null lets go). A beat also takes \`hold\` (what is in the hand from that frame; \`hold: null\` empties it), \`vfx\` (\`vfx: 'shock'\` or \`{ kind: 'thought', label: '?' }\`, starts with the beat) and \`pose\`. **Picking a thing up**: \`beats: [{ at: 30, hold: { what: 'keys', from: 'table' } }]\` — the thing lies on that piece until frame 30, the person stands at the piece, the hand goes down to it and comes back holding it. Putting it down is \`release\`. Never move a thing by itself in \`extra\` or \`props\` while a person is meant to carry it: the review refuses a thing that travels without a hand. A prop that appears or goes takes \`from\` / \`until\` frames: \`props: [{ on: 'table', node, until: 40 }]\`.
   - shot \`beats: [{ at, cam, on, angle, view, cut, shake }]\`: **mandatory on any character shot longer than 90 frames (3 s)** — punch in on the key word (\`cam: 'close'\`), cut hard (\`cut: true\`) or go over the shoulder (\`cam: 'ots', on: 1\`) on the listener's reaction, tilt to \`angle: 'low'\` on a threat, or \`shake: 6\` on an impact so longer clauses never feel static.
   - Act what the narrator says: someone touches, takes, looks, turns, reacts. \`idle\` alone and \`talk\` on a person who is not speaking are not acting.
+  - **Evocation shots.** A shot the list marks \`evoke: true\` (size \`insert\`, note starting with "evocation:") comes after five shots on a character: it shows WHAT THE LINE TALKS ABOUT, not the person saying it. The thing named (\`tabletopShot\`), the screen or the message (\`phoneShot\`, \`screenShot\`), the place without anyone (\`cam: 'establishing'\`), a detail of the room. Never the same device as the previous insert: a second phone screen in a row is not variety. Its card has \`people: []\` and says in \`see\` what fills the frame.
   - A gesture means something once. The same \`act\` on the same person in more than a quarter of the shots (\`think\`, hand to the head, in 21 shots of 69) reads as a loop, and so does the same person in front of the same wall shot after shot: change the act, move the person to another spot of the place (\`at\`), or show what they look at (an insert, \`tabletopShot\`, \`phoneShot\`).
 - **Micro-VFX & graphic accents (~1 shot in 4, guided by \`accent\` hints in the shot pin)**:
   - \`vfx\` on a person: \`vfx: [{ at: 14, kind: 'shock' | 'sweat' | 'focus' | 'dizzy' | 'sparkle' | 'anger' | 'question' | 'thought', dur?: 28, label?: '...' }]\` — 2D comic/editorial head accents on emotional peaks.
-  - \`title\` on S1 cold-open (\`accent="hook-title"\`): \`title: { lines: ['...', '...'], accent?: '...', sub?: '...' }\` (never mid-episode).
+  - \`title\`: NO title by default. Only when \`episode.json.titleCard\` is \`true\` (the shot list then puts \`accent="hook-title"\` on S1): \`title: { lines: ['...', '...'], accent?: '...', sub?: '...' }\`, two lines, understood without the rest, names the concrete thing or the paradox, never tells the ending, no hashtag/emoji, no line ending on a function word ("DANS UN"), never on a wide establishing shot, never mid-episode.
   - \`stamp\` on time/location jumps (\`accent="stamp"\`): \`stamp: { text: 'URGENCES · 03H14', sub?: 'CHU NORD', at?: 2, tone?: 'amber' | 'red' | 'teal' | 'ink' }\`.
   - \`tag\` on numbers/amounts/key facts (\`accent="tag"\`): \`tag: { text: '15 000 €', sub?: 'FACTURE', mark?: 'x' | 'check', at?: 12 }\` or animated counter \`tag: { count: { from: 0, to: 15000, suffix: ' €', dur: 24 }, at: 8 }\`.
   - \`burst\` on sudden twists: \`burst: { at: 16, dur?: 16 }\` (radial frame-edge impact lines).
@@ -89,6 +91,7 @@ Once the board exists, the card of a coded shot is frozen: when a check says the
 - Reviewer: if it refuses the board, edit the refused shots (edit_shot) before calling stills and board again; it is not asked again while they are unchanged. At the last round the render goes ahead with the defects listed in out/<episode>/DEFAUTS-NON-CORRIGES.md: say so in your final message.
 - To fix one shot later, send it whole with edit_shot { episode, id: 'S7', code: 'export const S7 = shot({...});' }: no need to read shots.tsx first.
 - \`duo\`: two people interacting (handshake give hug push whisper), see Actions below. \`extra\`: (t, len) => <g>…</g> for your own SVG in the world.
+- \`screenShot({ show, kind, label, live, time, back })\`: a screen that shows ANOTHER shot, full frame (16:9 & 9:16): a surveillance monitor (\`kind: 'cctv'\`, default: green, grain, sweep), a television (\`'tv'\`), a computer (\`'monitor'\`). \`show\` is a normal \`shot({ place, cam, people })\`; \`label: 'CAM 604'\` top left, \`live: 'EN DIRECT'\` blinking red, \`time: '02:07:41'\` a running clock, \`back\` the room the screen is in. \`export const S33 = screenShot({ kind: 'cctv', label: 'CAM 604', live: 'EN DIRECT', show: shot({ place: FLAT, cam: 'wide', move: 'still', people: [{ who: DOUBLE, act: 'cross-arms' }] }) })\`. NEVER draw a monitor or a TV picture by hand with rects in \`behind\` / \`overlay\`: it cost an hour on two shots and came out as a green slab.
 - \`phoneShot({ who, name, screen, messages, notify, typing, battery, time, back, case, skin })\`: full-frame phone insert (16:9 & 9:16), \`who: CHAR\` auto-matches hand skin, \`screen: 'chat' | 'lock'\`, bubbles arriving on \`at\` (word frame), \`notify: { at, text }\` banner, \`typing: { at, text, dur }\`, \`skin: null\` to hide the hand. Set \`"size": "insert"\` in episode.json.
 - A picture on the phone (a selfie, an outfit sent as a photo): \`phoneShot({ who: SLOANE, name: 'Sloane', screen: 'photo', photo: { people: [ALIX, SLOANE], caption: 'Nous deux', posted: { at: 84, text: 'Photo publiée' } } })\` draws the cast as busts in their own colours; \`photo: { outfit: { top: '#C2456B', bottom: '#2F3A52', shoes: '#F3EEE2' } }\` lays clothes flat; \`photo: { node: <g>…</g> }\` is your own drawing in a 100 x 100 box. A chat with an empty \"Message\" field is not a photo.
 - \`tabletopShot({ surface, items, hands, stamp, tag, push })\`: top-down macro tabletop insert (16:9 & 9:16 safe). \`surface\`: \`'wood' | 'dark-wood' | 'marble' | 'metal' | 'hospital' | 'cloth' | 'desk'\`. \`items\`: \`[{ kind: 'document' | 'bill' | 'envelope' | 'ring' | 'keys' | 'pills' | 'mug' | 'glass' | 'cash' | 'badge' | 'clock' | 'card' | 'photo' | 'box', dx?: n, dy?: n, rot?: deg, scale?: n, label?: '...', sub?: '...', at?: frame }]\`. \`hands\`: \`[{ who: CHAR, side?: 'bottom' | 'left' | 'right', target?: itemIdx, at?: frame, action?: 'reach' | 'point' | 'drop' | 'tremble' }]\`. Set \`"size": "insert"\` in episode.json.
@@ -104,7 +107,7 @@ Once the board exists, the card of a coded shot is frozen: when a check says the
 **Not in the catalogue? Nothing blocks you, in this order:**
 1. place('blank', { pieces: [...] }) for a room, or a close outdoor recipe with pieces: [...] for an open-air place (a beach: park with a palette and your pieces), from the pieces above, plus { p: 'mine', draw: ({ r, T, t, u, w, len, deep }) => <g>…</g>, at, len, deep } for one thing of your own (r.P(u, v, w) gives a point in the room, r is a makeRoom box, T the colours). Add wall: true if it hangs on the wall.
 2. definePiece('arcade', { kind: 'floor', len: 0.12, deep: 0.08, draw }) at the top of shots.tsx when several shots use it.
-3. Write a shot by hand ONLY for what \`shot()\`, \`phoneShot()\` and \`tabletopShot()\` cannot draw (a vehicle interior, a custom diagram), one shot at a time. Never rewrite a whole episode by hand: the audit refuses a board when more than half the character shots bypass \`shot()\`, or when a 9:16 hand-written shot uses a 1920x1080 backdrop / y=1080 reflection. Keep DIRECTOR.md shot sizes in sync when you change a shot to \`insert\`.
+3. Write a shot by hand ONLY for what \`shot()\`, \`phoneShot()\`, \`tabletopShot()\` and \`screenShot()\` cannot draw (a vehicle interior, a custom diagram), one shot at a time. Never rewrite a whole episode by hand: the audit refuses a board when more than half the character shots bypass \`shot()\`, or when a 9:16 hand-written shot uses a 1920x1080 backdrop / y=1080 reflection. Keep DIRECTOR.md shot sizes in sync when you change a shot to \`insert\`.
 Something the list above does not have is never a reason to give up on the place the story needs.`;
 
 /** How to place people in depth. Sent only when the project's engine has src/engine/stage.tsx (the overlay). */
@@ -241,13 +244,29 @@ export const DIRECTOR_GUIDE = `## Director's guide (read before writing shots.ts
   In 9:16 the left-wall windows are out of frame: show time of day with light (ceiling panels, a lamp Glow) and wall colour, not the sky.
   Give each shot's set a unique id (id="s7") and a different one again if the same set renders twice in one frame.
 
+### Opening (the first 2 seconds, judged without sound)
+The shot list writes \`episode.json.opening = { type, why }\` from the first sentence; keep it or change it with a reason in DIRECTOR.md.
+- \`objet\`: the person handles an object -> S1 is an insert on the hands and the object (\`tabletopShot\`), then the person.
+- \`ecrit\`: a message, a written word, a screen -> S1 shows it readable (\`phoneShot\`, \`tabletopShot\`, \`screenShot\`).
+- \`contraste\`: a disproportion, a thing out of place -> one shot where both terms are seen together.
+- \`choc\`: someone does something to someone -> medium shot on both people at the moment of the gesture, moving from frame 0.
+- \`situation\`: the sentence explains or describes -> medium shot on the person; flagged "weak opening" (the text opens badly).
+Rules: the act of the first sentence is SHOWN within the first 2 seconds (audit: among the shots covering frames 0-60, one is an insert or a gesture other than waiting or talking); at frame 0 the subject fills at least 40 % of the height of a vertical frame and is lit even at night; a face changes expression or a gesture starts within the first second. No establishing wide shot first, no title by default.
+
+### Staging (lot V2-2)
+- 2 to 4 places per story when the text allows it (the room, the corridor, outside, the car...), not one set from start to end.
+- Inserts drawn FOR this story: the object, the written word, the detail named by the line. Never a generic phone or a generic table.
+- Faces change expression on the strong moments (\`face\` changes inside the shot, \`faceAt\`).
+- Frank colours: no blur, vignette or dimness by default. Night only when the story requires it, and the subject stays lit.
+- At the strong moment: tighter frame, wider gesture, and the reaction of the second character.
+
 ### On-screen text
-No subtitles/captions of the narrator's voice, no comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard, and NEVER mix languages: match every on-screen word to the episode's narration language (\`fr\` -> French only, \`en\` -> English only).
-DO use concise diegetic & graphic accents (~1 shot in 4) in the episode's language so episodes feel punchy and visually distinct: cold-open \`title\` on S1, time/location \`stamp\` ("URGENCES · 03H14" / "GYM · 10:15 AM"), numeric/fact \`tag\` ("15 000 €" / "2 WEEKS LEFT"), \`phoneShot\` screens, \`tabletopShot\` documents/bills, and character \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`). Every number is real and sourced from the script.
+Subtitles of the narration are drawn automatically by the engine: NEVER write them by hand, and place nothing important in the lower third of a vertical frame. No comic "HA HA" speech bubbles, no mid-episode full-screen TitleCard, and NEVER mix languages: match every on-screen word to the episode's narration language (\`fr\` -> French only, \`en\` -> English only).
+DO use concise diegetic & graphic accents (~1 shot in 4) in the episode's language so episodes feel punchy and visually distinct: time/location \`stamp\` ("URGENCES · 03H14" / "GYM · 10:15 AM"), numeric/fact \`tag\` ("15 000 €" / "2 WEEKS LEFT"), \`phoneShot\` screens, \`tabletopShot\` documents/bills, and character \`vfx\` (\`shock\`, \`sweat\`, \`focus\`, \`thought\`). Every number is real and sourced from the script.
 
 ### Board self-check (run it shot by shot on the full-size stills, not only on the contact sheet)
 1 one read in a second at phone size · 2 sizes change · 3 light from a visible source · 4 the character pops (face brightest, rim light)
-· 5 depth (foreground blur ~1 shot in 3, soft background on close-ups) · 6 the world is full · 7 perspective holds · 8 acting matches the line
+· 5 depth (layered foreground and background, no blur by default) · 6 the world is full · 7 perspective holds · 8 acting matches the line
 · 9 continuity of costume, layout and props across shots of one place · 10 text only where allowed, spelled right, inside the frame
 · 11 original characters only, nothing resembling a famous one.
 Fix, re-render only the shots that fail (stills with their ids), rebuild the board, look again.

@@ -139,6 +139,25 @@ const PATCHES: PatchGroup[] = [
     ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './accents';\n" }],
   },
   {
+    // narration subtitles drawn over the whole episode from timeline.json `subtitles` (written by pipeline/sfx_run.py)
+    file: 'src/engine/episode.tsx',
+    marker: '<Subtitles tl={tl} f={f} />',
+    ops: [
+      { kind: 'after', anchor: "from 'remotion';\n", insert: "import { Subtitles } from './subtitles';\n" },
+      {
+        kind: 'replace',
+        find: '      {A.voice ? <Audio',
+        replace: '      <Subtitles tl={tl} f={f} />\n      {A.voice ? <Audio',
+        count: 1,
+      },
+    ],
+  },
+  {
+    file: 'src/engine/index.ts',
+    marker: "export * from './subtitles';",
+    ops: [{ kind: 'after', anchor: "export * from './furnish';\n", insert: "export * from './subtitles';\n" }],
+  },
+  {
     file: 'src/engine/index.ts',
     marker: "export * from './views';",
     ops: [{ kind: 'after', anchor: "export * from './rig';\n", insert: "export * from './views';\n" }],

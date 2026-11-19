@@ -13,9 +13,75 @@
  *           renders <Audio> from timeline.audio), because master.py normalises the muxed track.
  *   bundle  only bundle and report the serve url + the composition list
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+
+const OPENING_SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.css', '.svg']);
+
+function fileSha256Hex32(filePath) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex').slice(0, 32);
+  } catch {
+    return null;
+  }
+}
+
+function collectOpeningSourceFiles(rootDir, currentDir, skipRelPosix, out) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+    const full = path.join(currentDir, ent.name);
+    if (ent.isDirectory()) {
+      collectOpeningSourceFiles(rootDir, full, skipRelPosix, out);
+    } else if (ent.isFile()) {
+      const ext = path.extname(ent.name).toLowerCase();
+      if (!OPENING_SOURCE_EXTS.has(ext)) continue;
+      const relPosix = path.relative(rootDir, full).split(path.sep).join('/');
+      if (relPosix === skipRelPosix) continue;
+      out.push(relPosix);
+    }
+  }
+}
+
+function computeOpeningInputSigs(projectRoot, slug) {
+  const tlRel = `src/episodes/${slug}/timeline.json`;
+  const tlPath = path.join(projectRoot, 'src', 'episodes', slug, 'timeline.json');
+  const timelineSig = fs.existsSync(tlPath) && fs.statSync(tlPath).isFile() ? fileSha256Hex32(tlPath) : null;
+
+  const epDir = path.join(projectRoot, 'src', 'episodes', slug);
+  if (!fs.existsSync(epDir) || !fs.statSync(epDir).isDirectory()) return { timelineSig, sourcesSig: null };
+  const epFiles = [];
+  collectOpeningSourceFiles(projectRoot, epDir, tlRel, epFiles);
+  if (!epFiles.length) return { timelineSig, sourcesSig: null };
+
+  const allFiles = [...epFiles];
+  for (const extraRel of ['src/Root.tsx', 'src/studio.config.ts']) {
+    const p = path.join(projectRoot, extraRel);
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) allFiles.push(extraRel);
+    } catch {
+      /* ignore */
+    }
+  }
+  const engineDir = path.join(projectRoot, 'src', 'engine');
+  if (fs.existsSync(engineDir)) collectOpeningSourceFiles(projectRoot, engineDir, tlRel, allFiles);
+
+  const uniqueSorted = [...new Set(allFiles)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const h = crypto.createHash('sha256');
+  for (const relPosix of uniqueSorted) {
+    const fSha = fileSha256Hex32(path.join(projectRoot, ...relPosix.split('/')));
+    if (!fSha) return { timelineSig, sourcesSig: null };
+    h.update(`${relPosix}\0${fSha}\n`, 'utf8');
+  }
+  return { timelineSig, sourcesSig: h.digest('hex').slice(0, 32) };
+}
 
 const studioDir = process.cwd();
 const require = createRequire(path.join(studioDir, 'package.json'));
@@ -85,8 +151,15 @@ function parseFrames(spec, total) {
   return [start, end];
 }
 
+function sameOpeningInputSigs(a, b) {
+  return Boolean(a && b) && a.timelineSig === b.timelineSig && a.sourcesSig === b.sourcesSig;
+}
+
 const timings = {};
 const t0 = mono();
+
+// Snapshot cryptographic signatures BEFORE bundling so any source/timeline mutation during bundling or rendering is caught.
+const preBundleSigs = computeOpeningInputSigs(studioDir, opts.slug);
 
 emit({ done: 0, total: 1, stage: 'bundle', message: `Bundling ${opts.slug}...` });
 const tBundle = mono();
@@ -96,14 +169,25 @@ const serveUrl = await bundle({
   onProgress: (p) => emit({ done: p, total: 100, stage: 'bundle', message: `Bundling ${p}%` }),
 });
 timings.bundle = Number((mono() - tBundle).toFixed(3));
+const postBundleSigs = computeOpeningInputSigs(studioDir, opts.slug);
 emit({ done: 1, total: 1, stage: 'bundle', message: `Bundle ready in ${timings.bundle}s` });
+
+function resolveBrowserExecutable() {
+  const fromEnv = process.env.REMOTION_CHROME_EXECUTABLE || process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  if (fs.existsSync(path.join(studioDir, 'node_modules', '.remotion'))) return null;
+  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 
 const base = {
   serveUrl,
   chromiumOptions: {}, // no --gl flag: the engine is pure SVG/DOM, and Remotion's own default works
 
   timeoutInMilliseconds: opts.timeoutMs,
-  browserExecutable: null,
+  browserExecutable: resolveBrowserExecutable(),
   onBrowserLog: null,
 };
 
@@ -149,7 +233,136 @@ if (opts.mode === 'stills') {
     files.push({ id, path: file, bytes: fs.statSync(file).size });
     emit({ done: i + 1, total: shots.length + 1, stage: 'stills', message: `still ${id} (${i + 1}/${shots.length})` });
   }
-  result({ ok: true, mode: 'stills', dir, stills: files, timings: { ...timings, total: Number((mono() - t0).toFixed(3)) } });
+
+  // Render exact opening frames (0, 30, 60) from the main <Episode> composition so opening.jpg shows real frames, never recycled keyframes.
+  const totalFrames = Math.max(1, Number(tl.total || 0));
+  const openingTargets = [0, 30, 60].filter((fr) => fr < totalFrames);
+  const openingDir = path.join(outDir, 'opening');
+  const manifestPath = path.join(openingDir, 'manifest.json');
+
+  if (!sameOpeningInputSigs(preBundleSigs, postBundleSigs)) {
+    fs.rmSync(manifestPath, { force: true });
+    const msg =
+      `episode/engine sources or timeline.json mutated while bundling (preBundle=${JSON.stringify(preBundleSigs)} vs ` +
+      `postBundle=${JSON.stringify(postBundleSigs)}); opening manifest refused/erased`;
+    process.stderr.write(`${msg}\n`);
+    result({ ok: false, mode: 'stills', reason: 'inputs_mutated_during_bundle', error: msg, preBundleSigs, postBundleSigs });
+    process.exit(1);
+  }
+
+  let existingManifest = null;
+  try {
+    if (fs.existsSync(manifestPath)) existingManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch {
+    existingManifest = null;
+  }
+  const segs = Array.isArray(tl.segments) ? tl.segments : [];
+  const openingShots = new Set([
+    ...segs.filter((s) => Number(s?.a ?? 0) <= 60).map((s) => String(s.shot || '')),
+    ...shots.filter((s) => Number(s?.first ?? 0) <= 60).map((s) => String(s.id || '')),
+  ]);
+  const manifestMatchesInputs = Boolean(
+    existingManifest &&
+      preBundleSigs.timelineSig &&
+      preBundleSigs.sourcesSig &&
+      existingManifest.timelineSig === preBundleSigs.timelineSig &&
+      existingManifest.sourcesSig === preBundleSigs.sourcesSig &&
+      openingTargets.every((fr) => {
+        const entry = existingManifest.frames?.[String(fr)];
+        const fn = `f${String(fr).padStart(4, '0')}.png`;
+        const fp = path.join(openingDir, fn);
+        return entry && entry.file === fn && fs.existsSync(fp) && fileSha256Hex32(fp) === entry.sha256;
+      }),
+  );
+  const shouldRenderOpening =
+    onlySet.size === 0 || !manifestMatchesInputs || [...onlySet].some((id) => openingShots.has(id));
+
+  const openingFiles = [];
+  const manifestFrames = {};
+  if (shouldRenderOpening && openingTargets.length > 0) {
+    fs.mkdirSync(openingDir, { recursive: true });
+    // Erase any prior manifest before overwriting opening PNGs so an interrupted/mutated render never leaves a valid-looking manifest.
+    fs.rmSync(manifestPath, { force: true });
+    const rawMainComp = await selectComposition({ ...base, id: ep.id });
+    const mainComp = {
+      ...rawMainComp,
+      durationInFrames: Math.max(totalFrames, Number(rawMainComp.durationInFrames || 1)),
+      width: isPortrait ? 1080 : Number(tl.width || rawMainComp.width),
+      height: isPortrait ? 1920 : Number(tl.height || rawMainComp.height),
+      fps: Number(tl.fps || rawMainComp.fps),
+    };
+    for (const fr of openingTargets) {
+      const name = `f${String(fr).padStart(4, '0')}.png`;
+      const outFile = path.join(openingDir, name);
+      try {
+        await renderStill({ ...base, composition: mainComp, frame: fr, output: outFile, overwrite: true, scale: opts.scale });
+        const bytes = fs.statSync(outFile).size;
+        const sha256 = fileSha256Hex32(outFile);
+        openingFiles.push({ frame: fr, path: outFile, bytes, sha256 });
+        manifestFrames[String(fr)] = { file: name, sha256, bytes };
+      } catch (err) {
+        fs.rmSync(manifestPath, { force: true });
+        const msg = `CRASH rendering opening frame ${fr}: ${err?.stack || err?.message || err}`;
+        process.stderr.write(`${msg}\n`);
+        result({ ok: false, mode: 'stills', failedFrame: fr, error: msg });
+        process.exit(1);
+      }
+    }
+  }
+
+  // Re-verify cryptographic input signatures AFTER all stills & opening frames have rendered:
+  // if any source or timeline changed during rendering, erase manifest.json and fail closed so old bundled images are NEVER bound to new sources.
+  const postRenderSigs = computeOpeningInputSigs(studioDir, opts.slug);
+  if (!sameOpeningInputSigs(preBundleSigs, postRenderSigs)) {
+    fs.rmSync(manifestPath, { force: true });
+    const msg =
+      `episode/engine sources or timeline.json mutated during render (preBundle=${JSON.stringify(preBundleSigs)} vs ` +
+      `postRender=${JSON.stringify(postRenderSigs)}); opening manifest refused/erased`;
+    process.stderr.write(`${msg}\n`);
+    result({ ok: false, mode: 'stills', reason: 'inputs_mutated_during_render', error: msg, preBundleSigs, postRenderSigs });
+    process.exit(1);
+  }
+
+  if (shouldRenderOpening && openingTargets.length > 0) {
+    const pngTampered = openingTargets.some((fr) => {
+      const entry = manifestFrames[String(fr)];
+      const fp = path.join(openingDir, `f${String(fr).padStart(4, '0')}.png`);
+      return !entry?.sha256 || !fs.existsSync(fp) || fileSha256Hex32(fp) !== entry.sha256;
+    });
+    if (pngTampered) {
+      fs.rmSync(manifestPath, { force: true });
+      const msg = 'rendered opening PNG missing or modified before manifest commit; opening manifest refused/erased';
+      process.stderr.write(`${msg}\n`);
+      result({ ok: false, mode: 'stills', reason: 'opening_png_tampered_during_render', error: msg });
+      process.exit(1);
+    }
+    if (preBundleSigs.timelineSig && preBundleSigs.sourcesSig) {
+      const tmpManifest = `${manifestPath}.tmp.${process.pid}`;
+      fs.writeFileSync(
+        tmpManifest,
+        JSON.stringify(
+          {
+            version: 1,
+            slug: opts.slug,
+            timelineSig: preBundleSigs.timelineSig,
+            sourcesSig: preBundleSigs.sourcesSig,
+            expectedFrames: openingTargets,
+            frames: manifestFrames,
+            renderedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      fs.renameSync(tmpManifest, manifestPath);
+    } else {
+      fs.rmSync(manifestPath, { force: true });
+    }
+  } else if (!preBundleSigs.timelineSig || !preBundleSigs.sourcesSig) {
+    fs.rmSync(manifestPath, { force: true });
+  }
+
+  result({ ok: true, mode: 'stills', dir, stills: files, opening: openingFiles, timings: { ...timings, total: Number((mono() - t0).toFixed(3)) } });
   process.exit(0);
 }
 

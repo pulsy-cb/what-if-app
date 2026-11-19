@@ -85,7 +85,8 @@ export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at =
   const fs = PORTRAIT ? 34 : 36;
   const subFs = PORTRAIT ? 23 : 24;
   const mainChars = Math.max(text.length, sub ? Math.ceil(sub.length * 0.72) : 0);
-  const w = Math.min(VB.w - 88, Math.max(220, Math.round(mainChars * (fs * 0.62) + 86)));
+  // a monospace glyph is 0.6 em wide and the text is spaced 2.5: without the spacing a long stamp ran out of its box
+  const w = Math.min(VB.w - 88, Math.max(220, Math.round(mainChars * (fs * 0.6 + 2.5) + 58 + 24)));
   const h = sub ? 104 : 72;
   const boxX = align === 'start' ? 0 : align === 'end' ? -w : -w / 2;
   const charsShown = Math.max(1, Math.min(text.length, Math.ceil((dt / 10) * text.length)));

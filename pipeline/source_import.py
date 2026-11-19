@@ -65,18 +65,43 @@ def blocks(text: str, limit: int = MAX_BLOCK_WORDS, lang: str = "fr") -> List[Di
     return out
 
 
+TITLE_FUNCTION_WORDS = {
+    "UN", "UNE", "LE", "LA", "LES", "DE", "DES", "DU", "D'", "L'", "ET", "OU", "A", "À", "AU", "AUX", "DANS", "SUR",
+    "SOUS", "PAR", "POUR", "AVEC", "SANS", "EN", "SE", "SA", "SON", "SES", "MON", "MA", "MES", "QUI", "QUE", "QU'",
+    "CE", "CETTE", "IL", "ELLE", "FAIT", "THE", "A", "AN", "OF", "TO", "IN", "ON", "AT", "AND", "OR", "FOR", "WITH",
+    "BY", "MY", "HIS", "HER", "IS", "WAS", "GETS",
+}
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+
+
 def make_title_lines(raw_title: str, lang: str = "fr") -> List[str]:
-    """Turn a French or English proposal title into two short uppercase title-card lines."""
-    clean = re.sub(r"\s+", " ", (raw_title or "").strip()).upper()
-    words = clean.split()
+    """Turn a proposal title into two short uppercase lines, used for the episode name only (no title card by default).
+
+    Hashtags and emojis are removed, and no line ends on a function word ("DANS UN", "ET SE FAIT").
+    """
+    clean = _EMOJI_RE.sub(" ", raw_title or "")
+    clean = re.sub(r"#\S+", " ", clean)
+    clean = re.sub(r"\s+([.,;:!?])", r"\1", clean)
+    clean = re.sub(r"\s+", " ", clean).strip(" .-|").upper()
+    words = [w for w in clean.split() if re.search(r"\w", w)]
     if not words:
         return ["TRUE STORY", "…"] if lang == "en" else ["HISTOIRE VRAIE", "…"]
-    if len(words) <= 4:
-        mid = max(1, len(words) // 2)
-        return [" ".join(words[:mid]), " ".join(words[mid:]) or "…"]
+
+    def ends_weak(ws: List[str]) -> bool:
+        return bool(ws) and ws[-1].strip(".,;:!?") in TITLE_FUNCTION_WORDS
+
     short = words[:7]
-    mid = max(2, len(short) // 2)
-    return [" ".join(short[:mid]), " ".join(short[mid:])]
+    while len(short) > 2 and ends_weak(short):
+        short = short[:-1]
+    if len(short) == 1:
+        return [short[0], "…"]
+    best = max(1, len(short) // 2)
+    # pick the cut closest to the middle whose first line does not end on a function word
+    for mid in sorted(range(1, len(short)), key=lambda m: abs(m - len(short) / 2)):
+        if not ends_weak(short[:mid]):
+            best = mid
+            break
+    return [" ".join(short[:best]), " ".join(short[best:])]
 
 
 def usable(proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -267,7 +292,7 @@ def main(argv: List[str]) -> int:
                 if raw_v == "upload":
                     print(
                         f"[source] existing uploaded audio found on :8005 ({tts_chk.get('path')}, "
-                        f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it automatically",
+                        f"duration={tts_chk.get('duration_seconds')}s) — voice step will reuse it only if script stays unchanged and transcript matches",
                         flush=True,
                     )
                 elif srv_vid and srv_vid != voice_det["voiceId"]:

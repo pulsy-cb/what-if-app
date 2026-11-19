@@ -49,6 +49,13 @@ function assertWritableProjectPath(projectRoot: string, relPath: string): { abs:
   if (shotCase && shotCase[1] !== shotCase[1]!.toUpperCase()) {
     throw new Error(`shot file "${norm}" must use uppercase "${shotCase[1]!.toUpperCase()}.tsx"`);
   }
+  // The verdict on the narration is the studio's and the Reviewer's: the author of the corrections does not write it.
+  if (/^out\/[^/]+\/(script-check\.json|script-review\.json|script-pack\.md|script\.orig\.md|source\.fit\.md)$/.test(norm)) {
+    throw new Error(`writing to "${norm}" is refused: this file is written by whatif_run { step: "script" } and by the Reviewer. Write your reading card in out/<slug>/script-card.json and the corrected text in episode.json.script.`);
+  }
+  if (/^out\/[^/]+\/sheets\/opening\.json$/.test(norm) || /^out\/[^/]+\/opening\//.test(norm)) {
+    throw new Error(`writing to "${norm}" is refused: opening captures and manifests are written by stills and board.`);
+  }
   if (WRITABLE_PATHS.some((re) => re.test(norm))) return { abs, rel: norm };
   if (process.env.WHATIF_ALLOW_ENGINE_WRITES === '1' && ENGINE_PATHS.test(norm)) return { abs, rel: norm };
   throw new Error(

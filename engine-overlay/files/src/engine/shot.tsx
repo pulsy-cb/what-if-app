@@ -998,8 +998,14 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
   }
   if (spec.screen === 'photo') {
     const ph = spec.photo ?? {};
-    const top = H * 0.1;
     const side = W - pad * 1.2;
+    // the picture, its caption and the "posted" pill are one block, centred in the screen: set at the top, the block
+    // left the lower half of the phone empty (custom-shortlist-063, S26)
+    const capFs = fs * 1.25;
+    const capLines = wrapText(ph.caption ?? '', 19).slice(0, 3).filter(Boolean);
+    const capH = capLines.length ? capFs * (0.7 + capLines.length * 1.3) : 0;
+    const blockH = side + capH + (ph.posted ? fs * 3.6 : 0);
+    const top = H * 0.1 + Math.max(0, (H * 0.84 - blockH) / 2);
     const u = side / 100;
     const busts = (ph.people ?? []).slice(0, 4);
     const posted = ph.posted && t >= ph.posted.at ? ease01((t - ph.posted.at) / 6) : 0;
@@ -1037,11 +1043,11 @@ const PhoneScreenUI: React.FC<{ spec: PhoneSpec; t: number; W: number; H: number
           ) : null}
           {ph.node}
         </svg>
-        {wrapText(ph.caption ?? '', 24).slice(0, 3).map((l, i) => (
-          <text key={i} x={pad} y={top + side + fs * (1.7 + i * 1.3)} fontSize={fs} fill="#F4F6FA" fontFamily={font}>{l}</text>
+        {capLines.map((l, i) => (
+          <text key={i} x={pad} y={top + side + capFs * (1.5 + i * 1.3)} fontSize={capFs} fontWeight={600} fill="#F4F6FA" fontFamily={font}>{l}</text>
         ))}
         {posted ? (
-          <g opacity={posted} transform={`translate(${W / 2} ${H * 0.74})`}>
+          <g opacity={posted} transform={`translate(${W / 2} ${top + side + capH + fs * 2.1})`}>
             <rect x={-W * 0.36} y={-fs * 1.1} width={W * 0.72} height={fs * 2.2} rx={fs * 1.1} fill="#35C759" />
             <text y={fs * 0.35} textAnchor="middle" fontSize={fs} fontWeight={700} fill="#FFF" fontFamily={font}>{`✓ ${ph.posted!.text ?? 'Photo publiée'}`}</text>
           </g>
@@ -1172,4 +1178,119 @@ export const phoneShot = (spec: PhoneSpec): React.FC<ShotProps> => {
     );
   };
   return PhoneComp;
+};
+
+export type ScreenSpec = {
+  /** what the screen shows: another shot, written the usual way (`shot({ place, cam, people })`) */ show: React.FC<ShotProps>;
+  /** 'cctv' (default): a surveillance monitor, green and grainy; 'tv': a television; 'monitor': a computer screen */ kind?: 'cctv' | 'tv' | 'monitor';
+  /** the name on the screen, top left: 'CAM 604', 'JT 20H', 'Visio' */ label?: string;
+  /** a red blinking mention at the bottom: 'EN DIRECT', 'LIVE', 'REC' (true: 'REC') */ live?: string | boolean;
+  /** a clock that runs on the screen, from this time: '02:07:41' */ time?: string;
+  /** the room the screen is in, blurred behind it */ back?: Placed;
+  /** the camera pushes on the screen (default true) */ push?: boolean;
+};
+
+let screenSeq = 0;
+
+/** A screen that shows another shot: a surveillance monitor, a television, a computer.
+ * `export const S33 = screenShot({ kind: 'cctv', label: 'CAM 604', live: 'EN DIRECT', show: shot({ place: FLAT, cam: 'wide', people: [{ who: DOUBLE, act: 'idle' }] }) })`.
+ * Written by hand, a monitor cost an hour and came out as a green slab (custom-shortlist-063, S33 and S38). */
+export const screenShot = (spec: ScreenSpec): React.FC<ShotProps> => {
+  const uid = ++screenSeq;
+  const kind = spec.kind ?? 'cctv';
+  const Show = spec.show;
+  const Back = spec.back ? shot({ place: spec.back, cam: 'wide', move: 'still' }) : null;
+  const vb = PORTRAIT ? { x: 510, y: -260 } : { x: 0, y: 0 };
+  const ScreenComp: React.FC<ShotProps> = ({ t, len }) => {
+    const k = len > 0 ? clamp(t / len, 0, 1) : 0;
+    const zoom = spec.push === false ? 1 : 1 + 0.05 * k;
+    // the glass keeps the proportions of the frame, so what the inner shot frames is what the screen shows
+    const W = FRAME.w * (PORTRAIT ? 0.84 : 0.74);
+    const H = (W * FRAME.h) / FRAME.w;
+    const cx = 960;
+    const cy = 540 + (PORTRAIT ? -30 : -14);
+    const x0 = cx - W / 2;
+    const y0 = cy - H / 2;
+    const bz = W * 0.035;
+    const fs = W * (PORTRAIT ? 0.06 : 0.034);
+    const font = 'ui-monospace, Menlo, Consolas, monospace';
+    const cctv = kind === 'cctv';
+    const ink = cctv ? '#B9E08A' : '#F4F6FA';
+    const flick = cctv ? 0.92 + 0.08 * Math.abs(Math.sin(t * 1.7)) : 1;
+    const liveText = spec.live === true ? 'REC' : spec.live || '';
+    const clock = (() => {
+      if (!spec.time) return '';
+      const p = spec.time.split(':').map((n) => Number(n) || 0);
+      const base = (p[0] ?? 0) * 3600 + (p[1] ?? 0) * 60 + (p[2] ?? 0) + Math.floor(t / STUDIO.fps);
+      const two = (n: number) => String(n).padStart(2, '0');
+      return `${two(Math.floor(base / 3600) % 24)}:${two(Math.floor(base / 60) % 60)}:${two(base % 60)}`;
+    })();
+    return (
+      <g>
+        {Back ? (
+          <g filter="url(#blur6)" opacity={0.85}>
+            <Back t={t} len={len} f={t} />
+          </g>
+        ) : (
+          <rect x={-2000} y={-2000} width={6000} height={6000} fill="#15161B" />
+        )}
+        <rect x={-2000} y={-2000} width={6000} height={6000} fill="#000" opacity={0.42} />
+        <defs>
+          <filter id={`screenTint-${uid}`} colorInterpolationFilters="sRGB">
+            {cctv ? (
+              <feColorMatrix type="matrix" values="0.25 0.45 0.08 0 0.02  0.3 0.62 0.1 0 0.05  0.2 0.36 0.08 0 0.02  0 0 0 1 0" />
+            ) : (
+              <feColorMatrix type="saturate" values={kind === 'tv' ? '1.15' : '0.95'} />
+            )}
+          </filter>
+          <radialGradient id={`screenVig-${uid}`} cx="0.5" cy="0.5" r="0.72">
+            <stop offset="0.55" stopColor="#000" stopOpacity={0} />
+            <stop offset="1" stopColor="#000" stopOpacity={cctv ? 0.7 : 0.3} />
+          </radialGradient>
+        </defs>
+        <g transform={`translate(960 540) scale(${zoom}) translate(-960 -540)`}>
+          {/* the light the screen throws round itself, then the case */}
+          <rect x={x0 - bz * 3} y={y0 - bz * 3} width={W + bz * 6} height={H + bz * 6} rx={bz * 3} fill={cctv ? '#7CC46A' : '#9CC3FF'} opacity={0.1 * flick} filter="url(#blur6)" />
+          <rect x={x0 - bz + 10} y={y0 - bz + 16} width={W + bz * 2} height={H + bz * 2.6} rx={bz * 1.1} fill="#000" opacity={0.4} />
+          <rect x={x0 - bz} y={y0 - bz} width={W + bz * 2} height={H + bz * 2.6} rx={bz * 1.1} fill={kind === 'monitor' ? '#2B2E36' : '#1B1D22'} stroke="#0B0C0F" strokeWidth={4} />
+          <circle cx={x0 + W - bz} cy={y0 + H + bz * 0.8} r={bz * 0.22} fill={cctv ? '#E24A3C' : '#6FE08A'} opacity={Math.floor(t / 15) % 2 ? 1 : 0.45} />
+          <svg x={x0} y={y0} width={W} height={H} viewBox={`${vb.x} ${vb.y} ${FRAME.w} ${FRAME.h}`} data-screen={kind}>
+            <rect x={vb.x} y={vb.y} width={FRAME.w} height={FRAME.h} fill="#0A0D0B" />
+            <g filter={`url(#screenTint-${uid})`} opacity={flick}>
+              <Show t={t} len={len} f={t} />
+            </g>
+          </svg>
+          {/* what the glass adds: grain lines, the sweep, the dark corners, then the writing */}
+          <svg x={x0} y={y0} width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+            {cctv ? (
+              <g>
+                {Array.from({ length: Math.ceil(H / 9) }, (_, i) => (
+                  <rect key={i} x={0} y={i * 9} width={W} height={3} fill="#000" opacity={0.16} />
+                ))}
+                <rect x={0} y={((t * 11) % (H + 80)) - 80} width={W} height={80} fill="#D8F0C0" opacity={0.07} />
+              </g>
+            ) : null}
+            <rect width={W} height={H} fill={`url(#screenVig-${uid})`} />
+            {spec.label ? (
+              <g>
+                <rect x={0} y={0} width={W} height={fs * 2} fill="#000" opacity={cctv ? 0.5 : 0.35} />
+                <text x={fs * 0.7} y={fs * 1.38} fontSize={fs} fontWeight={800} fill={ink} fontFamily={font} letterSpacing={2}>{spec.label}</text>
+              </g>
+            ) : null}
+            {clock ? (
+              <text x={W - fs * 0.7} y={fs * 1.38} textAnchor="end" fontSize={fs * 0.9} fontWeight={700} fill={ink} fontFamily={font}>{clock}</text>
+            ) : null}
+            {liveText ? (
+              <g>
+                <rect x={0} y={H - fs * 2.2} width={W} height={fs * 2.2} fill="#000" opacity={0.55} />
+                <circle cx={fs * 1.1} cy={H - fs * 1.1} r={fs * 0.38} fill="#E24A3C" opacity={Math.floor(t / 12) % 2 ? 0.25 : 1} />
+                <text x={fs * 1.9} y={H - fs * 0.72} fontSize={fs * 1.05} fontWeight={900} fill="#E24A3C" fontFamily={font} letterSpacing={2}>{liveText}</text>
+              </g>
+            ) : null}
+          </svg>
+        </g>
+      </g>
+    );
+  };
+  return ScreenComp;
 };
