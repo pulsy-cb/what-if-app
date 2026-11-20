@@ -4,9 +4,15 @@ import type { Body, BodyId } from './person';
 // Choices are names, never sliders. Anything not given is filled from `seed`, the same way every time, so a short line
 // still gives a varied character. A colour is one of COLORS or a hex value ('hoodie:#E05780').
 
-export const HAIR_NEW = ['long', 'braids', 'bun', 'buzz', 'sidepart', 'wavy', 'fringe', 'mohawk', 'dreads', 'hijab', 'braided-bun', 'shag'] as const;
-export const HAIR_RIG = ['tuft', 'curls', 'bunches', 'bob', 'suit', 'cap', 'beanie', 'spiky', 'afro', 'ponytail', 'bald', 'helmet', 'hood'] as const;
+export const HAIR_NEW = [
+  'long', 'braids', 'bun', 'buzz', 'sidepart', 'wavy', 'fringe', 'mohawk', 'dreads', 'hijab', 'braided-bun', 'shag',
+  'fade', 'waves', 'afro', 'high-bun', 'undercut', 'curtain', 'quiff',
+] as const;
+export const HAIR_RIG = ['tuft', 'curls', 'bunches', 'bob', 'suit', 'cap', 'beanie', 'spiky', 'ponytail', 'bald', 'helmet', 'hood'] as const;
 export type HairStyle = (typeof HAIR_NEW)[number] | (typeof HAIR_RIG)[number];
+
+export type HeadShape = 'round' | 'oval' | 'square' | 'narrow';
+export type BodyBuild = 'slim' | 'medium' | 'broad';
 
 export type FaceSpec = {
   eyes: 'round' | 'almond' | 'sleepy' | 'wide';
@@ -57,6 +63,8 @@ const SLOTS: Record<string, 'top' | 'over' | 'legs' | 'feet' | 'neck' | 'back'> 
 export type Garment = { id: string; color: string; shade: string; accent?: string };
 export type CastData = {
   body?: Body | BodyId;
+  headShape?: HeadShape;
+  build?: BodyBuild;
   hairStyle: string;
   /** true when hair.tsx draws the hair (the rig's own head then stays bald) */
   newHair: boolean;
@@ -82,6 +90,10 @@ export type CastSpec = {
   /** fills everything not given, reproducibly; use the character's name */
   seed?: string;
   body?: Body | BodyId;
+  /** subtle skull silhouette variation (seeded deterministically when omitted) */
+  headShape?: HeadShape;
+  /** subtle torso/shoulder width scaling: slim (0.88), medium (1.0), broad (1.14) */
+  build?: BodyBuild;
   /** biases what the seed picks: hair and facial hair */
   kind?: 'fem' | 'masc' | 'any';
   skin?: keyof typeof SKINS | string;
@@ -168,9 +180,9 @@ const BROW_W: Record<FaceSpec['brows'], number | undefined> = { none: undefined,
 const NOSE_K: Record<FaceSpec['nose'], number | undefined> = { none: undefined, button: 0.7, long: 1.4, wide: 1.2 };
 
 const HAIR_POOL: Record<NonNullable<CastSpec['kind']>, HairStyle[]> = {
-  fem: ['long', 'braided-bun', 'shag', 'bob', 'ponytail', 'bun', 'braids', 'wavy', 'fringe', 'curls', 'bunches'],
-  masc: ['sidepart', 'buzz', 'spiky', 'suit', 'curls', 'dreads', 'afro', 'wavy'],
-  any: ['long', 'bob', 'ponytail', 'bun', 'wavy', 'fringe', 'curls', 'sidepart', 'buzz', 'spiky', 'suit', 'afro', 'dreads'],
+  fem: ['long', 'braided-bun', 'shag', 'bob', 'ponytail', 'bun', 'high-bun', 'braids', 'wavy', 'waves', 'fringe', 'curtain', 'curls', 'afro', 'bunches'],
+  masc: ['fade', 'undercut', 'quiff', 'curtain', 'sidepart', 'buzz', 'spiky', 'suit', 'curls', 'dreads', 'afro', 'wavy'],
+  any: ['long', 'bob', 'ponytail', 'bun', 'high-bun', 'wavy', 'waves', 'fringe', 'curtain', 'curls', 'fade', 'undercut', 'quiff', 'sidepart', 'buzz', 'spiky', 'suit', 'afro', 'dreads', 'braids'],
 };
 
 export const EYE_COLORS: Record<string, string> = { blue: '#4E9BE0', green: '#3E9C5A', brown: '#6A4A34', hazel: '#8A6A3A', grey: '#8A96A4', amber: '#C98A2E' };
@@ -224,6 +236,8 @@ export const cast = (input: CastSpec = {}): Character => {
     legsColor: pick(['denim', 'black', 'khaki', 'grey', 'navy']),
     feetColor: pick(['black', 'white', 'brown', 'grey', 'navy']),
     accent: pick(['cream', 'mustard', 'coral', 'sky', 'white']),
+    headShape: pick(['round', 'oval', 'square', 'narrow'] as const),
+    build: pick(['slim', 'medium', 'medium', 'broad'] as const),
   };
 
   const worn: Partial<Record<'top' | 'over' | 'legs' | 'feet' | 'neck' | 'back', Garment>> = {};
@@ -306,6 +320,8 @@ export const cast = (input: CastSpec = {}): Character => {
     accessory,
     cast: {
       body: spec.body,
+      headShape: spec.headShape ?? seeded.headShape,
+      build: spec.build ?? seeded.build,
       hairStyle,
       newHair,
       face,

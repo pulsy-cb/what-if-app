@@ -1,5 +1,7 @@
 import React from 'react';
 import { FONT } from './fonts';
+import { Box } from './room';
+import type { Room } from './room';
 
 // Reusable room pieces: flat things hung on a wall. They know nothing about a story (no demo sums, no fixed colours
 // beyond defaults): colours come from props (a set's tokens), content comes in as children. A blackboard, a whiteboard
@@ -75,3 +77,91 @@ export const PinBoard: React.FC<{
     {children}
   </g>
 );
+
+/** Reusable perspective staircase with steps, optional upper landing, balusters and sloped handrail. */
+export const Stairs: React.FC<{
+  r: Room;
+  u?: number;
+  w?: number;
+  len?: number;
+  deep?: number;
+  steps?: number;
+  top?: number;
+  landing?: boolean;
+  tread?: string;
+  riser?: string;
+  side?: string;
+  rail?: string;
+  handrail?: 'left' | 'right' | 'both' | 'none';
+}> = ({
+  r,
+  u = 0.24,
+  w = 0.08,
+  len = 0.42,
+  deep = 0.52,
+  steps = 7,
+  top = 0.42,
+  landing = true,
+  tread = '#C89866',
+  riser = '#AA7B4C',
+  side = '#845D36',
+  rail = '#5D646E',
+  handrail = 'both',
+}) => {
+  const n = Math.max(3, Math.round(steps));
+  const u1 = u + len;
+  const wEnd = w + deep;
+  const railH = 0.22;
+  const sides: number[] =
+    handrail === 'none'
+      ? []
+      : handrail === 'left'
+        ? [u + 0.012]
+        : handrail === 'right'
+          ? [u1 - 0.012]
+          : [u + 0.012, u1 - 0.012];
+
+  return (
+    <g>
+      {landing ? (
+        <Box r={r} u={[u - 0.04, u1 + 0.04]} v={[top, 1]} w={[0, w]} top={tread} front={riser} side={side} rim />
+      ) : null}
+      {Array.from({ length: n }, (_, i) => {
+        const w0 = w + (i / n) * deep;
+        const w1 = w + ((i + 1) / n) * deep;
+        const vStep = top + (i / n) * (1 - top);
+        const noseL = r.P(u, vStep, w1);
+        const noseR = r.P(u1, vStep, w1);
+        return (
+          <g key={`st${i}`}>
+            <Box r={r} u={[u, u1]} v={[vStep, 1]} w={[w0, w1]} top={tread} front={riser} side={side} rim />
+            <line x1={noseL.x} y1={noseL.y} x2={noseR.x} y2={noseR.y} stroke="#FFFFFF" strokeOpacity={0.22} strokeWidth={2.5} />
+          </g>
+        );
+      })}
+      {sides.map((su, si) => {
+        const topRail = r.P(su, top - railH, w);
+        const botRail = r.P(su, 1 - railH, wEnd);
+        const topBase = r.P(su, top, w);
+        const botBase = r.P(su, 1, wEnd);
+        const kBot = r.s(wEnd);
+        return (
+          <g key={`hr${si}`}>
+            {Array.from({ length: n }, (_, i) => {
+              if (i > 0 && i < n - 1 && i % 2 === 1) return null;
+              const wm = w + ((i + 0.5) / n) * deep;
+              const vStep = top + (i / n) * (1 - top);
+              const b = r.P(su, vStep, wm);
+              const tp = r.P(su, vStep - railH, wm);
+              return <line key={`b${i}`} x1={b.x} y1={b.y} x2={tp.x} y2={tp.y} stroke={rail} strokeWidth={Math.max(3, 3.8 * r.s(wm))} strokeLinecap="round" />;
+            })}
+            <line x1={topBase.x} y1={topBase.y} x2={topRail.x} y2={topRail.y} stroke={rail} strokeWidth={5} strokeLinecap="round" />
+            <line x1={botBase.x} y1={botBase.y} x2={botRail.x} y2={botRail.y} stroke={rail} strokeWidth={Math.max(5, 6 * kBot)} strokeLinecap="round" />
+            <line x1={topRail.x} y1={topRail.y} x2={botRail.x} y2={botRail.y} stroke={rail} strokeWidth={Math.max(6, 7.5 * kBot)} strokeLinecap="round" />
+            <line x1={topRail.x} y1={topRail.y - 2} x2={botRail.x} y2={botRail.y - 2} stroke="#FFFFFF" strokeOpacity={0.22} strokeWidth={2} strokeLinecap="round" />
+          </g>
+        );
+      })}
+    </g>
+  );
+};

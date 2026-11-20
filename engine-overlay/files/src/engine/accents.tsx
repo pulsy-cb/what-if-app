@@ -27,6 +27,56 @@ const backOut3 = (v: number) => {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 };
 
+/** Fit monospace text strictly inside `maxWidth`: shrinks `fontSize` first, then falls back to `textLength` + `spacingAndGlyphs`. */
+function fitMonoText(
+  text: string,
+  maxWidth: number,
+  maxFs: number,
+  minFs = 13,
+  letterSpacing = 0,
+): { fontSize: number; textLength?: number; lengthAdjust?: 'spacingAndGlyphs' } {
+  const chars = Math.max(1, text.length);
+  const usable = Math.max(24, maxWidth);
+  const spacingTotal = Math.max(0, chars - 1) * letterSpacing;
+  const ideal = Math.floor((usable - spacingTotal) / (chars * 0.62));
+  const fontSize = Math.max(minFs, Math.min(maxFs, ideal));
+  const estWidth = chars * fontSize * 0.62 + spacingTotal;
+  if (estWidth > usable) {
+    return { fontSize, textLength: Math.round(usable), lengthAdjust: 'spacingAndGlyphs' };
+  }
+  return { fontSize };
+}
+
+/** Deterministic word wrapper for card bodies and Polaroid captions. */
+function wrapLines(text: string, maxChars: number, maxLines: number): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length <= maxChars || !cur) {
+      cur = next;
+    } else {
+      lines.push(cur);
+      if (lines.length >= maxLines) return lines;
+      cur = w;
+    }
+  }
+  if (cur && lines.length < maxLines) lines.push(cur);
+  return lines;
+}
+
+let insertIdSeq = 0;
+function makeInsertId(prefix: string, seedText: string): string {
+  insertIdSeq += 1;
+  let h = 2166136261;
+  for (let i = 0; i < seedText.length; i++) {
+    h = Math.imul(h ^ seedText.charCodeAt(i), 16777619);
+  }
+  return `${prefix}_${insertIdSeq}_${(h >>> 0).toString(36)}`;
+}
+
 export type ScreenAnchor = 'top-left' | 'top-right' | 'top-center' | 'bottom-left' | 'bottom-center' | 'center';
 
 function anchorPoint(pos: ScreenAnchor, padX = 72, padY = 86): { x: number; y: number; align: 'start' | 'middle' | 'end' } {
@@ -92,6 +142,9 @@ export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at =
   const charsShown = Math.max(1, Math.min(text.length, Math.ceil((dt / 10) * text.length)));
   const shownText = dt < 12 ? text.slice(0, charsShown) : text;
   const blink = Math.floor(t / 10) % 2 === 0 ? 1 : 0.38;
+  const maxTextW = w - 80;
+  const mainFit = fitMonoText(text, maxTextW, fs, 16, 2.5);
+  const subFit = sub ? fitMonoText(sub, maxTextW, subFs, 14, 2) : null;
 
   return (
     <g transform={`translate(${x} ${y}) scale(${0.86 + 0.14 * enter})`} opacity={op}>
@@ -99,11 +152,31 @@ export const StampCard: React.FC<StampSpec & { t: number }> = ({ text, sub, at =
       <rect x={boxX} y={-36} width={w} height={h} rx={18} fill="none" stroke={CREAM} strokeWidth={2.5} opacity={0.45} />
       <rect x={boxX + 14} y={-20} width={6} height={h - 32} rx={3} fill={accent} />
       <circle cx={boxX + 38} cy={sub ? -4 : 0} r={7} fill={accent} opacity={blink} />
-      <text x={boxX + 58} y={sub ? 7 : 12} fontFamily={MONO_FONT} fontSize={fs} fontWeight={700} fill={CREAM} letterSpacing={2.5}>
+      <text
+        x={boxX + 58}
+        y={sub ? 7 : 12}
+        fontFamily={MONO_FONT}
+        fontSize={mainFit.fontSize}
+        fontWeight={700}
+        fill={CREAM}
+        letterSpacing={2.5}
+        textLength={dt >= 12 ? mainFit.textLength : undefined}
+        lengthAdjust={dt >= 12 ? mainFit.lengthAdjust : undefined}
+      >
         {shownText}
       </text>
-      {sub ? (
-        <text x={boxX + 58} y={44} fontFamily={MONO_FONT} fontSize={subFs} fill={accent} letterSpacing={2} opacity={0.95}>
+      {sub && subFit ? (
+        <text
+          x={boxX + 58}
+          y={44}
+          fontFamily={MONO_FONT}
+          fontSize={subFit.fontSize}
+          fill={accent}
+          letterSpacing={2}
+          opacity={0.95}
+          textLength={subFit.textLength}
+          lengthAdjust={subFit.lengthAdjust}
+        >
           {sub}
         </text>
       ) : null}
@@ -533,8 +606,10 @@ export type TabletopItemSpec = {
   color?: string;
   /** Short title/header on a document, bill, badge, card, or clock time ("FACTURE", "URGENCES", "03:14") */
   label?: string;
-  /** Highlighted value on a bill, card, cash stack ("15 000 €", "CONFIDENTIEL") */
+  /** Highlighted value / stamp on a bill, document, card, cash stack ("15 000 €", "CONFIDENTIEL") */
   sub?: string;
+  /** Optional alias for `sub` stamp text on a document/bill */
+  stamp?: string;
   /** Frame when this item lands / slides onto the surface (0 = already on the table) */
   at?: number;
   /** Custom SVG override when `kind` alone isn't enough */
@@ -580,22 +655,45 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
     case 'bill': {
       const isBill = it.kind === 'bill';
       const head = it.label ?? (isBill ? 'FACTURE' : 'DOSSIER');
+      const headFit = fitMonoText(head, 256, 26, 13, 2);
+      const subText = it.sub ?? it.stamp;
+      const subFit = subText ? fitMonoText(subText, 240, 34, 13, 0) : null;
       return (
         <g>
           <rect x={-165} y={-220} width={330} height={440} rx={12} fill="#000" opacity={0.24} transform="translate(12 16)" />
           <rect x={-165} y={-220} width={330} height={440} rx={12} fill="#F9F5EB" stroke={INK} strokeWidth={4} />
           <rect x={-140} y={-190} width={280} height={48} rx={8} fill={col ?? (isBill ? '#D94848' : '#3C5A99')} />
-          <text x={0} y={-157} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={26} fill="#FFF" letterSpacing={2}>
+          <text
+            x={0}
+            y={-166 + Math.round(headFit.fontSize * 0.35)}
+            textAnchor="middle"
+            fontFamily={MONO_FONT}
+            fontWeight={700}
+            fontSize={headFit.fontSize}
+            fill="#FFF"
+            letterSpacing={2}
+            textLength={headFit.textLength}
+            lengthAdjust={headFit.lengthAdjust}
+          >
             {head}
           </text>
           {[-105, -72, -39, -6].map((ly, i) => (
             <rect key={i} x={-132} y={ly} width={i % 2 === 0 ? 250 : 190} height={11} rx={5} fill="#C9C2B2" />
           ))}
-          {it.sub ? (
+          {subText && subFit ? (
             <g transform="translate(0 92)">
               <rect x={-132} y={-36} width={264} height={72} rx={12} fill="#FFF0D6" stroke={isBill ? '#D94848' : INK} strokeWidth={3} />
-              <text y={11} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={34} fill={isBill ? '#C93232' : INK}>
-                {it.sub}
+              <text
+                y={Math.round(subFit.fontSize * 0.34)}
+                textAnchor="middle"
+                fontFamily={MONO_FONT}
+                fontWeight={700}
+                fontSize={subFit.fontSize}
+                fill={isBill ? '#C93232' : INK}
+                textLength={subFit.textLength}
+                lengthAdjust={subFit.lengthAdjust}
+              >
+                {subText}
               </text>
             </g>
           ) : null}
@@ -603,20 +701,31 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
       );
     }
 
-    case 'envelope':
+    case 'envelope': {
+      const envFit = it.label ? fitMonoText(it.label, 312, 26, 13, 0) : null;
       return (
         <g>
           <rect x={-180} y={-115} width={360} height={230} rx={12} fill="#000" opacity={0.24} transform="translate(10 14)" />
           <rect x={-180} y={-115} width={360} height={230} rx={12} fill={col ?? '#F4E8D1'} stroke={INK} strokeWidth={4} />
           <path d="M -176 -111 L 0 24 L 176 -111" fill="none" stroke={INK} strokeWidth={4} strokeLinejoin="round" />
           <circle cx={0} cy={18} r={24} fill="#C83E3E" stroke={INK} strokeWidth={3.5} />
-          {it.label ? (
-            <text y={82} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={26} fill={INK}>
+          {it.label && envFit ? (
+            <text
+              y={82}
+              textAnchor="middle"
+              fontFamily={MONO_FONT}
+              fontWeight={700}
+              fontSize={envFit.fontSize}
+              fill={INK}
+              textLength={envFit.textLength}
+              lengthAdjust={envFit.lengthAdjust}
+            >
               {it.label}
             </text>
           ) : null}
         </g>
       );
+    }
 
     case 'ring':
       return (
@@ -641,15 +750,25 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
         </g>
       );
 
-    case 'pills':
+    case 'pills': {
+      const pillFit = it.label ? fitMonoText(it.label, 102, 22, 11, 0) : null;
       return (
         <g>
           <rect x={-72} y={-108} width={144} height={216} rx={26} fill="#000" opacity={0.24} transform="translate(10 14)" />
           <rect x={-72} y={-82} width={144} height={190} rx={24} fill={col ?? '#E08A3C'} stroke={INK} strokeWidth={4} />
           <rect x={-80} y={-114} width={160} height={42} rx={12} fill="#F7F4EE" stroke={INK} strokeWidth={4} />
           <rect x={-58} y={-24} width={116} height={82} rx={8} fill="#F7F4EE" />
-          {it.label ? (
-            <text y={25} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={22} fill={INK}>
+          {it.label && pillFit ? (
+            <text
+              y={17 + Math.round(pillFit.fontSize * 0.34)}
+              textAnchor="middle"
+              fontFamily={MONO_FONT}
+              fontWeight={700}
+              fontSize={pillFit.fontSize}
+              fill={INK}
+              textLength={pillFit.textLength}
+              lengthAdjust={pillFit.lengthAdjust}
+            >
               {it.label}
             </text>
           ) : null}
@@ -664,6 +783,7 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
           ))}
         </g>
       );
+    }
 
     case 'mug':
     case 'glass': {
@@ -682,6 +802,8 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
     case 'cash':
     case 'card': {
       const isCard = it.kind === 'card';
+      const cardText = it.label ?? (isCard ? 'CARTE' : '100 €');
+      const cardFit = fitMonoText(cardText, 252, 32, 13, 0);
       return (
         <g>
           <rect x={-145} y={-90} width={290} height={180} rx={16} fill="#000" opacity={0.25} transform="translate(10 14)" />
@@ -691,8 +813,17 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
           ) : (
             <circle r={44} fill="#84C287" stroke={INK} strokeWidth={3} />
           )}
-          <text y={isCard ? 52 : 12} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={32} fill="#F7F4EE">
-            {it.label ?? (isCard ? 'CARTE' : '100 €')}
+          <text
+            y={isCard ? 52 : 12}
+            textAnchor="middle"
+            fontFamily={MONO_FONT}
+            fontWeight={700}
+            fontSize={cardFit.fontSize}
+            fill="#F7F4EE"
+            textLength={cardFit.textLength}
+            lengthAdjust={cardFit.lengthAdjust}
+          >
+            {cardText}
           </text>
         </g>
       );
@@ -734,19 +865,30 @@ function renderTabletopItem(it: TabletopItemSpec, t: number, len: number): React
     case 'badge':
     case 'photo':
     case 'box':
-    default:
+    default: {
+      const boxFit = it.label ? fitMonoText(it.label, 224, 26, 13, 0) : null;
       return (
         <g>
           <rect x={-130} y={-150} width={260} height={300} rx={16} fill="#000" opacity={0.25} transform="translate(10 14)" />
           <rect x={-130} y={-150} width={260} height={300} rx={16} fill={col ?? '#F4EFE6'} stroke={INK} strokeWidth={4} />
           <rect x={-104} y={-120} width={208} height={168} rx={10} fill="#D6DFEB" stroke={INK} strokeWidth={3} />
-          {it.label ? (
-            <text y={98} textAnchor="middle" fontFamily={MONO_FONT} fontWeight={700} fontSize={26} fill={INK}>
+          {it.label && boxFit ? (
+            <text
+              y={98}
+              textAnchor="middle"
+              fontFamily={MONO_FONT}
+              fontWeight={700}
+              fontSize={boxFit.fontSize}
+              fill={INK}
+              textLength={boxFit.textLength}
+              lengthAdjust={boxFit.lengthAdjust}
+            >
               {it.label}
             </text>
           ) : null}
         </g>
       );
+    }
   }
 }
 
@@ -940,4 +1082,461 @@ export const EPISODE_LOOKS: Record<string, NarrativeLookDef> = {
       );
     },
   },
+};
+
+// ---------------------------------------------------------------------------------------------------------------
+// 5. Animated graphic insert factories: `notifShot`, `counterShot`, `polaroidShot` (16:9 & 9:16 safe)
+// ---------------------------------------------------------------------------------------------------------------
+
+export type NotifShotSpec = {
+  /** Notification header / app name (e.g. "BANQUE", "ALERTE", "MESSAGES") */
+  title: string;
+  /** Main notification body text */
+  body: string;
+  /** Optional highlighted amount / value pill (e.g. "+ 8 000 000 €", "- 450 €") */
+  amount?: string;
+  /** Optional icon kind: 'bank' | 'bell' | 'mail' | 'alert' | 'check' | 'heart' (or a short symbol) */
+  icon?: 'bank' | 'bell' | 'mail' | 'alert' | 'check' | 'heart' | string;
+  /** Accent colour for the icon badge, bar, and amount */
+  accent?: string;
+  /** Backdrop colour */
+  bg?: string;
+  /** Optional hold duration in frames before a gentle fade-out */
+  hold?: number;
+};
+
+function renderNotifIcon(icon: string, accent: string): React.ReactNode {
+  switch (icon) {
+    case 'bank':
+      return (
+        <g>
+          <path d="M -20 -6 L 0 -20 L 20 -6 Z" fill="#FFF" />
+          <rect x={-16} y={-2} width={6} height={16} rx={2} fill="#FFF" />
+          <rect x={-3} y={-2} width={6} height={16} rx={2} fill="#FFF" />
+          <rect x={10} y={-2} width={6} height={16} rx={2} fill="#FFF" />
+          <rect x={-20} y={16} width={40} height={5} rx={2.5} fill="#FFF" />
+        </g>
+      );
+    case 'mail':
+      return (
+        <g>
+          <rect x={-20} y={-14} width={40} height={28} rx={4} fill="none" stroke="#FFF" strokeWidth={4} />
+          <path d="M -18 -11 L 0 3 L 18 -11" fill="none" stroke="#FFF" strokeWidth={4} strokeLinejoin="round" />
+        </g>
+      );
+    case 'alert':
+      return (
+        <g>
+          <path d="M 0 -20 L 20 16 L -20 16 Z" fill="none" stroke="#FFF" strokeWidth={4} strokeLinejoin="round" />
+          <line x1={0} y1={-7} x2={0} y2={5} stroke="#FFF" strokeWidth={4} strokeLinecap="round" />
+          <circle cx={0} cy={11} r={2.5} fill="#FFF" />
+        </g>
+      );
+    case 'check':
+      return <path d="M -16 2 L -4 14 L 18 -12" fill="none" stroke="#FFF" strokeWidth={5.5} strokeLinecap="round" strokeLinejoin="round" />;
+    case 'heart':
+      return <path d="M 0 16 C -18 4 -22 -12 -10 -16 C -3 -18 0 -11 0 -11 C 0 -11 3 -18 10 -16 C 22 -12 18 4 0 16 Z" fill="#FFF" />;
+    case 'bell':
+      return (
+        <g>
+          <path d="M -14 8 C -14 -8 -10 -16 0 -16 C 10 -16 14 -8 14 8 L 19 14 L -19 14 Z" fill="#FFF" />
+          <circle cx={0} cy={18} r={4.5} fill={accent} stroke="#FFF" strokeWidth={2.5} />
+        </g>
+      );
+    default:
+      return (
+        <text y={11} textAnchor="middle" fontFamily={DISPLAY_FONT} fontWeight={800} fontSize={30} fill="#FFF">
+          {icon.slice(0, 2)}
+        </text>
+      );
+  }
+}
+
+/** Animated push / bank notification card sliding down with subtle bounce (16:9 & 9:16 safe). Set `"size": "insert"` in episode.json. */
+export const notifShot = (spec: NotifShotSpec): React.FC<{ t: number; len: number; f?: number }> => {
+  const glowId = makeInsertId('notifGlow', `${spec.title}:${spec.body}`);
+  const defaultAccent =
+    spec.accent ??
+    (spec.amount?.trim().startsWith('+') ? GOOD : spec.amount?.trim().startsWith('-') ? BAD : LIVE);
+
+  const NotifComp: React.FC<{ t: number; len: number; f?: number }> = ({ t }) => {
+    const bg = spec.bg ?? '#120E24';
+    const enter = backOut3(t / 14);
+    const fadeIn = clamp01(t / 5);
+    const fadeOut = spec.hold !== undefined && t > spec.hold ? 1 - clamp01((t - spec.hold) / 10) : 1;
+    const op = fadeIn * fadeOut;
+    const bob = t > 14 ? Math.sin((t - 14) * 0.09) * 3 : 0;
+
+    const cardW = PORTRAIT ? 760 : 940;
+    const lines = wrapLines(spec.body, PORTRAIT ? 28 : 38, 3);
+    const hasAmount = Boolean(spec.amount);
+    const cardH = 152 + Math.max(1, lines.length) * 44 + (hasAmount ? 104 : 24);
+    const cx = 960;
+    const baseY = PORTRAIT ? 460 : 540;
+    const cy = baseY - (1 - enter) * 210 + bob;
+
+    const titleText = spec.title.toUpperCase();
+    const titleFit = fitMonoText(titleText, cardW - 210, PORTRAIT ? 28 : 30, 15, 2.2);
+    const amountFit = spec.amount ? fitMonoText(spec.amount, cardW - 140, PORTRAIT ? 48 : 54, 22, 1) : null;
+    const amountPop = backOut3((t - 7) / 10);
+    const pulseR = 260 + (t % 36) * 8;
+    const pulseOp = (1 - (t % 36) / 36) * 0.22;
+
+    return (
+      <g>
+        <defs>
+          <radialGradient id={glowId} cx="50%" cy="46%" r="58%">
+            <stop offset="0%" stopColor={defaultAccent} stopOpacity={0.28} />
+            <stop offset="100%" stopColor={bg} stopOpacity={0} />
+          </radialGradient>
+        </defs>
+        <rect x={VB.x - 160} y={VB.y - 160} width={VB.w + 320} height={VB.h + 320} fill={bg} />
+        <rect x={VB.x - 160} y={VB.y - 160} width={VB.w + 320} height={VB.h + 320} fill={`url(#${glowId})`} />
+        <circle cx={cx} cy={baseY} r={pulseR} fill="none" stroke={defaultAccent} strokeWidth={3} opacity={pulseOp * op} />
+
+        <g transform={`translate(${cx} ${cy}) scale(${0.92 + 0.08 * enter})`} opacity={op}>
+          <rect x={-cardW / 2 + 12} y={-cardH / 2 + 18} width={cardW} height={cardH} rx={32} fill="#000" opacity={0.34} />
+          <rect x={-cardW / 2} y={-cardH / 2} width={cardW} height={cardH} rx={32} fill="#FBF8F2" stroke={INK} strokeWidth={4.5} />
+          <rect x={-cardW / 2 + 16} y={-cardH / 2 + 24} width={10} height={cardH - 48} rx={5} fill={defaultAccent} />
+
+          {/* Icon badge */}
+          <g transform={`translate(${-cardW / 2 + 78} ${-cardH / 2 + 64})`}>
+            <rect x={-34} y={-34} width={68} height={68} rx={20} fill={defaultAccent} stroke={INK} strokeWidth={3.5} />
+            {renderNotifIcon(spec.icon ?? (hasAmount ? 'bank' : 'bell'), defaultAccent)}
+            <circle cx={28} cy={-28} r={9} fill={LIVE} stroke="#FBF8F2" strokeWidth={3} opacity={Math.floor(t / 12) % 2 === 0 ? 1 : 0.45} />
+          </g>
+
+          {/* Header */}
+          <text
+            x={-cardW / 2 + 136}
+            y={-cardH / 2 + 73}
+            fontFamily={MONO_FONT}
+            fontWeight={700}
+            fontSize={titleFit.fontSize}
+            fill={INK}
+            letterSpacing={2.2}
+            textLength={titleFit.textLength}
+            lengthAdjust={titleFit.lengthAdjust}
+          >
+            {titleText}
+          </text>
+          <line x1={-cardW / 2 + 44} y1={-cardH / 2 + 114} x2={cardW / 2 - 44} y2={-cardH / 2 + 114} stroke={INK} strokeWidth={2} opacity={0.14} />
+
+          {/* Body lines */}
+          {lines.map((line, i) => (
+            <text
+              key={i}
+              x={-cardW / 2 + 48}
+              y={-cardH / 2 + 162 + i * 44}
+              fontFamily={DISPLAY_FONT}
+              fontWeight={700}
+              fontSize={PORTRAIT ? 34 : 36}
+              fill={INK}
+            >
+              {line}
+            </text>
+          ))}
+
+          {/* Optional amount pill */}
+          {spec.amount && amountFit ? (
+            <g transform={`translate(0 ${cardH / 2 - 58}) scale(${0.86 + 0.14 * amountPop})`}>
+              <rect x={-cardW / 2 + 44} y={-40} width={cardW - 88} height={80} rx={22} fill={PILL} stroke={INK} strokeWidth={3} />
+              <text
+                y={Math.round(amountFit.fontSize * 0.35)}
+                textAnchor="middle"
+                fontFamily={MONO_FONT}
+                fontWeight={700}
+                fontSize={amountFit.fontSize}
+                fill={defaultAccent}
+                letterSpacing={1}
+                textLength={amountFit.textLength}
+                lengthAdjust={amountFit.lengthAdjust}
+              >
+                {spec.amount}
+              </text>
+            </g>
+          ) : null}
+        </g>
+      </g>
+    );
+  };
+  return NotifComp;
+};
+
+export type CounterShotSpec = {
+  /** Label shown above the animated counter */
+  label: string;
+  /** Starting numeric value */
+  from: number;
+  /** Target numeric value */
+  to: number;
+  /** Optional prefix (e.g. "+", "$") */
+  prefix?: string;
+  /** Optional suffix (e.g. " €", " %", " km") */
+  suffix?: string;
+  /** Accent colour for digits & progress bar */
+  accent?: string;
+  /** Backdrop colour */
+  bg?: string;
+  /** Roll duration in frames (default 36) */
+  duration?: number;
+};
+
+/** Animated rolling numeric counter with smooth ease-out and arrival pop (16:9 & 9:16 safe). Set `"size": "insert"` in episode.json. */
+export const counterShot = (spec: CounterShotSpec): React.FC<{ t: number; len: number; f?: number }> => {
+  const glowId = makeInsertId('counterGlow', `${spec.label}:${spec.from}:${spec.to}`);
+  const decFrom = Number.isInteger(spec.from) ? 0 : Math.min(2, String(spec.from).split('.')[1]?.length ?? 0);
+  const decTo = Number.isInteger(spec.to) ? 0 : Math.min(2, String(spec.to).split('.')[1]?.length ?? 0);
+  const decimals = Math.max(decFrom, decTo);
+
+  const CounterComp: React.FC<{ t: number; len: number; f?: number }> = ({ t }) => {
+    const bg = spec.bg ?? '#100D20';
+    const accent = spec.accent ?? GOLD;
+    const dur = Math.max(6, spec.duration ?? 36);
+    const p = easeOut3(t / dur);
+    const val = spec.from + (spec.to - spec.from) * p;
+    const formatted =
+      decimals > 0
+        ? val.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+        : Math.round(val)
+            .toString()
+            .replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const display = `${spec.prefix ?? ''}${formatted}${spec.suffix ?? ''}`;
+
+    const enter = backOut3(t / 10);
+    const arrived = t >= dur;
+    const arrivePop = arrived ? 1 + 0.14 * Math.sin(clamp01((t - dur) / 10) * Math.PI) : 1;
+    const ringP = arrived ? clamp01((t - dur) / 16) : 0;
+
+    const cardW = PORTRAIT ? 780 : 1080;
+    const cardH = PORTRAIT ? 410 : 370;
+    const cx = 960;
+    const cy = PORTRAIT ? 480 : 540;
+    const labelText = spec.label.toUpperCase();
+    const labelFit = fitMonoText(labelText, cardW - 110, PORTRAIT ? 28 : 32, 15, 2.5);
+    const numFit = fitMonoText(display, cardW - 104, PORTRAIT ? 108 : 130, 34, 0);
+    const barW = cardW - 120;
+
+    return (
+      <g>
+        <defs>
+          <radialGradient id={glowId} cx="50%" cy="48%" r="56%">
+            <stop offset="0%" stopColor={accent} stopOpacity={0.24} />
+            <stop offset="100%" stopColor={bg} stopOpacity={0} />
+          </radialGradient>
+        </defs>
+        <rect x={VB.x - 160} y={VB.y - 160} width={VB.w + 320} height={VB.h + 320} fill={bg} />
+        <rect x={VB.x - 160} y={VB.y - 160} width={VB.w + 320} height={VB.h + 320} fill={`url(#${glowId})`} />
+
+        {arrived && ringP < 1 ? (
+          <circle
+            cx={cx}
+            cy={cy}
+            r={220 + ringP * 240}
+            fill="none"
+            stroke={accent}
+            strokeWidth={6 * (1 - ringP)}
+            opacity={(1 - ringP) * 0.65}
+          />
+        ) : null}
+
+        <g transform={`translate(${cx} ${cy}) scale(${0.88 + 0.12 * enter})`} opacity={clamp01(t / 4)}>
+          <rect x={-cardW / 2 + 12} y={-cardH / 2 + 18} width={cardW} height={cardH} rx={36} fill="#000" opacity={0.38} />
+          <rect x={-cardW / 2} y={-cardH / 2} width={cardW} height={cardH} rx={36} fill={PILL} stroke={CREAM} strokeWidth={3.5} opacity={0.94} />
+
+          {/* Label */}
+          <text
+            y={-cardH / 2 + 78}
+            textAnchor="middle"
+            fontFamily={MONO_FONT}
+            fontWeight={700}
+            fontSize={labelFit.fontSize}
+            fill={CREAM}
+            letterSpacing={2.5}
+            opacity={0.86}
+            textLength={labelFit.textLength}
+            lengthAdjust={labelFit.lengthAdjust}
+          >
+            {labelText}
+          </text>
+
+          {/* Animated value */}
+          <g transform={`translate(0 18) scale(${arrivePop})`}>
+            <text
+              y={Math.round(numFit.fontSize * 0.34)}
+              textAnchor="middle"
+              fontFamily={MONO_FONT}
+              fontWeight={700}
+              fontSize={numFit.fontSize}
+              fill={accent}
+              textLength={numFit.textLength}
+              lengthAdjust={numFit.lengthAdjust}
+            >
+              {display}
+            </text>
+          </g>
+
+          {/* Progress track */}
+          <rect x={-barW / 2} y={cardH / 2 - 58} width={barW} height={14} rx={7} fill="#FFFFFF" opacity={0.14} />
+          <rect x={-barW / 2} y={cardH / 2 - 58} width={Math.max(14, barW * p)} height={14} rx={7} fill={accent} />
+        </g>
+      </g>
+    );
+  };
+  return CounterComp;
+};
+
+export type PolaroidShotSpec = {
+  /** Readable caption printed beneath the Polaroid photo */
+  caption: string;
+  /** Optional date / archive stamp (e.g. "14 JUIN 2019", "ARCHIVE · 1998") */
+  date?: string;
+  /** Final card tilt angle in degrees (default -4) */
+  tilt?: number;
+  /** Backdrop surface colour (default '#2B2233') */
+  bg?: string;
+  /** Optional custom SVG inside the photo window (centered at 0, 0 in ~520x460 local coords) */
+  children?: React.ReactNode | ((t: number, len: number) => React.ReactNode);
+};
+
+/** Tilted Polaroid / press-clipping insert dropping gently into frame (16:9 & 9:16 safe). Set `"size": "insert"` in episode.json. */
+export const polaroidShot = (spec: PolaroidShotSpec): React.FC<{ t: number; len: number; f?: number }> => {
+  const bgId = makeInsertId('polBg', `${spec.caption}:${spec.date ?? ''}`);
+  const photoId = makeInsertId('polPhoto', `${spec.caption}:${spec.date ?? ''}`);
+  const clipId = makeInsertId('polClip', `${spec.caption}:${spec.date ?? ''}`);
+
+  const PolaroidComp: React.FC<{ t: number; len: number; f?: number }> = ({ t, len }) => {
+    const bg = spec.bg ?? '#2B2233';
+    const finalTilt = spec.tilt ?? -4;
+    const dropP = easeOut3(t / 18);
+    const scale = 1.2 - 0.2 * dropP;
+    const yOff = -140 * (1 - dropP);
+    const rot = finalTilt + 11 * (1 - dropP);
+    const op = clamp01(t / 5);
+    const shadowDx = 14 + 22 * (1 - dropP);
+    const shadowDy = 20 + 30 * (1 - dropP);
+
+    const cardW = PORTRAIT ? 640 : 620;
+    const cardH = PORTRAIT ? 760 : 720;
+    const photoW = cardW - 64;
+    const photoH = cardH - 220;
+    const photoTop = -cardH / 2 + 32;
+    const photoCy = photoTop + photoH / 2;
+    const cx = 960;
+    const cy = PORTRAIT ? 470 : 540;
+
+    const captionLines = wrapLines(spec.caption, 24, 2);
+    const dateFit = spec.date ? fitMonoText(spec.date.toUpperCase(), cardW - 96, 22, 13, 2) : null;
+    const sheenX = -photoW + ((t * 14) % (photoW * 3));
+    const inner = typeof spec.children === 'function' ? spec.children(t, len) : spec.children;
+
+    return (
+      <g>
+        <defs>
+          <linearGradient id={bgId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={bg} />
+            <stop offset="100%" stopColor="#16111F" />
+          </linearGradient>
+          <linearGradient id={photoId} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#435373" />
+            <stop offset="60%" stopColor="#8C6B6E" />
+            <stop offset="100%" stopColor="#E6B37E" />
+          </linearGradient>
+          <clipPath id={clipId}>
+            <rect x={-photoW / 2} y={photoTop} width={photoW} height={photoH} rx={6} />
+          </clipPath>
+        </defs>
+
+        <rect x={VB.x - 160} y={VB.y - 160} width={VB.w + 320} height={VB.h + 320} fill={`url(#${bgId})`} />
+        {[-360, -120, 120, 360].map((dy, i) => (
+          <rect key={i} x={VB.x - 160} y={540 + dy} width={VB.w + 320} height={4} fill="#FFFFFF" opacity={0.05} />
+        ))}
+
+        <g transform={`translate(${cx} ${cy + yOff}) rotate(${rot}) scale(${scale})`} opacity={op}>
+          {/* Crisp drop shadow */}
+          <rect
+            x={-cardW / 2 + shadowDx}
+            y={-cardH / 2 + shadowDy}
+            width={cardW}
+            height={cardH}
+            rx={10}
+            fill="#000"
+            opacity={0.34 - 0.08 * (1 - dropP)}
+          />
+          {/* Polaroid frame */}
+          <rect x={-cardW / 2} y={-cardH / 2} width={cardW} height={cardH} rx={10} fill="#FAF6EE" stroke={INK} strokeWidth={4.5} />
+
+          {/* Masking tape accent */}
+          <rect x={-76} y={-cardH / 2 - 18} width={152} height={38} rx={4} fill="#F2E2B6" opacity={0.78} transform="rotate(-2)" />
+
+          {/* Photo window */}
+          <g clipPath={`url(#${clipId})`}>
+            <rect x={-photoW / 2} y={photoTop} width={photoW} height={photoH} fill={`url(#${photoId})`} />
+            {inner ? (
+              <g transform={`translate(0 ${photoCy})`}>{inner}</g>
+            ) : (
+              <g transform={`translate(0 ${photoCy})`}>
+                <circle cx={photoW * 0.22} cy={-photoH * 0.16} r={54} fill="#FFE8B6" opacity={0.75} />
+                <path
+                  d={`M ${-photoW / 2} ${photoH / 2} L ${-photoW * 0.16} ${-24} L ${photoW * 0.12} ${photoH * 0.18} L ${photoW * 0.34} ${-8} L ${photoW / 2} ${photoH / 2} Z`}
+                  fill="#2A2338"
+                  opacity={0.78}
+                />
+                <path
+                  d={`M ${-photoW / 2} ${photoH / 2} L ${-photoW * 0.3} ${photoH * 0.08} L ${photoW * 0.04} ${photoH * 0.32} L ${photoW / 2} ${photoH * 0.14} L ${photoW / 2} ${photoH / 2} Z`}
+                  fill="#1C1628"
+                  opacity={0.9}
+                />
+              </g>
+            )}
+            {/* Subtle glossy sheen */}
+            <polygon
+              points={`${sheenX},${photoTop - 20} ${sheenX + 90},${photoTop - 20} ${sheenX - 60},${photoTop + photoH + 20} ${sheenX - 150},${photoTop + photoH + 20}`}
+              fill="#FFFFFF"
+              opacity={0.12}
+            />
+          </g>
+          <rect x={-photoW / 2} y={photoTop} width={photoW} height={photoH} rx={6} fill="none" stroke={INK} strokeWidth={3} />
+
+          {/* Caption */}
+          {captionLines.map((line, i) => {
+            const capFit = fitMonoText(line, cardW - 84, 34, 18, 0);
+            return (
+              <text
+                key={i}
+                y={photoTop + photoH + 62 + i * 42}
+                textAnchor="middle"
+                fontFamily={DISPLAY_FONT}
+                fontWeight={700}
+                fontSize={capFit.fontSize}
+                fill={INK}
+                textLength={capFit.textLength}
+                lengthAdjust={capFit.lengthAdjust}
+              >
+                {line}
+              </text>
+            );
+          })}
+
+          {/* Optional date stamp */}
+          {spec.date && dateFit ? (
+            <text
+              y={cardH / 2 - 26}
+              textAnchor="middle"
+              fontFamily={MONO_FONT}
+              fontWeight={700}
+              fontSize={dateFit.fontSize}
+              fill="#7A6E82"
+              letterSpacing={2}
+              textLength={dateFit.textLength}
+              lengthAdjust={dateFit.lengthAdjust}
+            >
+              {spec.date.toUpperCase()}
+            </text>
+          ) : null}
+        </g>
+      </g>
+    );
+  };
+  return PolaroidComp;
 };

@@ -4,7 +4,7 @@ import { foldYaw, viewOf, ViewHead } from './views';
 import { HairLayer } from './hair';
 import { FaceParts } from './face-parts';
 import { OutfitTorso, Skirt } from './wardrobe';
-import type { Character } from './cast';
+import type { BodyBuild, Character, HeadShape } from './cast';
 
 // A person: the rig redrawn from measurements instead of constants, so a body is data and the views of the body are
 // handled in one place. An adult seen from the front is the same drawing as <Hero>. What differs from <Hero>:
@@ -33,6 +33,33 @@ export type PersonPose = {
 };
 type P = { x: number; y: number };
 const HEAD = { x: 0, y: -176, r: 62 };
+const BUILD_SCALE: Record<BodyBuild, number> = { slim: 0.88, medium: 1.0, broad: 1.14 };
+const SQUARE_FRONT_SKULL = `M -60 ${HEAD.y - 10} Q -62 ${HEAD.y - 62} 0 ${HEAD.y - 62} Q 62 ${HEAD.y - 62} 60 ${HEAD.y - 10} L 57 ${HEAD.y + 32} Q 54 ${HEAD.y + 60} 0 ${HEAD.y + 61} Q -54 ${HEAD.y + 60} -57 ${HEAD.y + 32} Z`;
+const CEL_HEAD_FRONT = `M 16 ${HEAD.y - 57.8} A 60 60 0 0 1 10 ${HEAD.y + 59.1} Q 44 ${HEAD.y + 4} 16 ${HEAD.y - 57.8} Z`;
+const CEL_HEAD_SQUARE = `M 16 ${HEAD.y - 58} Q 58 ${HEAD.y - 56} 58 ${HEAD.y - 10} L 55 ${HEAD.y + 30} Q 52 ${HEAD.y + 57} 10 ${HEAD.y + 59} Q 42 ${HEAD.y + 12} 16 ${HEAD.y - 58} Z`;
+const CEL_TORSO_FRONT = 'M 18 -116 Q 32 -114 44 -111 L 38 1 Q 28 6 16 7 Q 22 -52 18 -116 Z';
+const CEL_TORSO_SIDE = 'M -26 -111 Q -30 -54 -24 1 Q -16 6 -8 7 Q -14 -50 -10 -116 Z';
+
+const CLOSED_EYE_EXPRS = new Set([
+  'sleep', 'asleep', 'sleeping',
+  'happy', 'laugh', 'laughing',
+  'wince', 'oops', 'cry', 'crying',
+  'dizzy', 'dead', 'fainted', 'closed',
+]);
+const hashStr = (s: string): number => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+};
+/** Natural 4-frame automatic blink every 95-130 frames, staggered per character, never overriding closed-eye expressions. */
+const autoBlinkOf = (frame: number | undefined, expr: string, seedKey: string): number => {
+  if (typeof frame !== 'number' || !Number.isFinite(frame) || CLOSED_EYE_EXPRS.has(expr)) return 0;
+  const h = hashStr(seedKey);
+  const period = 95 + (h % 36);
+  const phase = 12 + ((h >>> 6) % (period - 16));
+  const pos = (((Math.floor(frame) + phase) % period) + period) % period;
+  return pos === 0 ? 0.55 : pos === 1 || pos === 2 ? 1 : pos === 3 ? 0.45 : 0;
+};
 
 /** Proportions in the rig's units (hips at 0,0). Height, head to soles, follows from them: an adult is 378. */
 export type Body = {
@@ -404,8 +431,9 @@ const Face: React.FC<{
 
 
 /** The front head: the rig's own drawing, hair and gear included. */
-const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNode }> = ({ pose, L, headGear }) => {
+const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNode; headShape?: HeadShape }> = ({ pose, L, headGear, headShape }) => {
   const f = forward(pose);
+  const shape = headShape ?? (L as Partial<Character>).cast?.headShape ?? 'round';
   const noTuft =
     L.extra === 'bunches' ||
     L.extra === 'bob' ||
@@ -432,8 +460,13 @@ const FrontHead: React.FC<{ pose: PersonPose; L: Look; headGear?: React.ReactNod
       {L.extra === 'afro' ? (
         <circle cx={HEAD.x - pose.yaw * 8} cy={HEAD.y - 14} r={HEAD.r + 22} fill={L.hair} stroke={L.line} strokeWidth={4} />
       ) : null}
-      <circle cx={HEAD.x} cy={HEAD.y} r={HEAD.r} fill={L.skin} stroke={L.line} strokeWidth={4} />
+      {shape === 'square' ? (
+        <path d={SQUARE_FRONT_SKULL} fill={L.skin} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
+      ) : (
+        <circle cx={HEAD.x} cy={HEAD.y} r={HEAD.r} fill={L.skin} stroke={L.line} strokeWidth={4} />
+      )}
       <path d={`M ${HEAD.x + 14} ${HEAD.y + 58} A ${HEAD.r} ${HEAD.r} 0 0 0 ${HEAD.x + 60} ${HEAD.y + 14} A 70 70 0 0 1 ${HEAD.x + 14} ${HEAD.y + 58} Z`} fill={L.skinShade} />
+      <path d={shape === 'square' ? CEL_HEAD_SQUARE : CEL_HEAD_FRONT} fill="rgba(18, 12, 34, 0.13)" />
       {noTuft ? null : (
         <path transform={`translate(${-pose.yaw * 16} 0)`} d={`M -6 ${HEAD.y - 60} q 10 -26 30 -18 q -16 2 -14 16 q -8 -10 -16 2 Z`} fill={L.hair} />
       )}
@@ -557,6 +590,7 @@ const SideTorso: React.FC<{ L: Look; belly: number }> = ({ L, belly }) => (
   <g>
     <path d={`M -28 -112 Q 4 -124 30 -110 Q ${34 + belly * 0.5} -60 ${28 + belly} -18 Q ${28 + belly} 0 22 4 Q -2 12 -26 2 Q -32 -54 -28 -112 Z`} fill={L.jacket} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
     <path d="M -28 -112 Q -32 -54 -26 2 Q -18 8 -8 9 Q -14 -50 -10 -117 Z" fill={L.jacketShade} opacity={0.55} />
+    <path d={CEL_TORSO_SIDE} fill="rgba(18, 12, 34, 0.11)" />
     <path d="M 6 -117 Q 18 -110 26 -112" stroke={L.accent} strokeWidth={6} fill="none" strokeLinecap="round" />
     {L.extra === 'suit' || L.accessory === 'tie' ? <path d="M 20 -112 L 30 -108 L 33 -66 L 26 -56 L 20 -66 Z" fill={L.accent} stroke={L.line} strokeWidth={3} strokeLinejoin="round" /> : null}
   </g>
@@ -567,14 +601,21 @@ const BackTorso: React.FC<{ L: Look }> = ({ L }) => (
   <g>
     <path d="M -46 -112 Q 0 -124 46 -112 L 40 2 Q 0 12 -40 2 Z" fill={L.jacket} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
     <path d="M 10 -116 Q 30 -114 46 -112 L 40 2 Q 26 8 12 9 Z" fill={L.jacketShade} opacity={0.55} />
+    <path d={CEL_TORSO_FRONT} fill="rgba(18, 12, 34, 0.11)" />
     <path d="M 0 -108 L 0 4" stroke={L.jacketShade} strokeWidth={3} opacity={0.7} />
   </g>
 );
 
-/** Same pose and slots as <Hero>, plus `body`. */
-export const Person: React.FC<{
+export type PersonProps = {
   pose: PersonPose;
   body?: Body | BodyId;
+  headShape?: HeadShape;
+  build?: BodyBuild;
+  /** frame number (or shot clock `t`) to drive natural staggered auto-blinking */
+  f?: number;
+  t?: number;
+  /** when set, drapes a folded bed blanket of this colour over the lower torso and legs */
+  blanket?: string;
   look?: Look;
   shadow?: number;
   rimId?: string;
@@ -583,13 +624,30 @@ export const Person: React.FC<{
   handLProp?: React.ReactNode;
   handRProp?: React.ReactNode;
   children?: React.ReactNode;
-}> = ({ pose, body, look = LOOKS.pipHood as Look, shadow = 1, rimId = '', headGear, torsoGear, handLProp, handRProp, children }) => {
+};
+
+/** Same pose and slots as <Hero>, plus `body`, `headShape`, `build`, `f`/`t` auto-blink, and `blanket`. */
+export const Person: React.FC<PersonProps> = ({ pose, body, headShape, build, f, t, blanket, look = LOOKS.pipHood as Look, shadow = 1, rimId = '', headGear, torsoGear, handLProp, handRProp, children }) => {
   const c = (look as Partial<Character>).cast;
-  const b = bodyOf(body ?? c?.body);
+  const rawB = bodyOf(body ?? c?.body);
+  const buildKind: BodyBuild = build ?? c?.build ?? 'medium';
+  const bk = BUILD_SCALE[buildKind] ?? 1;
+  const b: Body =
+    bk === 1
+      ? rawB
+      : {
+          ...rawB,
+          chest: rawB.chest * bk,
+          shoulder: { x: rawB.shoulder.x * bk, y: rawB.shoulder.y },
+          hip: rawB.hip * (1 + (bk - 1) * 0.5),
+        };
   const j = jointsOf(pose, b);
   const L = look;
   const view = viewOf(pose.yaw);
   const legLen = b.thigh + b.shin;
+  const headShapeKind: HeadShape = headShape ?? c?.headShape ?? 'round';
+  const autoBlink = autoBlinkOf(f ?? t, pose.expr, `${L.hair}|${L.jacket}|${L.skin}|${c?.hairStyle ?? L.extra ?? ''}`);
+  const headPose = autoBlink > pose.blink ? { ...pose, blink: autoBlink } : pose;
   // limbs are light with a dark outline, with a smooth quadratic elbow/knee curve and short sleeve cap when bare-armed
   const limb = (o: { root: P; mid: P; end: P }, w: number, sleeve = false, paint?: { limb: string; cap?: string; capTo?: number; stripe?: string }) => {
     const limbC = paint?.limb ?? L.limb;
@@ -674,6 +732,7 @@ export const Person: React.FC<{
     <g transform={`rotate(${pose.tilt}) translate(${shoulderShift(pose.yaw)} 0) scale(${kw} 1) ${sized}`}>
       <path d="M -46 -112 Q 0 -124 46 -112 L 40 2 Q 0 12 -40 2 Z" fill={L.jacket} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
       <path d="M 10 -116 Q 30 -114 46 -112 L 40 2 Q 26 8 12 9 Z" fill={L.jacketShade} opacity={0.55} />
+      <path d={CEL_TORSO_FRONT} fill="rgba(18, 12, 34, 0.11)" />
       <path d="M 0 -112 L 0 4" stroke={L.jacketShade} strokeWidth={4} />
       {L.extra === 'suit' || L.accessory === 'tie' ? (
         // a white shirt in the V of the jacket and a tie in the accent colour
@@ -706,6 +765,7 @@ export const Person: React.FC<{
   const torso = c ? (
     <g transform={view === 'profile' ? `rotate(${pose.tilt}) ${sized}${facingFlip}` : view === 'back' ? `rotate(${pose.tilt}) ${sized}` : `rotate(${pose.tilt}) translate(${shoulderShift(pose.yaw)} 0) scale(${kw} 1) ${sized}`}>
       <OutfitTorso view={castView} c={c} line={L.line} accent={L.accent} skin={L.skin} torsoGear={torsoGear} />
+      <path d={view === 'profile' ? CEL_TORSO_SIDE : CEL_TORSO_FRONT} fill="rgba(18, 12, 34, 0.11)" />
     </g>
   ) :
     view === 'profile' ? (
@@ -727,6 +787,12 @@ export const Person: React.FC<{
   const headY = HEAD.y + (b.shoulder.y + 108);
   const headShift = `translate(0 ${headY - HEAD.y})`;
   const headSize = b.head === 1 ? '' : ` translate(0 ${HEAD.y}) scale(${b.head}) translate(0 ${-HEAD.y})`;
+  const headShapeT =
+    headShapeKind === 'oval'
+      ? ` translate(0 ${HEAD.y}) scale(0.95 1.05) translate(0 ${-HEAD.y})`
+      : headShapeKind === 'narrow'
+        ? ` translate(0 ${HEAD.y}) scale(0.91 1.03) translate(0 ${-HEAD.y})`
+        : '';
   // The far arm of a turned body hangs behind the torso: its hand used to stick out under the jacket, a pale blob between
   // the legs (seen on every three-quarter adult, 2026-11-12). Behind the body and empty, it is not drawn.
   const farHandHidden = (o: { end: P }, prop?: React.ReactNode): boolean => !prop && Math.abs(pose.yaw) > 0.2 && Math.abs(o.end.x) < b.shoulder.x * 0.8;
@@ -757,10 +823,57 @@ export const Person: React.FC<{
             const fill = c && (c.legs.id === 'skirt' || c.legs.id === 'dress') ? c.legs.color : legPaint?.cap ?? legPaint?.limb ?? L.limb;
             return <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx={w * 0.5} fill={fill} stroke={L.line} strokeWidth={4} opacity={Math.min(1, lap * 1.4)} />;
           })()}
+          {/* optional folded bed blanket covering lower torso and legs for reclined/lying scenes */}
+          {blanket ? (() => {
+            const bw = 54 * b.chest;
+            const bwBot = 58 * b.chest;
+            const topY = -58 * b.torso;
+            const cuffH = 20 * b.torso;
+            const botY = legLen + 20;
+            return (
+              <g transform={`rotate(${pose.tilt})`}>
+                {/* main blanket body */}
+                <path
+                  d={`M ${-bw} ${topY} Q 0 ${topY - 8} ${bw} ${topY} L ${bwBot} ${botY - 12} Q ${bwBot} ${botY + 6} 0 ${botY + 8} Q ${-bwBot} ${botY + 6} ${-bwBot} ${botY - 12} Z`}
+                  fill={blanket}
+                  stroke={L.line}
+                  strokeWidth={4}
+                  strokeLinejoin="round"
+                />
+                {/* subtle cel-shading strip on the shaded side */}
+                <path
+                  d={`M ${bw * 0.42} ${topY} L ${bw} ${topY} L ${bwBot} ${botY - 12} Q ${bwBot} ${botY + 4} ${bwBot * 0.45} ${botY + 6} Z`}
+                  fill="rgba(18, 12, 34, 0.12)"
+                />
+                {/* subtle fabric fold creases */}
+                <path
+                  d={`M ${-bw * 0.55} ${topY + cuffH + 26} Q ${-bw * 0.1} ${topY + cuffH + 34} ${bw * 0.35} ${topY + cuffH + 22} M ${-bw * 0.35} ${topY + cuffH + 78} Q ${bw * 0.08} ${topY + cuffH + 86} ${bw * 0.52} ${topY + cuffH + 74}`}
+                  stroke={L.line}
+                  strokeWidth={2.5}
+                  strokeLinecap="round"
+                  fill="none"
+                  opacity={0.28}
+                />
+                {/* folded top cuff */}
+                <path
+                  d={`M ${-bw - 4} ${topY - 6} Q 0 ${topY - 14} ${bw + 4} ${topY - 6} L ${bw + 2} ${topY + cuffH} Q 0 ${topY + cuffH - 6} ${-bw - 2} ${topY + cuffH} Z`}
+                  fill={blanket}
+                  stroke={L.line}
+                  strokeWidth={4}
+                  strokeLinejoin="round"
+                />
+                <path
+                  d={`M ${-bw - 2} ${topY - 4} Q 0 ${topY - 12} ${bw + 2} ${topY - 4} L ${bw} ${topY + cuffH - 2} Q 0 ${topY + cuffH - 8} ${-bw} ${topY + cuffH - 2} Z`}
+                  fill="#FFFFFF"
+                  opacity={0.22}
+                />
+              </g>
+            );
+          })() : null}
           {/* crossed arms, hands on hips: the far arm too is in front of the body (it was hidden: the gesture read as idle) */}
           {pose.armsFront && !pose.armsOver ? farArmFront : null}
           {pose.armsOver ? null : nearArm}
-          <g transform={`${headShift}${headSize}`}>
+          <g transform={`${headShift}${headSize}${headShapeT}`}>
           {L.extra === 'hood' ? (
             <g transform={`rotate(${pose.tilt}) rotate(${pose.headTilt * 0.5} 0 ${HEAD.y + 40})`}>
               <path d={`M -70 ${HEAD.y + 14} Q -80 ${HEAD.y - 74} 0 ${HEAD.y - 80} Q 80 ${HEAD.y - 74} 70 ${HEAD.y + 14} Q 52 -100 0 -106 Q -52 -100 -70 ${HEAD.y + 14} Z`} fill={L.jacket} stroke={L.line} strokeWidth={4} />
@@ -784,7 +897,13 @@ export const Person: React.FC<{
             </g>
           ) : null}
             {c?.newHair ? <g transform={headT}><HairLayer style={c.hairStyle} view={hairView} part="behind" color={L.hair} line={L.line} /></g> : null}
-            <ViewHead pose={pose} L={L} head={<FrontHead pose={pose} L={L} headGear={headGear} />} headGear={headGear} />
+            <ViewHead
+              pose={headPose}
+              L={L}
+              headShape={headShapeKind === 'square' ? 'square' : 'round'}
+              head={<FrontHead pose={headPose} L={L} headGear={headGear} headShape={headShapeKind} />}
+              headGear={headGear}
+            />
             {c ? (
               <g transform={headT}>
                 {c.newHair ? <HairLayer style={c.hairStyle} view={hairView} part="over" color={L.hair} line={L.line} /> : null}

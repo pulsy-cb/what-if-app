@@ -2,10 +2,11 @@ import React from 'react';
 
 // The shapes this file reads from the rig, declared here (not imported) so it compiles against every engine copy:
 // older rigs have fewer hairstyles and no `talk`.
+type HeadShapeKind = 'round' | 'oval' | 'square' | 'narrow';
 type Look = {
   skin: string; skinShade: string; jacket: string; jacketShade: string; accent: string; line: string; face: string; hair: string;
   extra?: string; accessory?: string;
-  cast?: { eyeR?: [number, number]; browW?: number; noseK?: number };
+  cast?: { eyeR?: [number, number]; browW?: number; noseK?: number; headShape?: HeadShapeKind };
 };
 type Pose = { yaw: number; tilt: number; headTilt: number; brow?: string; expr: string; blink: number; look: number; glasses: number; sway?: number; talk?: number };
 
@@ -32,8 +33,18 @@ export const foldYaw = (yaw: number): number => {
   return a <= 1 ? a : Math.max(0, 2 - a);
 };
 
-type Ctx = { L: Look; s: 1 | -1; pose: Pose };
+type Ctx = { L: Look; s: 1 | -1; pose: Pose; headShape?: HeadShapeKind };
 const stroke = (L: Look) => ({ stroke: L.line, strokeWidth: 4, strokeLinejoin: 'round' as const });
+
+const headScaleTransform = (shape?: HeadShapeKind): string | undefined => {
+  if (shape === 'oval') return `translate(0 ${Y}) scale(0.95 1.05) translate(0 ${-Y})`;
+  if (shape === 'narrow') return `translate(0 ${Y}) scale(0.91 1.03) translate(0 ${-Y})`;
+  return undefined;
+};
+const SQUARE_PROFILE_SKULL = `M -60 ${Y - 8} Q -62 ${Y - 62} 0 ${Y - 62} Q 62 ${Y - 62} 60 ${Y - 8} L 58 ${Y + 34} Q 54 ${Y + 60} 12 ${Y + 61} Q -48 ${Y + 60} -58 ${Y + 30} Z`;
+const SQUARE_BACK_SKULL = `M -60 ${Y - 10} Q -62 ${Y - 62} 0 ${Y - 62} Q 62 ${Y - 62} 60 ${Y - 10} L 57 ${Y + 32} Q 54 ${Y + 60} 0 ${Y + 61} Q -54 ${Y + 60} -57 ${Y + 32} Z`;
+const CEL_HEAD_PROFILE = `M -16 ${Y - 57.8} A 60 60 0 0 0 -10 ${Y + 59.1} Q -42 ${Y + 4} -16 ${Y - 57.8} Z`;
+const CEL_HEAD_BACK = `M 16 ${Y - 57.8} A 60 60 0 0 1 10 ${Y + 59.1} Q 44 ${Y + 4} 16 ${Y - 57.8} Z`;
 
 // ---------------------------------------------------------------------------------------------- hair, profile
 
@@ -235,16 +246,19 @@ const MouthProfile: React.FC<{ L: Look; pose: Pose }> = ({ L, pose }) => {
 };
 
 /** A head in profile facing screen-right: skull, nose, ear, one eye, mouth, hair and gear. */
-const ProfileHead: React.FC<Ctx> = ({ L, pose }) => {
+const ProfileHead: React.FC<Ctx> = ({ L, pose, headShape }) => {
   const st = stroke(L);
   const ex = 32;
   const ey = Y - 8;
   const hairBehind = L.extra === 'afro' || L.extra === 'ponytail';
+  const shape = headShape ?? L.cast?.headShape ?? 'round';
+  const scaleT = headScaleTransform(shape);
   return (
-    <g>
+    <g transform={scaleT}>
       {hairBehind ? <HairProfile L={L} pose={pose} /> : null}
-      <circle cx={0} cy={Y} r={HEAD.r} fill={L.skin} {...st} />
+      {shape === 'square' ? <path d={SQUARE_PROFILE_SKULL} fill={L.skin} {...st} /> : <circle cx={0} cy={Y} r={HEAD.r} fill={L.skin} {...st} />}
       <path d={`M -4 ${Y + 60} A ${HEAD.r} ${HEAD.r} 0 0 0 -58 ${Y + 20} A 70 70 0 0 1 -4 ${Y + 60} Z`} fill={L.skinShade} />
+      <path d={CEL_HEAD_PROFILE} fill="rgba(18, 12, 34, 0.13)" />
       {/* the nose, in front of the skull */}
       <g transform={`translate(57 ${Y + 6}) scale(${L.cast?.noseK ?? 1}) translate(-57 ${-(Y + 6)})`}>
         <path d={`M 54 ${Y - 8} Q 92 ${Y + 6} 54 ${Y + 20} Z`} fill={L.skin} />
@@ -285,9 +299,11 @@ const ProfileHead: React.FC<Ctx> = ({ L, pose }) => {
 // ---------------------------------------------------------------------------------------------- head, back
 
 /** The back of a head: ears at the sides, hair or hat over the whole skull. No face. */
-const BackHead: React.FC<Ctx> = ({ L, pose }) => {
+const BackHead: React.FC<Ctx> = ({ L, pose, headShape }) => {
   const st = stroke(L);
   const hair = L.extra === 'hood' ? L.jacket : L.hair;
+  const shape = headShape ?? L.cast?.headShape ?? 'round';
+  const scaleT = headScaleTransform(shape);
   const bowl = `M -60 ${Y + 16} A 62 62 0 1 1 60 ${Y + 16} Q 40 ${Y + 46} 0 ${Y + 48} Q -40 ${Y + 46} -60 ${Y + 16} Z`;
   const ears = (
     <g>
@@ -295,7 +311,12 @@ const BackHead: React.FC<Ctx> = ({ L, pose }) => {
       <circle cx={61} cy={Y + 8} r={11} fill={L.skin} {...st} />
     </g>
   );
-  const skull = <circle cx={0} cy={Y} r={HEAD.r} fill={L.skin} {...st} />;
+  const skull = (
+    <g>
+      {shape === 'square' ? <path d={SQUARE_BACK_SKULL} fill={L.skin} {...st} /> : <circle cx={0} cy={Y} r={HEAD.r} fill={L.skin} {...st} />}
+      <path d={CEL_HEAD_BACK} fill="rgba(18, 12, 34, 0.13)" />
+    </g>
+  );
   const body = (() => {
     switch (L.extra) {
       case 'bald':
@@ -389,7 +410,7 @@ const BackHead: React.FC<Ctx> = ({ L, pose }) => {
     }
   })();
   return (
-    <g>
+    <g transform={scaleT}>
       {body}
       {L.accessory === 'headphones' || L.accessory === 'headset' ? (
         <g>
@@ -418,7 +439,7 @@ const Nose: React.FC<{ L: Look; yaw: number }> = ({ L, yaw }) => {
 // ---------------------------------------------------------------------------------------------- the pieces Hero uses
 
 /** The head for a pose: the rig's own `head` in front and three-quarter views, a drawn profile or back head otherwise. */
-export const ViewHead: React.FC<{ pose: Pose; L: Look; head: React.ReactNode; headGear?: React.ReactNode }> = ({ pose, L, head, headGear }) => {
+export const ViewHead: React.FC<{ pose: Pose; L: Look; head: React.ReactNode; headGear?: React.ReactNode; headShape?: HeadShapeKind }> = ({ pose, L, head, headGear, headShape }) => {
   const v = viewOf(pose.yaw);
   if (v === 'front') return <>{head}</>;
   const T = `rotate(${pose.tilt}) rotate(${pose.headTilt} 0 ${Y + 40})`;
@@ -434,7 +455,7 @@ export const ViewHead: React.FC<{ pose: Pose; L: Look; head: React.ReactNode; he
   const s: 1 | -1 = pose.yaw > 0 ? 1 : -1;
   return (
     <g transform={T}>
-      <g transform={s < 0 ? 'scale(-1 1)' : undefined}>{v === 'profile' ? <ProfileHead L={L} s={s} pose={pose} /> : <BackHead L={L} s={s} pose={pose} />}</g>
+      <g transform={s < 0 ? 'scale(-1 1)' : undefined}>{v === 'profile' ? <ProfileHead L={L} s={s} pose={pose} headShape={headShape} /> : <BackHead L={L} s={s} pose={pose} headShape={headShape} />}</g>
       {headGear}
     </g>
   );
@@ -448,6 +469,7 @@ export const ViewTorso: React.FC<{ pose: Pose; L: Look; torso: React.ReactNode }
     <g transform={`rotate(${pose.tilt}) scale(${kw} 1)`}>
       <path d="M -46 -112 Q 0 -124 46 -112 L 40 2 Q 0 12 -40 2 Z" fill={L.jacket} stroke={L.line} strokeWidth={4} strokeLinejoin="round" />
       <path d="M 10 -116 Q 30 -114 46 -112 L 40 2 Q 26 8 12 9 Z" fill={L.jacketShade} opacity={0.55} />
+      <path d="M 18 -116 Q 32 -114 44 -111 L 38 1 Q 28 6 16 7 Q 22 -52 18 -116 Z" fill="rgba(18, 12, 34, 0.11)" />
       <path d="M 0 -108 L 0 4" stroke={L.jacketShade} strokeWidth={3} opacity={0.7} />
     </g>
   );

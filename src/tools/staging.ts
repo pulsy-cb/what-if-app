@@ -184,7 +184,7 @@ export function applyCardAngles(episodeDir: string, shots: any[]): string[] {
   return done;
 }
 
-const DRAWS_OBJECT = /\bhold\s*:|\bprops\s*:|hand[LR]Prop|\bextra\s*:|\bbehind\s*:|tabletopShot\s*\(|phoneShot\s*\(|screenShot\s*\(|\breach\s*:/;
+const DRAWS_OBJECT = /\bhold\s*:|\bprops\s*:|hand[LR]Prop|\bextra\s*:|\bbehind\s*:|tabletopShot\s*\(|phoneShot\s*\(|screenShot\s*\(|notifShot\s*\(|counterShot\s*\(|polaroidShot\s*\(|\breach\s*:/;
 const WALK_ACT = /\bact\s*[:=]\s*\{?\s*['"](walk|run|sneak)['"]/;
 const REAL_MOVE = /\bwalkTo\s*:|\bat\s*[:=]\s*\{?\s*\(|walkPose\s*\(|\bkf\s*\(/;
 
@@ -223,10 +223,10 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     if (handled.length && !DRAWS_OBJECT.test(body)) {
       out.push(`${id}: the card shows ${handled.join(', ')} but the code draws no object: use hold: '<object>' on the person (or hold: { node: <g>…</g> } for your own drawing), props: [{ on: '<piece>', node: held('<object>') }], or tabletopShot / phoneShot`);
     }
-    if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot|screenShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
+    if ((card.angle === 'low' || card.angle === 'high') && !/\b(tabletopShot|phoneShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body) && !new RegExp(`angle\\s*:\\s*['"]${card.angle}['"]`).test(body)) {
       out.push(`${id}: the card asks for a ${card.angle} angle but the code has no angle: '${card.angle}'`);
     }
-    if (card.view && card.view !== 'front' && !/\b(tabletopShot|phoneShot|screenShot)\s*\(/.test(body)) {
+    if (card.view && card.view !== 'front' && !/\b(tabletopShot|phoneShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body)) {
       const escaped = card.view.replace('/', '\\/');
       if (!new RegExp(`\\bview\\s*:\\s*['"]${escaped}['"]`).test(body)) {
         out.push(
@@ -254,7 +254,7 @@ export function stagingCodeProblems(shots: any[], bodies: Record<string, string>
     const povs: PovEntry[] = shots.map((s) => {
       const id = String(s.id);
       const body = bodies[id] ?? '';
-      const isShot = /\bshot\(\{/.test(body) && !/\b(phoneShot|tabletopShot|screenShot)\s*\(/.test(body);
+      const isShot = /\bshot\(\{/.test(body) && !/\b(phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body);
       const place = /\bplace\s*:\s*([A-Za-z0-9_]+)/.exec(body)?.[1] ?? '';
       const cam = /\bcam\s*:\s*['"]([\w-]+)['"]/.exec(body)?.[1] ?? (/\bcam\s*:\s*\{/.test(body) ? 'custom' : 'wide');
       const view = /\bview\s*:\s*['"](front|reverse|left|right|3\/4-left|3\/4-right)['"]/.exec(body)?.[1] ?? 'front';

@@ -525,6 +525,59 @@ Object.assign(PIECES, {
   'court-lines': { kind: 'flat', len: 0.9, deep: 0.8, draw: (c: DrawCtx) => { const Q = (pts: [number, number][]) => pts.map(([u, w]) => { const p = c.r.P(u, 1, w); return `${p.x},${p.y}`; }).join(' '); return (
       <g fill="none" stroke="#FFFFFF" strokeWidth={5} opacity={0.75}><polygon points={Q([[0.05, 0.08], [0.95, 0.08], [0.95, 0.9], [0.05, 0.9]])} /><polygon points={Q([[0.38, 0.08], [0.62, 0.08], [0.62, 0.4], [0.38, 0.4]])} /><polyline points={Q([[0.05, 0.62], [0.95, 0.62]])} /></g>
     ); } },
+  stairs: { kind: 'floor', len: 0.42, deep: 0.52, w: 0.08, top: 0.42, seats: (c: SeatBox, i: number) => ({ u: c.u + c.len * (0.32 + 0.36 * (i % 2)), w: c.w + c.deep * (0.4 + 0.25 * (i % 2)) }),
+    draw: (c: DrawCtx) => {
+      const s = tone(c.color, c.T.wood);
+      const n = Math.max(3, Math.round(Number(c.opt.steps ?? 7)));
+      const top = Number(c.opt.top ?? 0.42);
+      const landing = c.opt.landing !== false;
+      const hr = String(c.opt.handrail ?? 'both');
+      const u0 = c.u; const u1 = c.u + c.len; const w0 = c.w; const w1 = c.w + c.deep;
+      const railH = 0.22;
+      const sides = hr === 'none' ? [] : hr === 'left' ? [u0 + 0.012] : hr === 'right' ? [u1 - 0.012] : [u0 + 0.012, u1 - 0.012];
+      return (
+        <g>
+          {shadow(c)}
+          {landing ? box(c, [u0 - 0.04, u1 + 0.04], [top, 1], [0, w0], s, true) : null}
+          {Array.from({ length: n }, (_, i) => {
+            const sw0 = w0 + (i / n) * c.deep;
+            const sw1 = w0 + ((i + 1) / n) * c.deep;
+            const vStep = top + (i / n) * (1 - top);
+            const nL = c.r.P(u0, vStep, sw1);
+            const nR = c.r.P(u1, vStep, sw1);
+            return (
+              <g key={`st${i}`}>
+                {box(c, [u0, u1], [vStep, 1], [sw0, sw1], s, true)}
+                <line x1={nL.x} y1={nL.y} x2={nR.x} y2={nR.y} stroke="#FFFFFF" strokeOpacity={0.22} strokeWidth={2.5} />
+              </g>
+            );
+          })}
+          {sides.map((su, si) => {
+            const topR = c.r.P(su, top - railH, w0);
+            const botR = c.r.P(su, 1 - railH, w1);
+            const topB = c.r.P(su, top, w0);
+            const botB = c.r.P(su, 1, w1);
+            const kBot = c.r.s(w1);
+            return (
+              <g key={`hr${si}`}>
+                {Array.from({ length: n }, (_, i) => {
+                  if (i > 0 && i < n - 1 && i % 2 === 1) return null;
+                  const wm = w0 + ((i + 0.5) / n) * c.deep;
+                  const vStep = top + (i / n) * (1 - top);
+                  const b = c.r.P(su, vStep, wm);
+                  const tp = c.r.P(su, vStep - railH, wm);
+                  return <line key={`b${i}`} x1={b.x} y1={b.y} x2={tp.x} y2={tp.y} stroke={c.T.metal} strokeWidth={Math.max(3, 3.8 * c.r.s(wm))} strokeLinecap="round" />;
+                })}
+                <line x1={topB.x} y1={topB.y} x2={topR.x} y2={topR.y} stroke={c.T.metal} strokeWidth={5} strokeLinecap="round" />
+                <line x1={botB.x} y1={botB.y} x2={botR.x} y2={botR.y} stroke={c.T.metal} strokeWidth={Math.max(5, 6 * kBot)} strokeLinecap="round" />
+                <line x1={topR.x} y1={topR.y} x2={botR.x} y2={botR.y} stroke={c.T.metal} strokeWidth={Math.max(6, 7.5 * kBot)} strokeLinecap="round" />
+                <line x1={topR.x} y1={topR.y - 2} x2={botR.x} y2={botR.y - 2} stroke="#FFFFFF" strokeOpacity={0.22} strokeWidth={2} strokeLinecap="round" />
+              </g>
+            );
+          })}
+        </g>
+      );
+    } },
 });
 Object.assign(PLACES, {
   bathroom: { mood: 'day', floor: 'tiles', palette: { wall: '#CFE0E4', side: '#B8CDD3', floor: '#9FB2B8' }, lights: [{ u: 0.3, w: 0.3 }, { u: 0.7, w: 0.3 }],
@@ -542,6 +595,9 @@ Object.assign(PLACES, {
   car: { mood: 'day', floor: 'tiles', palette: { wall: '#3A4150', side: '#2E3440', floor: '#23262E', ceiling: '#2A2E38', floorLine: '#23262E' }, lights: [],
     pieces: [{ p: 'window', at: { u: 0.1 }, len: 0.3, opt: { curtains: false } }, { p: 'window', at: { u: 0.5 }, len: 0.3, opt: { curtains: false } }, { p: 'car-seat', id: 'back', at: { u: 0.2, w: 0.3 } }, { p: 'car-seat', id: 'driver', at: { u: 0.52, w: 0.3 } }, { p: 'dashboard', at: { u: 0.8, w: 0.18 } }],
     front: [{ p: 'window', at: { u: 0.1 }, len: 0.3, opt: { curtains: false } }, { p: 'window', at: { u: 0.5 }, len: 0.3, opt: { curtains: false } }], leftWall: [{ p: 'window', at: { u: 0.25 }, len: 0.5, opt: { curtains: false } }], rightWall: [{ p: 'window', at: { u: 0.25 }, len: 0.5, opt: { curtains: false } }] },
+  stairwell: { mood: 'day', floor: 'tiles', palette: { wall: '#DDD8CE', side: '#C6C0B4', ceiling: '#F2EFE9', floor: '#A8A298', floorLine: '#8F897F', trim: '#5A554E', wood: solid('#C89866', '#AA7B4C', '#845D36'), metal: '#5D646E' }, lights: [{ u: 0.5, w: 0.32 }],
+    pieces: [{ p: 'door', at: { u: 0.08 }, len: 0.13 }, { p: 'window', at: { u: 0.64 }, len: 0.22, opt: { curtains: false } }, { p: 'alarm', at: { u: 0.9 } }, { p: 'stairs', id: 'stairs', at: { u: 0.24, w: 0.08 }, len: 0.42, deep: 0.52, opt: { steps: 7, handrail: 'both', landing: true } }, { p: 'plant', at: { u: 0.84, w: 0.22 } }],
+    front: [{ p: 'door', at: { u: 0.44 } }, { p: 'window', at: { u: 0.12 }, len: 0.2, opt: { curtains: false } }, { p: 'clock', at: { u: 0.78 } }], leftWall: [{ p: 'door', at: { u: 0.2 } }, { p: 'frame', at: { u: 0.62 }, opt: { art: 1 } }], rightWall: [{ p: 'window', at: { u: 0.34 }, len: 0.26, opt: { curtains: false } }, { p: 'alarm', at: { u: 0.74 } }] },
 });
 // the reverse views of the first recipes: what was behind the camera
 Object.assign(PLACES.classroom!, { front: [{ p: 'door', at: { u: 0.12 } }, { p: 'pinboard', at: { u: 0.34 } }, { p: 'window', at: { u: 0.62 }, len: 0.26 }] });
@@ -562,6 +618,8 @@ export type PlaceOpts = {
   /** what hangs on the opposite wall, seen in the reverse view; replaces the recipe's */ front?: PieceSpec[];
   /** what hangs on the left or right side walls in view: 'left' | 'right' */ leftWall?: PieceSpec[]; rightWall?: PieceSpec[];
   lights?: { u: number; w: number }[];
+  /** optional animated outdoor weather overlay (deterministic from t) */
+  weather?: 'rain' | 'snow' | 'dust';
 };
 type Resolved = PieceSpec & { name: string; id: string; def: PieceDef; u: number; w: number; len: number; deep: number };
 export type Placed = {
@@ -672,7 +730,7 @@ export const yawForView = (yaw: number | undefined, view: PlaceView, walking = f
   return yaw;
 };
 
-const PLACE_ALIASES: Record<string, string> = { study: 'office', bureau: 'office', library: 'office', school: 'classroom', class: 'classroom', home: 'living', lounge: 'living', cafe: 'restaurant', road: 'street', yard: 'garden', toilet: 'bathroom', restroom: 'bathroom', pub: 'bar' };
+const PLACE_ALIASES: Record<string, string> = { study: 'office', bureau: 'office', library: 'office', school: 'classroom', class: 'classroom', home: 'living', lounge: 'living', cafe: 'restaurant', road: 'street', yard: 'garden', toilet: 'bathroom', restroom: 'bathroom', pub: 'bar', stairs: 'stairwell', staircase: 'stairwell', escalier: 'stairwell' };
 /** Build a place from a recipe name (see PLACES) and your changes. */
 export const place = (name: string, opts: PlaceOpts = {}): Placed => {
   // names the stories use for a place that exists under another name (a launch lost a pass on 'study', 2026-11-16)
@@ -758,6 +816,62 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
     const walls = (t: number) => resolved.filter((x) => x.def.kind === 'wall').map((x, i) => <g key={`w${i}`}>{x.def.draw(ctx(x, t))}</g>);
     const flats = (t: number) => resolved.filter((x) => x.def.kind === 'flat').map((x, i) => <g key={`f${i}`}>{x.def.draw(ctx(x, t))}</g>);
     const skySuffix = `${name}${view.replace(/[^a-z0-9]/gi, '')}`;
+    const windows = resolved.filter((x) => x.name === 'window');
+    const weather = opts.weather;
+    const beamStyle =
+      moodName === 'night'
+        ? { c0: '#A8CCFF', c1: '#7AA6F0', o0: 0.18, o1: 0.06 }
+        : moodName === 'dusk'
+          ? { c0: '#FFB86C', c1: '#FF8E4A', o0: 0.22, o1: 0.08 }
+          : { c0: '#FFF3C4', c1: '#FFE8A3', o0: 0.24, o1: 0.09 };
+    const lampConeColor = moodName === 'dusk' ? '#FFD59A' : '#FFE4B5';
+    const clouds: readonly [number, number, number, number][] = [
+      [120, 120, 1.15, 0.55],
+      [620, 190, 0.9, 0.8],
+      [1140, 105, 1.3, 0.45],
+      [1650, 175, 1.0, 0.7],
+      [2050, 130, 0.85, 0.95],
+      [2460, 215, 1.1, 0.6],
+    ];
+    const renderWeather = (t: number) => {
+      if (!weather) return null;
+      if (weather === 'rain') {
+        const col = moodName === 'dusk' ? '#FFD8BA' : '#CFE4FF';
+        return (
+          <g pointerEvents="none">
+            {Array.from({ length: 48 }, (_, i) => {
+              const speed = 26 + (i % 5) * 4;
+              const y = (((t * speed + i * 173) % 1600) + 1600) % 1600 - 200;
+              const x = ((i * 211 + 89) % 2400) - 240 - y * 0.16;
+              return <line key={`rn${i}`} x1={x} y1={y} x2={x - 10} y2={y + 42} stroke={col} strokeWidth={1.8 + (i % 2) * 0.6} strokeOpacity={0.32 + (i % 4) * 0.06} strokeLinecap="round" />;
+            })}
+          </g>
+        );
+      }
+      if (weather === 'snow') {
+        return (
+          <g pointerEvents="none">
+            {Array.from({ length: 42 }, (_, i) => {
+              const speed = 3.2 + (i % 4) * 0.9;
+              const y = (((t * speed + i * 149) % 1500) + 1500) % 1500 - 150;
+              const x = ((i * 227 + 61) % 2300) - 200 + Math.sin(t * 0.045 + i * 1.3) * 28;
+              return <circle key={`sn${i}`} cx={x} cy={y} r={2.5 + (i % 4) * 0.85} fill="#FFFFFF" opacity={0.55 + (i % 3) * 0.12} />;
+            })}
+          </g>
+        );
+      }
+      return (
+        <g pointerEvents="none">
+          {Array.from({ length: 36 }, (_, i) => {
+            const span = 2300;
+            const speed = 1.8 + (i % 4) * 0.55;
+            const x = (((t * speed + i * 193) % span) + span) % span - 200;
+            const y = 120 + ((i * 127 + 37) % 860) + Math.sin(t * 0.05 + i * 2.1) * 18;
+            return <circle key={`ds${i}`} cx={x} cy={y} r={2 + (i % 3) * 0.9} fill="#F4DFB0" opacity={0.28 + (i % 4) * 0.07} />;
+          })}
+        </g>
+      );
+    };
     const Shell: Placed['Shell'] = ({ t, id = 'pl' }) =>
       outdoor ? (
         <g>
@@ -769,22 +883,117 @@ export const place = (name: string, opts: PlaceOpts = {}): Placed => {
             </linearGradient>
           </defs>
           <rect x={-3000} y={-3000} width={9000} height={3000 + r.back.y1} fill={`url(#${id}sky${skySuffix})`} />
+          {moodName === 'night' ? (
+            <g pointerEvents="none">
+              {Array.from({ length: 36 }, (_, i) => {
+                const sx = ((i * 197 + 43) % 2300) - 200;
+                const sy = ((i * 131 + 29) % Math.max(200, r.back.y1 - 90)) - 60;
+                const tw = 0.35 + 0.55 * (0.5 + 0.5 * Math.sin(t * (0.08 + (i % 5) * 0.025) + i * 1.7));
+                return <circle key={`st${i}`} cx={sx} cy={sy} r={1.6 + (i % 3) * 0.85} fill={i % 4 === 0 ? '#FFF6D6' : '#EEF4FF'} opacity={tw} />;
+              })}
+            </g>
+          ) : (
+            <g pointerEvents="none">
+              {clouds.map(([bx, by, sc, spd], i) => {
+                const span = 2700;
+                const cx = (((bx + t * spd) % span) + span) % span - 400;
+                const fill = moodName === 'dusk' ? (i % 2 === 0 ? '#FFD6B8' : '#F7B29B') : '#FFFFFF';
+                const op = moodName === 'dusk' ? 0.42 : 0.62;
+                return (
+                  <g key={`cl${i}`} transform={`translate(${cx} ${by}) scale(${sc})`} opacity={op}>
+                    <ellipse cx={0} cy={0} rx={78} ry={24} fill={fill} />
+                    <circle cx={-34} cy={-12} r={28} fill={fill} />
+                    <circle cx={8} cy={-20} r={34} fill={fill} />
+                    <circle cx={44} cy={-10} r={24} fill={fill} />
+                  </g>
+                );
+              })}
+            </g>
+          )}
+          {/* 2-layer outdoor depth silhouettes: distant hills/skyline ridge + midground trees/buildings */}
+          <g pointerEvents="none">
+            <path
+              d={`M -1200 ${r.back.y1} Q -800 ${r.back.y1 - 155} -420 ${r.back.y1 - 90} Q -40 ${r.back.y1 - 210} 360 ${r.back.y1 - 105} Q 760 ${r.back.y1 - 195} 1180 ${r.back.y1 - 100} Q 1580 ${r.back.y1 - 185} 1980 ${r.back.y1 - 95} Q 2420 ${r.back.y1 - 165} 3000 ${r.back.y1} Z`}
+              fill={moodName === 'night' ? '#121E3D' : moodName === 'dusk' ? '#5A446E' : '#94B4CC'}
+              opacity={moodName === 'night' ? 0.68 : moodName === 'dusk' ? 0.46 : 0.36}
+            />
+            <g fill={moodName === 'night' ? '#0C152B' : moodName === 'dusk' ? '#433256' : '#7A9EB0'} opacity={moodName === 'night' ? 0.62 : moodName === 'dusk' ? 0.4 : 0.3}>
+              {Array.from({ length: 18 }, (_, i) => {
+                const bx = -900 + i * 210;
+                const bh = 54 + ((i * 47) % 5) * 26;
+                return i % 3 === 0 ? (
+                  <g key={`mg${i}`}>
+                    <circle cx={bx + 42} cy={r.back.y1 - 44} r={44} />
+                    <circle cx={bx + 88} cy={r.back.y1 - 54} r={50} />
+                    <circle cx={bx + 132} cy={r.back.y1 - 38} r={38} />
+                  </g>
+                ) : (
+                  <rect key={`mg${i}`} x={bx + 16} y={r.back.y1 - bh} width={112} height={bh} rx={4} />
+                );
+              })}
+            </g>
+          </g>
           <rect x={-3000} y={r.back.y1} width={9000} height={4000} fill={T.floor} />
           {flats(t)}
           {walls(t)}
           <LightVeil id={`${id}v`} lights={[[960, 200, 900]]} o={T.veil} />
           <Dust t={t} seed={7} x0={300} y0={200} w={1300} h={600} n={14} o={T.dust} />
+          {renderWeather(t)}
         </g>
       ) : (
         <g>
+          <defs>
+            {windows.map((x, i) => (
+              <linearGradient key={`wbg${i}`} id={`${id}wbeam_${skySuffix}_${i}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={beamStyle.c0} stopOpacity={beamStyle.o0} />
+                <stop offset="55%" stopColor={beamStyle.c1} stopOpacity={beamStyle.o1} />
+                <stop offset="100%" stopColor={beamStyle.c1} stopOpacity={0} />
+              </linearGradient>
+            ))}
+            {(moodName === 'dusk' || moodName === 'night')
+              ? lamps.map((_, i) => (
+                  <linearGradient key={`lcg${i}`} id={`${id}lcone_${skySuffix}_${i}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={lampConeColor} stopOpacity={0.18} />
+                    <stop offset="55%" stopColor={lampConeColor} stopOpacity={0.07} />
+                    <stop offset="100%" stopColor={lampConeColor} stopOpacity={0} />
+                  </linearGradient>
+                ))
+              : null}
+          </defs>
           <RoomShell r={r} id={id} wall={T.wall} side={T.side} floorC={T.floor} ceiling={T.ceiling} lines={T.floorLine} floor={T.floorKind} />
           {/* soften the back-wall noise texture without flattening the side-wall depth gradients */}
           <rect x={r.back.x0} y={r.back.y0} width={r.back.x1 - r.back.x0} height={r.back.y1 - r.back.y0} fill={T.wall} opacity={0.45} />
           <rect x={r.back.x0} y={r.back.y1 - 14} width={r.back.x1 - r.back.x0} height={14} fill={T.trim} />
           {walls(t)}
           {flats(t)}
+          {/* directional angled window light shafts */}
+          {windows.map((x, i) => {
+            const du = x.u + x.len / 2 < 0.5 ? 0.16 : -0.16;
+            const tl = r.P(x.u, 0.15, 0);
+            const tr = r.P(x.u + x.len, 0.15, 0);
+            const br = r.P(x.u + x.len + du, 1, 0.68);
+            const bl = r.P(x.u + du, 1, 0.68);
+            return (
+              <polygon
+                key={`wb${i}`}
+                points={`${tl.x.toFixed(1)},${tl.y.toFixed(1)} ${tr.x.toFixed(1)},${tr.y.toFixed(1)} ${br.x.toFixed(1)},${br.y.toFixed(1)} ${bl.x.toFixed(1)},${bl.y.toFixed(1)}`}
+                fill={`url(#${id}wbeam_${skySuffix}_${i})`}
+                pointerEvents="none"
+              />
+            );
+          })}
           {lamps.map((l, i) => <Pendant key={i} r={r} u={l.u} w={l.w} t={t} glow={T.lamps ? 0.55 : 0.12} cone={T.lamps ? 0.28 : 0.05} />)}
-          <LightVeil id={`${id}v`} lights={[...lamps.map((l) => pendantLight(r, l.u, l.w)), ...resolved.filter((x) => x.name === 'window').map((x): [number, number, number] => [backX(r, x.u + x.len / 2), 360, 420])]} o={T.veil} />
+          {/* soft ceiling pendant lamp light cones in dusk/night */}
+          {(moodName === 'dusk' || moodName === 'night')
+            ? lamps.map((l, i) => {
+                const top = r.P(l.u, 0.18, l.w);
+                const bot = r.P(l.u, 1, l.w);
+                const k = r.s(l.w);
+                const pts = `${(top.x - 24 * k).toFixed(1)},${top.y.toFixed(1)} ${(top.x + 24 * k).toFixed(1)},${top.y.toFixed(1)} ${(bot.x + 190 * k).toFixed(1)},${bot.y.toFixed(1)} ${(bot.x - 190 * k).toFixed(1)},${bot.y.toFixed(1)}`;
+                return <polygon key={`lc${i}`} points={pts} fill={`url(#${id}lcone_${skySuffix}_${i})`} pointerEvents="none" />;
+              })
+            : null}
+          <LightVeil id={`${id}v`} lights={[...lamps.map((l) => pendantLight(r, l.u, l.w)), ...windows.map((x): [number, number, number] => [backX(r, x.u + x.len / 2), 360, 420])]} o={T.veil} />
           <Dust t={t} seed={11} x0={380} y0={260} w={1040} h={480} n={24} o={T.dust} />
         </g>
       );

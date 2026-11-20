@@ -20,6 +20,8 @@ import type { AnimalSpec, WornSpec } from './worn';
 export { worn, animalHead, WORN_NAMES, ANIMAL_KINDS } from './worn';
 import type { HeldName, HeldOpts } from './objects';
 export { held, HELD_NAMES } from './objects';
+export { HeldProp, heldProp, GRIP_PROP_NAMES } from './objects';
+export type { GripPropName, HeldPropProps } from './objects';
 export type { Carry } from './stage';
 import type { BurstSpec, HookTitleSpec, PersonVfxKind, PersonVfxSpec, StampSpec, ValueTagSpec } from './accents';
 
@@ -92,6 +94,7 @@ export type PersonSpec = {
   face?: FaceSpecT;
   /** any pose field; a function of (t, len) for keyframes. Overrides `act` */ pose?: Timed<Record<string, unknown>>;
   rimId?: string;
+  /** folded bed blanket colour over the lower torso & legs (for lying-in-bed scenes) */ blanket?: string;
   /** head-attached 2D reaction micro-VFX (focus rings, shock rays, sweat drop, dizzy stars, sparkle, thought icon) */
   vfx?: PersonVfxSpec[];
   headGear?: React.ReactNode;
@@ -865,7 +868,7 @@ export const shot = (spec: ShotSpec): React.FC<ShotProps> => {
             return (
               <Staged key={`p${i}`} at={whereOf(p, i)} look={who} yaw={yawToward(i, p.look, flipYaw(baseYaw(p), walkingNow(p)))} act={act} from={p.walkTo ? undefined : from} dur={p.walkTo ? undefined : dur} stance={stance ?? stanceOfAction(act) ?? ownStance(act) ?? (on ? 'sit' : undefined)}
                 pose={{ ...gazeOf(p, i), ...poseOf({ face: faces.length ? faces : undefined, pose: p.pose }, t, len), ...(beatPose ?? {}) } as never} beats={stageBeats} reach={reach ?? undefined}
-                rimId={rimId} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} carry={carry} />
+                rimId={rimId} blanket={p.blanket} headGear={combinedHead} torsoGear={torsoGear} handLProp={handLProp} handRProp={handRProp} carry={carry} />
             );
           })}
           {duo ? <Duo a={{ at: flipAt(duo.a.at) as { u: number; w: number }, look: duo.a.who, rimId: duo.a.rimId, pose: poseOf(duo.a, t, len) as never }} b={{ at: flipAt(duo.b.at) as { u: number; w: number }, look: duo.b.who, rimId: duo.b.rimId, pose: poseOf(duo.b, t, len) as never }} action={duo.action} from={duo.from} dur={duo.dur} prop={duo.prop} /> : null}
@@ -1303,4 +1306,134 @@ export const screenShot = (spec: ScreenSpec): React.FC<ShotProps> => {
     );
   };
   return ScreenComp;
+};
+
+// ---------------------------------------------------------------------------------------------------------------
+// Two-character staging helpers: composable builders that return well-spaced, properly oriented `people` entries
+// facing each other at natural conversation, handshake, or object-exchange distance.
+
+export type FaceOffSide = PersonLook | (Omit<PersonSpec, 'who'> & { who: PersonLook });
+export type FaceOffDistance = 'close' | 'handshake' | 'talk' | 'wide' | number;
+export type FaceOffOpts = {
+  /** Midpoint on the room floor (default `{ u: 0.5, w: 0.48 }`). */
+  at?: { u?: number; w?: number };
+  /** Horizontal floor separation: 'close' (0.18), 'handshake' (0.24), 'talk' (0.30, default), 'wide' (0.40), or custom u span. */
+  distance?: FaceOffDistance;
+  /** Subtle w-depth stagger between the pair for 2.5D separation (default 0.02). */
+  depthOffset?: number;
+  /** Magnitude of the 3/4 turn toward each other (default 0.72; left gets +yaw, right gets -yaw). */
+  yaw?: number;
+  /** Starting index in the final `people` array when composing with extra characters (default 0). */
+  baseIndex?: number;
+  /** Optional default action for both characters when individual `act` is omitted. */
+  act?: ActName | OwnActionSpec;
+};
+
+const FACE_OFF_DIST: Record<Exclude<FaceOffDistance, number>, number> = {
+  close: 0.18,
+  handshake: 0.24,
+  talk: 0.3,
+  wide: 0.4,
+};
+
+const asFaceOffSide = (s: FaceOffSide): Omit<PersonSpec, 'who'> & { who: PersonLook } =>
+  'who' in s ? s : { who: s };
+
+/**
+ * Generates two facing `PersonSpec` entries at natural conversation / handshake / standoff spacing
+ * with matching `at`, `yaw`, `look`, and `act`. Spread directly into `shot({ place, people: faceOff(A, B) })`.
+ */
+export const faceOff = (left: FaceOffSide, right: FaceOffSide, opts: FaceOffOpts = {}): [PersonSpec, PersonSpec] => {
+  const L = asFaceOffSide(left);
+  const R = asFaceOffSide(right);
+  const midU = opts.at?.u ?? 0.5;
+  const midW = opts.at?.w ?? 0.48;
+  const span = typeof opts.distance === 'number'
+    ? clamp(opts.distance, 0.12, 0.72)
+    : FACE_OFF_DIST[opts.distance ?? 'talk'];
+  const stagger = opts.depthOffset ?? 0.02;
+  const yawMag = clamp(opts.yaw ?? 0.72, 0.35, 0.95);
+  const base = opts.baseIndex ?? 0;
+
+  const leftPerson: PersonSpec = {
+    ...L,
+    at: L.at ?? { u: clamp(midU - span / 2, 0.14, 0.86), w: clamp(midW - stagger / 2, 0.12, 0.88) },
+    yaw: L.yaw ?? yawMag,
+    look: L.look ?? base + 1,
+    act: L.act ?? opts.act ?? 'talk',
+  };
+  const rightPerson: PersonSpec = {
+    ...R,
+    at: R.at ?? { u: clamp(midU + span / 2, 0.14, 0.86), w: clamp(midW + stagger / 2, 0.12, 0.88) },
+    yaw: R.yaw ?? -yawMag,
+    look: R.look ?? base,
+    act: R.act ?? opts.act ?? 'idle',
+  };
+  return [leftPerson, rightPerson];
+};
+
+export type ExchangeOpts = Omit<FaceOffOpts, 'act'> & {
+  /** Held object transferred from giver to receiver (omit for a two-character handshake). */
+  item?: HeldName | PersonSpec['hold'];
+  /** Frame when the item passes from giver to receiver (default 18). */
+  handAt?: number;
+  /** Frame when the hand-over / handshake begins (default `Math.max(0, handAt - 12)`). */
+  from?: number;
+  /** Spatial order: 'left-to-right' (default, giver on left) or 'right-to-left' (giver on right). */
+  side?: 'left-to-right' | 'right-to-left';
+};
+
+/**
+ * Generates two facing `PersonSpec` entries choreographed for an object hand-over (or handshake when `item` is omitted):
+ * the giver extends `item` with `act: 'hand-over'` and releases it at `handAt`, while the receiver reaches and takes it.
+ */
+export const exchange = (giver: FaceOffSide, receiver: FaceOffSide, opts: ExchangeOpts = {}): [PersonSpec, PersonSpec] => {
+  const handAt = Math.max(2, opts.handAt ?? 18);
+  const from = opts.from ?? Math.max(0, handAt - 12);
+  const base = opts.baseIndex ?? 0;
+  const reverse = opts.side === 'right-to-left';
+  const giverIdx = reverse ? base + 1 : base;
+
+  const G = asFaceOffSide(giver);
+  const R = asFaceOffSide(receiver);
+
+  const gSpec: PersonSpec = opts.item !== undefined
+    ? {
+        ...G,
+        hold: G.hold ?? opts.item,
+        act: G.act ?? 'hand-over',
+        from: G.from ?? from,
+        beats: [...(G.beats ?? []), { at: handAt, hold: null, act: 'idle' }].sort((a, b) => a.at - b.at),
+      }
+    : {
+        ...G,
+        act: G.act ?? 'handshake',
+        from: G.from ?? from,
+      };
+
+  const rSpec: PersonSpec = opts.item !== undefined
+    ? {
+        ...R,
+        act: R.act ?? 'idle',
+        beats: [
+          ...(R.beats ?? []),
+          { at: Math.max(0, handAt - 8), reach: { to: giverIdx, part: 'hand' } },
+          { at: handAt, hold: opts.item, act: 'hold', reach: null },
+        ].sort((a, b) => a.at - b.at),
+      }
+    : {
+        ...R,
+        act: R.act ?? 'handshake',
+        from: R.from ?? from,
+      };
+
+  const fOpts: FaceOffOpts = {
+    at: opts.at,
+    distance: opts.distance ?? 'handshake',
+    depthOffset: opts.depthOffset,
+    yaw: opts.yaw ?? 0.78,
+    baseIndex: base,
+  };
+
+  return reverse ? faceOff(rSpec, gSpec, fOpts) : faceOff(gSpec, rSpec, fOpts);
 };

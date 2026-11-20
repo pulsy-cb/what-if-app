@@ -468,7 +468,7 @@ export function portraitFramingErrors(
   const usesCamT = /\bcamT\s*\(/.test(shotsSource);
   for (const id of ids) {
     const body = checkBodies[id] ?? '';
-    if (!body || /\b(?:shot|phoneShot|tabletopShot|screenShot)\s*\(/.test(body)) continue;
+    if (!body || /\b(?:shot|phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body)) continue;
     const size = String(epShots[id]?.size ?? '').toLowerCase();
     if (size.includes('establishing') || size.includes('title')) continue;
     let badZoom: { y: number; z: number } | null = null;
@@ -674,7 +674,7 @@ export function openingErrors(
   const shows = (id: string): boolean => {
     const body = bodies[id] ?? '';
     const size = String(epShots[id]?.size ?? '').toLowerCase();
-    if (size.includes('insert') || size.includes('macro') || /\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body)) return true;
+    if (size.includes('insert') || size.includes('macro') || /\b(?:phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body)) return true;
     if (/\b(?:actPose|poseAt|grabAt|walkPose|handRProp|throwAt)\s*\(|<Duo\b|\bduo\s*:/.test(body)) return true;
     const acts = [...body.matchAll(/\bact\s*:\s*['"]([\w-]+)['"]/g)].map((m) => m[1]!.toLowerCase());
     return acts.some((a) => !OPENING_PASSIVE_ACTS.has(a)) || /\bact\s*:\s*\{/.test(body);
@@ -879,7 +879,7 @@ export function shotsAudit(
     const size = String(epShot.size ?? sh.size ?? '').toLowerCase();
     const note = String(epShot.note ?? '');
     const isTitle = size.includes('title') || /<(?:TitleCard|HookTitle)\b|\btitle\s*:\s*\{/.test(body);
-    const isPhoneOrTabletop = /\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body);
+    const isPhoneOrTabletop = /\b(?:phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body);
     const isInsert = size.includes('insert') || size.includes('macro') || isPhoneOrTabletop;
     // an establishing wide or an empty-room beat may hold no character: the line is about the place, not a person
     const isEstablishing = size.includes('establishing') || size.includes('empty') || size.includes('detail');
@@ -932,7 +932,7 @@ export function shotsAudit(
       /\bturnAt\b|\bact\s*[:=]|<Duo\b|\bduo\s*:/.test(body) ||
       // shot(), phoneShot(), and tabletopShot() push in slowly unless told to hold
       ((/\bshot\s*\(/.test(body) || /<(?:Shot|shot)\b/.test(body)) && !/\bmove\s*[=:]\s*['"]still['"]/.test(body)) ||
-      (/\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(body) && (!/\bpush\s*:\s*false\b/.test(body) || /\b(messages|notify|typing|hands|items|tag|stamp)\s*:/.test(body)));
+      (/\b(?:phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body) && (!/\bpush\s*:\s*false\b/.test(body) || /\b(messages|notify|typing|hands|items|tag|stamp|amount|from|to|caption)\s*:/.test(body)));
     if (!hasMotion) {
       errors.push(`${id} is static: give someone an act, let shot() move the camera (no move: 'still'), or animate with kf(t, ...), poseAt(t, ...), faceAt(t, ...) or DrawOn`);
     }
@@ -1189,9 +1189,9 @@ process.stdout.write(JSON.stringify({ errors, framing }));
   // reading of who is on screen (telephone-salon, 2026-11-10: 0 shot() in 36 shots). Inserts may stay hand-made.
   if (fs.existsSync(path.join(projectRoot, 'src', 'engine', 'shot.tsx'))) {
     const framed = wanted.filter(
-      (id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')) && !/\b(?:phoneShot|tabletopShot|screenShot)\s*\(/.test(bodies[id]!),
+      (id) => bodies[id] && !/^(insert|establishing)$/.test(String(epShots[id]?.size ?? '')) && !/\b(?:phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(bodies[id]!),
     );
-    const byHand = framed.filter((id) => !/\b(?:shot|phoneShot|tabletopShot|screenShot)\s*\(/.test(bodies[id]!));
+    const byHand = framed.filter((id) => !/\b(?:shot|phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(bodies[id]!));
     if (framed.length >= 6 && byHand.length > Math.floor(framed.length / 2)) {
       errors.push(
         `${byHand.length}/${framed.length} shots with people are written by hand instead of shot({...}) (${byHand.slice(0, 10).join(', ')}): rewrite them as export const Sx = shot({ place, people, cam, beats }) — shot() frames 9:16 correctly, seats people on real chairs and lets the audit and the reviewer see who is on screen. Keep hand-written code for what shot() cannot draw (a phone screen, a diagram), at most half the shots.`,

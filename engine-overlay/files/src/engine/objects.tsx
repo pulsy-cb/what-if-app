@@ -7,20 +7,21 @@ import React from 'react';
 const INK = '#1F1B2E';
 const SW = 4;
 
-export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle' | 'bucket' | 'glass' | 'mic';
-export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box', 'tray', 'plate', 'bottle', 'bucket', 'glass', 'mic'];
+export type HeldName = 'phone' | 'handset' | 'bag' | 'paper' | 'crumpled' | 'cup' | 'keys' | 'book' | 'pen' | 'folder' | 'box' | 'tray' | 'plate' | 'bottle' | 'bucket' | 'glass' | 'mic' | 'money' | 'letter' | 'key' | 'contract' | 'pills';
+export const HELD_NAMES: HeldName[] = ['phone', 'handset', 'bag', 'paper', 'crumpled', 'cup', 'keys', 'book', 'pen', 'folder', 'box', 'tray', 'plate', 'bottle', 'bucket', 'glass', 'mic', 'money', 'letter', 'key', 'contract', 'pills'];
 export type HeldOpts = { color?: string; scale?: number };
 
 const DEFAULTS: Record<HeldName, string> = {
   phone: '#2B2F3A', handset: '#E7DCC2', bag: '#2F4A78', paper: '#F6F1E4', crumpled: '#F1ECDD', cup: '#F3EEE2',
   keys: '#C9A546', book: '#A8443B', pen: '#2D5FA8', folder: '#D8B45A', box: '#B98A56',
   tray: '#A9AFB8', plate: '#F3EEE2', bottle: '#4E8F6A', bucket: '#8A97A6', glass: '#CFE3EE', mic: '#2B2F3A',
+  money: '#5B9A63', letter: '#F6F1E4', key: '#D4A843', contract: '#F8F4EA', pills: '#E88A3E',
 };
 
 /** Things that stay level whatever the arm does: a tray held like a phone stood on its edge (custom run, 2026-11-13). */
 export const HELD_LEVEL: readonly string[] = ['tray', 'plate', 'bottle', 'bucket', 'glass'];
 /** How far below the palm line each drawing ends: where it rests once put down. */
-const BOTTOM: Record<HeldName, number> = { phone: 34, handset: 52, bag: 94, paper: 50, crumpled: 34, cup: 40, keys: 60, book: 48, pen: 26, folder: 50, box: 52, tray: 16, plate: 14, bottle: 30, bucket: 44, glass: 26, mic: 30 };
+const BOTTOM: Record<HeldName, number> = { phone: 34, handset: 52, bag: 94, paper: 50, crumpled: 34, cup: 40, keys: 60, book: 48, pen: 26, folder: 50, box: 52, tray: 16, plate: 14, bottle: 30, bucket: 44, glass: 26, mic: 30, money: 34, letter: 36, key: 50, contract: 56, pills: 36 };
 export const heldBottom = (name?: string): number => BOTTOM[name as HeldName] ?? 24;
 
 const draw: Record<HeldName, (c: string) => React.ReactNode> = {
@@ -137,7 +138,127 @@ const draw: Record<HeldName, (c: string) => React.ReactNode> = {
       <rect x={-14} y={-6} width={28} height={18} fill="#F6F1E4" opacity={0.85} />
     </g>
   ),
+  money: (c) => <g transform="translate(0 10)">{GRIP_DRAW.money(c)}</g>,
+  letter: (c) => <g transform="translate(0 10)">{GRIP_DRAW.letter(c)}</g>,
+  key: (c) => <g transform="translate(0 10)">{GRIP_DRAW.key(c)}</g>,
+  contract: (c) => <g transform="translate(0 10)">{GRIP_DRAW.contract(c)}</g>,
+  pills: (c) => <g transform="translate(0 10)">{GRIP_DRAW.pills(c)}</g>,
 };
+
+/** Grip-oriented prop set: every drawing is strictly anchored at (0, 0) = hand grip center with natural orientation. */
+export type GripPropName = 'phone' | 'money' | 'letter' | 'cup' | 'key' | 'contract' | 'bag' | 'pills';
+export const GRIP_PROP_NAMES: readonly GripPropName[] = ['phone', 'money', 'letter', 'cup', 'key', 'contract', 'bag', 'pills'];
+
+const GRIP_DRAW: Record<GripPropName, (c: string) => React.ReactNode> = {
+  // Phone gripped around its lower-middle body at (0, 0), screen facing cleanly upward/outward
+  phone: (c) => (
+    <g>
+      <rect x={-13} y={-30} width={26} height={48} rx={6} fill={c} stroke={INK} strokeWidth={SW} />
+      <rect x={-9} y={-25} width={18} height={35} rx={2} fill="#141923" />
+      <rect x={-4} y={-23} width={8} height={2.5} rx={1.2} fill="#394357" />
+      <path d="M -6 -16 L 5 -22" stroke="#FFFFFF" strokeWidth={2} opacity={0.22} strokeLinecap="round" />
+    </g>
+  ),
+  // Fanned banknotes gripped by their bottom stack at (0, 0)
+  money: (c) => (
+    <g>
+      <g transform="rotate(-14 0 0)">
+        <rect x={-12} y={-30} width={24} height={42} rx={3} fill={c} stroke={INK} strokeWidth={3.2} />
+      </g>
+      <g transform="rotate(11 0 0)">
+        <rect x={-12} y={-30} width={24} height={42} rx={3} fill={c} stroke={INK} strokeWidth={3.2} />
+      </g>
+      <rect x={-13} y={-32} width={26} height={44} rx={3} fill={c} stroke={INK} strokeWidth={SW} />
+      <rect x={-13} y={-14} width={26} height={10} fill="#EBD79A" stroke={INK} strokeWidth={2.5} />
+      <circle cx={0} cy={-21} r={4.5} fill="#DDF0DC" stroke={INK} strokeWidth={2} />
+    </g>
+  ),
+  // Sealed envelope gripped at its lower-left edge (0, 0)
+  letter: (c) => (
+    <g>
+      <rect x={-24} y={-24} width={48} height={32} rx={3} fill={c} stroke={INK} strokeWidth={SW} />
+      <path d="M -23 -22 L 0 -5 L 23 -22" fill="none" stroke={INK} strokeWidth={3} strokeLinejoin="round" />
+      <circle cx={0} cy={-5} r={4.5} fill="#C84642" stroke={INK} strokeWidth={2} />
+    </g>
+  ),
+  // Coffee mug gripped by its handle loop right at (0, 0)
+  cup: (c) => (
+    <g>
+      <path d="M -6 -10 Q 12 -10 12 0 Q 12 10 -6 10" fill="none" stroke={INK} strokeWidth={5} strokeLinecap="round" />
+      <path d="M -38 -18 L -4 -18 L -7 22 Q -8 26 -12 26 L -30 26 Q -34 26 -35 22 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+      <ellipse cx={-21} cy={-18} rx={17} ry={4} fill="#6F4A32" stroke={INK} strokeWidth={3} />
+    </g>
+  ),
+  // Single brass key gripped by its bow (head) at (0, 0), blade extending cleanly forward
+  key: (c) => (
+    <g>
+      <circle cx={0} cy={-2} r={11} fill={c} stroke={INK} strokeWidth={SW} />
+      <circle cx={0} cy={-2} r={4} fill="#FFFFFF" stroke={INK} strokeWidth={2.5} />
+      <path d="M -4 8 L 4 8 L 4 38 L 11 38 L 11 32 L 4 32 L 4 25 L 9 25 L 9 20 L 4 20 L 4 8 Z" fill={c} stroke={INK} strokeWidth={3.2} strokeLinejoin="round" />
+    </g>
+  ),
+  // Formal signed contract gripped at its lower edge (0, 0)
+  contract: (c) => (
+    <g>
+      <path d="M -22 -48 L 14 -48 L 24 -38 L 24 8 L -22 8 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+      <path d="M 14 -48 L 14 -38 L 24 -38" fill="#E3DCCB" stroke={INK} strokeWidth={2.5} strokeLinejoin="round" />
+      <rect x={-14} y={-40} width={22} height={4} rx={1.5} fill={INK} opacity={0.7} />
+      <path d="M -14 -28 L 16 -28 M -14 -20 L 16 -20 M -14 -12 L 10 -12" stroke={INK} strokeWidth={2.4} opacity={0.45} strokeLinecap="round" />
+      <path d="M -14 -2 Q -6 -7 2 -1 Q 8 2 14 -3" fill="none" stroke="#2D5FA8" strokeWidth={2.5} strokeLinecap="round" />
+      <circle cx={15} cy={0} r={4} fill="#C84642" stroke={INK} strokeWidth={2} />
+    </g>
+  ),
+  // Tote / handbag gripped cleanly at the top of its handle arch (0, 0), body hanging naturally below
+  bag: (c) => (
+    <g>
+      <path d="M -16 18 Q -16 -2 0 -2 Q 16 -2 16 18" fill="none" stroke={INK} strokeWidth={6} strokeLinecap="round" />
+      <path d="M -32 22 Q -32 14 -22 14 L 22 14 Q 32 14 32 22 L 36 74 Q 36 84 26 84 L -26 84 Q -36 84 -36 74 Z" fill={c} stroke={INK} strokeWidth={SW} strokeLinejoin="round" />
+      <path d="M -22 50 L 22 50 L 20 74 L -20 74 Z" fill="#00000024" stroke={INK} strokeWidth={3} strokeLinejoin="round" />
+      <path d="M -28 32 L 28 32" stroke={INK} strokeWidth={3} strokeLinecap="round" />
+    </g>
+  ),
+  // Medicine / pill bottle gripped around its cylinder center at (0, 0)
+  pills: (c) => (
+    <g>
+      <rect x={-13} y={-26} width={26} height={9} rx={3} fill="#F4F1EA" stroke={INK} strokeWidth={3.2} />
+      <rect x={-11} y={-17} width={22} height={36} rx={4} fill={c} stroke={INK} strokeWidth={SW} />
+      <rect x={-10} y={-10} width={20} height={22} rx={1.5} fill="#FAF8F2" stroke={INK} strokeWidth={2.2} />
+      <path d="M 0 -5 L 0 5 M -5 0 L 5 0" stroke="#D1493F" strokeWidth={3} strokeLinecap="round" />
+    </g>
+  ),
+};
+
+export type HeldPropProps = {
+  /** Grip-oriented prop name (or any HeldName). */
+  kind: GripPropName | HeldName;
+  color?: string;
+  scale?: number;
+  /** 'L' mirrors asymmetrical props horizontally so handle/fan orientation matches a left hand. */
+  side?: 'L' | 'R';
+  /** Extra rotation in degrees around the (0, 0) grip center. */
+  angle?: number;
+  /** Shift to palm center (0, 10) for direct placement inside Person's handRProp / handLProp slot. Default false ((0, 0) = grip center). */
+  inPalm?: boolean;
+};
+
+/** Grip-oriented held prop anchored at (0, 0) = hand grip center for crisp, non-floating handRProp / handLProp use. */
+export const HeldProp: React.FC<HeldPropProps> = ({ kind, color, scale = 1, side = 'R', angle = 0, inPalm = false }) => {
+  const gripFn = GRIP_DRAW[kind as GripPropName];
+  const node = gripFn
+    ? gripFn(color ?? DEFAULTS[kind])
+    : <g transform="translate(0 -10)">{held(kind, { color })}</g>;
+  const sx = side === 'L' ? -scale : scale;
+  const parts: string[] = [];
+  if (inPalm) parts.push('translate(0 10)');
+  if (angle) parts.push(`rotate(${angle})`);
+  if (sx !== 1 || scale !== 1) parts.push(`scale(${sx} ${scale})`);
+  return <g transform={parts.length ? parts.join(' ') : undefined} data-held-prop={kind}>{node}</g>;
+};
+
+/** Functional helper returning a grip-oriented <HeldProp> element for handRProp / handLProp. */
+export const heldProp = (kind: GripPropName | HeldName, opts: Omit<HeldPropProps, 'kind'> = {}): React.ReactNode => (
+  <HeldProp kind={kind} {...opts} />
+);
 
 /** The drawing of a held thing, for `hold`, a hand slot or `props`. Unknown names throw with the list. */
 export const held = (name: HeldName | string, opts: HeldOpts = {}): React.ReactNode => {

@@ -115,9 +115,16 @@ const feetBelowHips = (pose: PersonPose, b: Body): number => {
   return Math.max(j.legL.end.y, j.legR.end.y);
 };
 
-const Shadow: React.FC<{ x: number; y: number; scale: number; lift?: number }> = ({ x, y, scale, lift = 0 }) => (
-  <ellipse cx={x} cy={y + 4 * scale} rx={70 * scale} ry={13 * scale} fill="#000" opacity={0.28 * Math.max(0.3, 1 - lift / 120)} />
-);
+const Shadow: React.FC<{ x: number; y: number; scale: number; lift?: number; dir?: number }> = ({ x, y, scale, lift = 0, dir = 1 }) => {
+  const air = Math.max(0.25, 1 - lift / 120);
+  const shrink = Math.max(0.55, 1 - lift / 220);
+  return (
+    <g>
+      <ellipse cx={x + dir * 24 * scale} cy={y + 7 * scale} rx={88 * scale * shrink} ry={17 * scale * shrink} fill="#0B0E18" opacity={0.14 * air} />
+      <ellipse cx={x} cy={y + 3 * scale} rx={52 * scale * shrink} ry={9.5 * scale * shrink} fill="#05070D" opacity={0.34 * air} />
+    </g>
+  );
+};
 
 /**
  * A character on the stage. `body` sets the proportions and so the height ('adult', 'teen', or your own defineBody);
@@ -178,6 +185,7 @@ export const Staged: React.FC<{
   from?: number;
   dur?: number;
   rimId?: string;
+  blanket?: string;
   headGear?: React.ReactNode;
   torsoGear?: React.ReactNode;
   handLProp?: React.ReactNode;
@@ -300,7 +308,7 @@ export const Staged: React.FC<{
   return (
     <AtDepth w={at.w ?? 0.5}>
       <Shadow x={spot.x} y={spot.y} scale={scale} lift={lift} />
-      <Person look={look} body={b} shadow={0} {...rest} {...handProps} pose={full}>
+      <Person look={look} body={b} shadow={0} t={t} {...rest} {...handProps} pose={full}>
         {children}
       </Person>
       {released}
@@ -391,7 +399,7 @@ export const Duo: React.FC<{ a: DuoSide; b: DuoSide; action: DuoAction; from?: n
       {order.map((X, i) => (
         <AtDepth key={i} w={X.s.at.w}>
           <Shadow x={X.pose.x} y={X.spot.y} scale={X.pose.scale} />
-          <Person look={X.s.look ?? (LOOKS.pipHood as PersonLook)} body={X.bd} shadow={0} rimId={X.s.rimId} pose={X.pose} />
+          <Person look={X.s.look ?? (LOOKS.pipHood as PersonLook)} body={X.bd} shadow={0} t={t} rimId={X.s.rimId} pose={X.pose} />
         </AtDepth>
       ))}
       {propAt && prop ? <g transform={`translate(${propAt.x} ${propAt.y})`}>{prop}</g> : null}

@@ -21,6 +21,16 @@ type Ctx = ActStyle & { yaw?: number };
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const smooth = (t: number) => t * t * (3 - 2 * t);
+/** Back-out easing: crisp arrival with subtle spring overshoot before settling cleanly at 1. */
+const easeOutBack = (t: number, s = 1.70158): number => {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const u = t - 1;
+  return 1 + (s + 1) * u * u * u + s * u * u;
+};
+/** Maps a sub-range [a, b] of progress p to 0..1 and applies easeOutBack. */
+const overshoot = (p: number, a: number, b: number, s = 1.5): number =>
+  easeOutBack(clamp01((p - a) / Math.max(1e-6, b - a)), s);
 const foldYaw = (yaw: number) => {
   const a = Math.abs(yaw);
   return a <= 1 ? a : Math.max(0, 2 - a);
@@ -141,50 +151,145 @@ type ClipFn = (p: number, f: number, dur: number, c: { lean: number; amp: number
 
 const CLIP_TABLE = {
   'stand-up': { dur: 26, loop: false, fn: ((p, _f, _d, c) => {
-    const up = curve(p, [[0, 0], [0.3, 0], [1, 1]]);
+    const up = p <= 0.3 ? 0 : overshoot(p, 0.3, 1, 1.35);
     return {
       legL: { a: lerp(78, 5, up), b: lerp(-78, 0, up) }, legR: { a: lerp(74, -5, up), b: lerp(-74, 0, up) },
-      tilt: curve(p, [[0, 0], [0.3, 20], [0.75, 8], [1, 0]]) * c.lean,
-      armL: { a: curve(p, [[0, 26], [0.3, 40], [1, 14]]), b: 20 }, armR: { a: curve(p, [[0, 30], [0.3, 44], [1, 14]]), b: 20 },
+      tilt: curve(p, [[0, 0], [0.14, 10], [0.3, 22], [0.76, -3], [1, 0]]) * c.lean,
+      squash: curve(p, [[0, 0], [0.22, 0.07], [0.52, -0.05], [0.84, 0.02], [1, 0]]),
+      armL: { a: curve(p, [[0, 26], [0.28, 44], [0.76, 10], [1, 14]]), b: curve(p, [[0, 20], [0.28, 32], [1, 20]]) },
+      armR: { a: curve(p, [[0, 30], [0.28, 48], [0.76, 10], [1, 14]]), b: curve(p, [[0, 20], [0.28, 32], [1, 20]]) },
     };
   }) as ClipFn },
   'sit-down': { dur: 24, loop: false, fn: ((p, _f, _d, c) => {
-    const down = curve(p, [[0, 0], [0.2, 0.06], [0.85, 1.04], [1, 1]]);
+    const down = p <= 0.14 ? 0 : overshoot(p, 0.14, 1, 1.45);
     return {
       legL: { a: lerp(5, 78, down), b: lerp(0, -78, down) }, legR: { a: lerp(-5, 74, down), b: lerp(0, -74, down) },
-      tilt: curve(p, [[0, 0], [0.45, 18], [1, 0]]) * c.lean,
-      armL: { a: curve(p, [[0, 14], [0.5, 38], [1, 26]]), b: 20 }, armR: { a: curve(p, [[0, 14], [0.5, 42], [1, 30]]), b: 20 },
+      tilt: curve(p, [[0, 0], [0.14, -4], [0.46, 20], [0.84, 3], [1, 0]]) * c.lean,
+      squash: curve(p, [[0, 0], [0.14, -0.03], [0.78, 0.07], [0.92, -0.015], [1, 0]]),
+      armL: { a: curve(p, [[0, 14], [0.14, 8], [0.5, 42], [1, 26]]), b: 20 },
+      armR: { a: curve(p, [[0, 14], [0.14, 8], [0.5, 46], [1, 30]]), b: 20 },
     };
   }) as ClipFn },
-  startle: { dur: 26, loop: false, fn: ((p) => {
-    const arms = curve(p, [[0, 14], [0.12, 8], [0.3, 128], [0.55, 110], [1, 30]]);
+  startle: { dur: 26, loop: false, fn: ((p, _f, _d, c) => {
+    const fling = overshoot(p, 0.12, 0.36, 1.8);
+    const settle = smooth(clamp01((p - 0.52) / 0.48));
+    const arms = p <= 0.12 ? lerp(14, 6, smooth(p / 0.12)) : lerp(lerp(6, 128, fling), 28, settle);
     return {
-      squash: curve(p, [[0, 0], [0.12, 0.09], [0.28, -0.08], [0.5, 0.05], [0.7, 0]]),
-      lift: curve(p, [[0, 0], [0.14, 0], [0.32, 30], [0.5, 0]]),
-      armL: { a: arms, b: 30 }, armR: { a: arms, b: 30 }, expr: p > 0.1 ? 'shock' : undefined,
-      headTilt: curve(p, [[0, 0], [0.3, -6], [1, 0]]),
+      squash: curve(p, [[0, 0], [0.12, 0.1], [0.28, -0.1], [0.52, 0.06], [0.76, -0.015], [1, 0]]),
+      lift: curve(p, [[0, 0], [0.14, 0], [0.32, 34], [0.52, 0]]),
+      tilt: curve(p, [[0, 0], [0.12, 4], [0.32, -10], [0.64, 2], [1, 0]]) * c.lean,
+      armL: { a: arms, b: curve(p, [[0, 12], [0.12, 24], [0.32, 38], [1, 26]]) },
+      armR: { a: arms, b: curve(p, [[0, 12], [0.12, 24], [0.32, 38], [1, 26]]) },
+      expr: p > 0.1 ? 'shock' : undefined,
+      headTilt: curve(p, [[0, 0], [0.12, 4], [0.32, -9], [0.68, 2], [1, 0]]),
     };
   }) as ClipFn },
-  jump: { dur: 28, loop: false, fn: ((p) => {
-    const bend = curve(p, [[0, 0], [0.22, 1], [0.38, 0], [0.68, 0], [0.82, 0.8], [1, 0]]);
+  jump: { dur: 28, loop: false, fn: ((p, _f, _d, c) => {
+    const bend = curve(p, [[0, 0], [0.22, 1], [0.36, 0], [0.68, 0], [0.82, 0.85], [0.93, -0.06], [1, 0]]);
+    const launchArms = p <= 0.22 ? lerp(14, -18, smooth(p / 0.22)) : p <= 0.62 ? lerp(-18, 146, overshoot(p, 0.22, 0.52, 1.5)) : lerp(146, 18, smooth((p - 0.62) / 0.38));
     return {
-      legL: { a: 5 + bend * 40, b: -bend * 70 }, legR: { a: -5 + bend * 40, b: -bend * 70 },
-      lift: curve(p, [[0, 0], [0.32, 0], [0.52, 70], [0.72, 0]]),
-      squash: curve(p, [[0, 0], [0.22, 0.09], [0.4, -0.08], [0.72, 0.08], [1, 0]]),
-      armL: { a: curve(p, [[0, 14], [0.22, -10], [0.5, 142], [1, 18]]), b: 18 }, armR: { a: curve(p, [[0, 14], [0.22, -10], [0.5, 142], [1, 18]]), b: 18 },
+      legL: { a: 5 + bend * 42, b: -Math.max(0, bend) * 72 }, legR: { a: -5 + bend * 42, b: -Math.max(0, bend) * 72 },
+      lift: curve(p, [[0, 0], [0.3, 0], [0.5, 74], [0.72, 0]]),
+      tilt: curve(p, [[0, 0], [0.22, 10], [0.46, -4], [0.82, 8], [1, 0]]) * c.lean,
+      squash: curve(p, [[0, 0], [0.22, 0.11], [0.38, -0.1], [0.74, 0.1], [0.91, -0.02], [1, 0]]),
+      armL: { a: launchArms, b: 18 }, armR: { a: launchArms, b: 18 },
     };
   }) as ClipFn },
   slump: { dur: 30, loop: false, fn: ((p, _f, _d, c) => {
-    const s = curve(p, [[0, 0], [0.7, 1], [1, 1]]);
-    return { tilt: 12 * s * c.lean, headTilt: 12 * s, squash: 0.05 * s, armL: { a: lerp(14, 4, s), b: 4 }, armR: { a: lerp(14, 4, s), b: 4 }, legL: { a: 5 + 8 * s, b: -14 * s }, legR: { a: -5 + 8 * s, b: -14 * s }, expr: 'tired' };
+    const ant = p < 0.14 ? Math.sin((p / 0.14) * Math.PI) : 0;
+    const s = p <= 0.14 ? 0 : overshoot(p, 0.14, 0.82, 1.55);
+    return {
+      tilt: (12 * s - 3 * ant) * c.lean,
+      headTilt: 12 * s - 3 * ant,
+      squash: 0.05 * s - 0.025 * ant,
+      armL: { a: lerp(14, 4, s) + 4 * ant, b: lerp(12, 4, clamp01(s)) },
+      armR: { a: lerp(14, 4, s) + 4 * ant, b: lerp(12, 4, clamp01(s)) },
+      legL: { a: 5 + 8 * s, b: -14 * clamp01(s) },
+      legR: { a: -5 + 8 * s, b: -14 * clamp01(s) },
+      expr: 'tired',
+    };
   }) as ClipFn },
   bow: { dur: 34, loop: false, fn: ((p, _f, _d, c) => {
     const s = curve(p, [[0, 0], [0.35, 1], [0.7, 1], [1, 0]]);
     return { tilt: 36 * s * c.lean, headTilt: 8 * s, squash: 0.03 * s, armL: { a: 6, b: 8 }, armR: { a: 6, b: 8 } };
   }) as ClipFn },
   'pick-up': { dur: 34, loop: false, fn: ((p, _f, _d, c) => {
-    const s = curve(p, [[0, 0], [0.45, 1], [0.6, 1], [1, 0]]);
-    return { tilt: 44 * s * c.lean, headTilt: 10 * s, legL: { a: 5 + 42 * s, b: -74 * s }, legR: { a: -5 + 38 * s, b: -70 * s }, armR: { a: 14 + 46 * s, b: 12 }, armL: { a: 14 + 30 * s, b: 12 } };
+    const s = p < 0.12 ? -0.08 * smooth(p / 0.12) : p < 0.6 ? overshoot(p, 0.12, 0.48, 1.35) : 1 - overshoot(p, 0.6, 1, 1.4);
+    const knee = Math.max(0, s);
+    return {
+      tilt: 44 * s * c.lean,
+      headTilt: 10 * s,
+      squash: curve(p, [[0, 0], [0.12, -0.03], [0.48, 0.05], [0.78, -0.03], [1, 0]]),
+      legL: { a: 5 + 42 * knee, b: -74 * knee }, legR: { a: -5 + 38 * knee, b: -70 * knee },
+      armR: { a: 14 + 46 * s, b: 12 }, armL: { a: 14 + 30 * s, b: 12 },
+    };
+  }) as ClipFn },
+  /** Two-character handshake: anticipation pull-back, overshoot reach, two firm vertical pumps, warm settle. */
+  handshake: { dur: 36, loop: false, swap: true, fn: ((p, _f, _d, c) => {
+    const reach = p <= 0.14 ? -0.1 * smooth(p / 0.14) : overshoot(p, 0.14, 0.38, 1.5);
+    const pumpPhase = p >= 0.38 && p <= 0.82 ? Math.sin(((p - 0.38) / 0.44) * Math.PI * 4) : 0;
+    const pump = pumpPhase * Math.sin(clamp01((p - 0.38) / 0.44) * Math.PI);
+    return {
+      armR: { a: lerp(14, 68, reach) + pump * 11, b: lerp(12, 16, clamp01(reach)) + pump * 8 },
+      armL: { a: 16, b: 14 },
+      handR: p > 0.18 && p < 0.88 ? 'palm' : 'open',
+      tilt: curve(p, [[0, 0], [0.14, -3], [0.38, 9], [0.85, 6], [1, 5]]) * c.lean,
+      headTilt: curve(p, [[0, 0], [0.38, 3], [0.58, 7], [0.78, 2], [1, 3]]),
+      squash: curve(p, [[0, 0], [0.14, 0.02], [0.38, -0.02], [1, 0]]),
+    };
+  }) as ClipFn },
+  /** Presenting / handing an object to someone: brief gather-in anticipation, smooth overshoot extend, steady hold. */
+  'hand-over': { dur: 28, loop: false, swap: true, fn: ((p, _f, _d, c) => {
+    const ext = p <= 0.14 ? 0 : overshoot(p, 0.14, 0.72, 1.45);
+    const wind = p <= 0.14 ? smooth(p / 0.14) : 1 - smooth(clamp01((p - 0.14) / 0.16));
+    return {
+      armR: { a: lerp(14, 80, ext) + wind * 8, b: lerp(12, 10, clamp01(ext)) + wind * 28 },
+      armL: { a: 18, b: 14 },
+      tilt: (lerp(0, 9, ext) - wind * 3) * c.lean,
+      headTilt: lerp(0, 4, clamp01(ext)),
+      squash: curve(p, [[0, 0], [0.14, 0.025], [0.46, -0.02], [1, 0]]),
+    };
+  }) as ClipFn },
+  /** Reaching for a door handle, gripping, and pulling it open with torso weight shift. */
+  'door-open': { dur: 30, loop: false, swap: true, fn: ((p, _f, _d, c) => {
+    const grab = p <= 0.12 ? 0 : overshoot(p, 0.12, 0.44, 1.35);
+    const pull = p <= 0.46 ? 0 : overshoot(p, 0.46, 0.86, 1.45);
+    return {
+      armR: {
+        a: p <= 0.46 ? lerp(14, 74, grab) : lerp(74, 34, pull),
+        b: p <= 0.46 ? lerp(12, 18, clamp01(grab)) : lerp(18, 68, pull),
+      },
+      armL: { a: 16, b: 14 },
+      handR: p >= 0.34 && p <= 0.84 ? 'fist' : 'open',
+      tilt: curve(p, [[0, 0], [0.12, -3], [0.44, 12], [0.76, -5], [1, 0]]) * c.lean,
+      headTilt: curve(p, [[0, 0], [0.44, 4], [0.78, -3], [1, 0]]),
+      squash: curve(p, [[0, 0], [0.12, 0.02], [0.44, 0.03], [0.74, -0.025], [1, 0]]),
+    };
+  }) as ClipFn },
+  /** Drops smoothly into a low crouch with anticipation lift and spring settle matching STANCES.crouch. */
+  crouch: { dur: 22, loop: false, fn: ((p, _f, _d, c) => {
+    const c0 = p <= 0.14 ? 0 : overshoot(p, 0.14, 0.92, 1.45);
+    return {
+      legL: { a: lerp(5, 66, c0), b: lerp(0, -108, c0) },
+      legR: { a: lerp(-5, 62, c0), b: lerp(0, -104, c0) },
+      tilt: (lerp(0, 18, c0) - (p < 0.14 ? 3 * smooth(p / 0.14) : 0)) * c.lean,
+      headTilt: lerp(0, -6, clamp01(c0)),
+      squash: curve(p, [[0, 0], [0.14, -0.03], [0.76, 0.06], [1, 0.02]]),
+      armL: { a: lerp(14, 34, c0), b: lerp(12, 36, c0) },
+      armR: { a: lerp(14, 38, c0), b: lerp(12, 32, c0) },
+    };
+  }) as ClipFn },
+  /** Settling into a relaxed lying posture (pairs with stance: 'lie' via stanceOfAction). */
+  lying: { dur: 20, loop: false, fn: ((p) => {
+    const k = easeOutBack(p, 1.1);
+    return {
+      legL: { a: 4, b: -4 },
+      legR: { a: -4, b: -10 },
+      armL: { a: lerp(18, 12, k), b: lerp(16, 14, k) },
+      armR: { a: lerp(22, 16, k), b: lerp(20, 26, k) },
+      headTilt: lerp(4, 2, clamp01(k)),
+      squash: curve(p, [[0, 0.02], [1, 0]]),
+    };
   }) as ClipFn },
   walk: { dur: 0, loop: true, fn: ((_p, f, _d, c) => {
     const ph = f * 0.6;
@@ -215,7 +320,7 @@ const CLIP_TABLE = {
       armL: { a: 38, b: 84 }, armR: { a: 46, b: 84 }, look: c.lean >= 0 ? 0.5 : -0.5,
     };
   }) as ClipFn },
-} satisfies Record<string, { dur: number; loop: boolean; fn: ClipFn }>;
+} satisfies Record<string, { dur: number; loop: boolean; swap?: boolean; fn: ClipFn }>;
 export type Clip = keyof typeof CLIP_TABLE;
 export const CLIPS = Object.keys(CLIP_TABLE) as Clip[];
 
@@ -246,7 +351,8 @@ export const clip = (name: Clip, t: number, opts: Ctx & { from?: number; dur?: n
   let out = def.fn(clamp01(f / dur), f * tempo, dur, { lean: leanDir(yaw), amp });
   if (!def.loop && f > dur) out = applyHoldBreath(out, (f - dur) * tempo, amp);
   if (out.expr === undefined) delete out.expr;
-  return mirrorHead(out, yaw);
+  const oriented = 'swap' in def && def.swap && yaw < 0 ? swapArms(out) : out;
+  return mirrorHead(oriented, yaw);
 };
 
 // ---------------------------------------------------------------------------------------------- your own actions
@@ -319,8 +425,16 @@ const own = (spec: OwnActionSpec, t: number, opts: Ctx & { from?: number; dur?: 
 defineAction('lean', { dur: 12, tilt: [[0, 0], [1, 22]], headTilt: [[0, 0], [1, 6]], armR: { a: [[0, 14], [1, 56]], b: [[0, 12], [1, 4]] }, armL: { a: 20, b: 10 } });
 /** digs in a bag, a drawer, a locker: both hands down in front, working */
 defineAction('rummage', { loop: true, dur: 20, tilt: 24, headTilt: 12, armR: { a: [[0, 40], [0.5, 62], [1, 40]], b: [[0, 30], [0.5, 8], [1, 30]] }, armL: { a: [[0, 60], [0.5, 38], [1, 60]], b: [[0, 8], [0.5, 30], [1, 8]] } });
-/** brings a flat hand down hard on a table */
-defineAction('slam', { dur: 14, armR: { a: [[0, 20], [0.4, 150], [0.62, 52], [1, 52]], b: [[0, 12], [0.4, 30], [0.62, 4], [1, 4]] }, armL: { a: 18, b: 12 }, tilt: [[0, 0], [0.4, -6], [0.62, 20], [1, 16]], squash: [[0, 0], [0.62, 0.05], [1, 0]] });
+/** brings a flat hand down hard on a table: crisp anticipation wind-up, impact overshoot, elastic settle */
+defineAction('slam', {
+  dur: 14,
+  armR: { a: [[0, 20], [0.28, 162], [0.56, 42], [0.78, 56], [1, 52]], b: [[0, 12], [0.28, 36], [0.56, 2], [0.78, 8], [1, 4]] },
+  armL: { a: 18, b: 12 },
+  handR: 'palm',
+  tilt: [[0, 0], [0.28, -9], [0.56, 24], [0.78, 14], [1, 16]],
+  headTilt: [[0, 0], [0.28, -5], [0.56, 8], [1, 4]],
+  squash: [[0, 0], [0.28, -0.04], [0.56, 0.09], [0.78, -0.02], [1, 0]],
+});
 /** holds something out to someone */
 defineAction('give', { dur: 14, armR: { a: [[0, 14], [1, 82]], b: [[0, 12], [1, 6]] }, armL: { a: 16, b: 12 }, tilt: [[0, 0], [1, 6]] });
 /** reads something held in both hands */
@@ -328,15 +442,17 @@ defineAction('read', { loop: true, dur: 60, armR: { a: 58, b: 88 }, armL: { a: 5
 export type OwnAction = 'lean' | 'rummage' | 'slam' | 'give' | 'read';
 
 export type ActName = Gesture | Clip | ActionAlias | OwnAction;
-/** Words the stories ask for that are another action: kneel and crouch are stances (set `stance`), the rest are synonyms. */
+export type ActionName = ActName;
+/** Words the stories ask for that are another action: kneel is a stance (set `stance`), the rest are synonyms. */
 export const ACTION_ALIASES = {
-  kneel: 'idle', crouch: 'idle', yell: 'shout', scream: 'shout', 'face-palm': 'facepalm', shove: 'push', laugh: 'talk',
+  kneel: 'idle', yell: 'shout', scream: 'shout', 'face-palm': 'facepalm', shove: 'push', laugh: 'talk',
   'lean-on': 'lean', search: 'rummage', dig: 'rummage', hand: 'give', offer: 'give', bang: 'slam',
   'phone-call': 'call', 'on-phone': 'call', calling: 'call', applaud: 'clap', plead: 'open-arms', beg: 'open-arms', welcome: 'open-arms', 'thumb-up': 'thumbs-up', 'hand-on-mouth': 'cover-mouth', gasp: 'cover-mouth',
 } as const;
 export type ActionAlias = keyof typeof ACTION_ALIASES;
-/** The stance an action word implies (act: 'kneel' kneels), or undefined. */
-export const stanceOfAction = (name: string | undefined): Stance | undefined => (name === 'kneel' || name === 'crouch' ? name : undefined);
+/** The stance an action word implies (act: 'kneel' kneels, 'crouch' crouches, 'lying' lies down), or undefined. */
+export const stanceOfAction = (name: string | undefined): Stance | undefined =>
+  name === 'kneel' || name === 'crouch' ? name : name === 'lying' ? 'lie' : undefined;
 export const isClip = (n: string): n is Clip => n in CLIP_TABLE;
 export const isGesture = (n: string): n is Gesture => n in GESTURE_TABLE;
 

@@ -287,7 +287,7 @@ export function accentMetrics(shotsInput: string | EpisodeShotsBundle): string {
   let headVfx = 0;
   let camBeats = 0;
   for (const body of bodies) {
-    if (/\b(phoneShot|tabletopShot)\s*\(/.test(body)) macroInserts++;
+    if (/\b(phoneShot|tabletopShot|screenShot|notifShot|counterShot|polaroidShot)\s*\(/.test(body)) macroInserts++;
     if (/\b(stamp|tag|title|burst)\s*:|<(StampCard|ValueTag|HookTitle|ShockBurst)\b/.test(body)) stampsTags++;
     if (/\bvfx\s*:\s*\[|<(HeadVfx|FocusRings|Sparkle)\b/.test(body)) headVfx++;
     if (/\bbeats\s*:\s*\[[^\]]*\b(cam|shake|angle|view|zone)\s*:/.test(body)) camBeats++;

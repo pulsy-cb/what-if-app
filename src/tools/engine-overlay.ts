@@ -182,6 +182,39 @@ const PATCHES: PatchGroup[] = [
       },
     ],
   },
+  {
+    // support short scene-cut dip-to-dark fade transitions in timeline fx (`kind: 'fade'`, default 6 frames centered on `e.f`)
+    file: 'src/engine/episode.tsx',
+    marker: "kind: 'flash' | 'shake' | 'fade'",
+    optional: true,
+    ops: [
+      {
+        kind: 'replace',
+        find: "export type Fx = { f: number; kind: 'flash' | 'shake'; color?: string; o?: number; len?: number; amp?: number };",
+        replace: "export type Fx = { f: number; kind: 'flash' | 'shake' | 'fade'; color?: string; o?: number; len?: number; amp?: number };",
+        count: 1,
+      },
+      {
+        kind: 'replace',
+        find: '        x += Math.sin(f * 2.9) * k;\n        y += Math.cos(f * 3.7) * k * 0.7;\n      }\n    }\n  }',
+        replace:
+          '        x += Math.sin(f * 2.9) * k;\n' +
+          '        y += Math.cos(f * 3.7) * k * 0.7;\n' +
+          '      }\n' +
+          "    } else if (e.kind === 'fade') {\n" +
+          '      const len = Math.max(2, e.len ?? 6);\n' +
+          '      const half = len / 2;\n' +
+          '      const d = Math.abs(f - e.f);\n' +
+          '      if (d < half) {\n' +
+          '        const o = (e.o ?? 0.92) * (1 - d / half);\n' +
+          "        if (!flash || o > flash.o) flash = { color: e.color ?? '#0E0C1E', o };\n" +
+          '      }\n' +
+          '    }\n' +
+          '  }',
+        count: 1,
+      },
+    ],
+  },
 ];
 
 /** The edited text, or the reason the group cannot be applied to this engine copy. */

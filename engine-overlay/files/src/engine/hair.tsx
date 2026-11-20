@@ -120,6 +120,166 @@ export const HairLayer: React.FC<{ style: string; view: View; part: Part; color:
       if (view === 'profile') return part === 'behind' ? path(`M 8 ${Y - 66} Q -84 ${Y - 66} -80 ${Y + 46} L -64 ${Y + 38} L -56 ${Y + 54} L -38 ${Y + 40} Q -30 ${Y} 8 ${Y - 40} Z`) : cap;
       return part === 'over' ? path(`M -74 ${Y + 54} Q -88 ${Y - 74} 0 ${Y - 76} Q 88 ${Y - 74} 74 ${Y + 54} L 52 ${Y + 46} L 30 ${Y + 60} L 0 ${Y + 48} L -30 ${Y + 60} L -52 ${Y + 46} Z`) : null;
     }
+    case 'fade': {
+      // modern tapered skin-fade with a crisp textured crop on top
+      if (part !== 'over') return null;
+      if (view === 'front') {
+        return (
+          <g>
+            <path d={`M -59 ${Y - 8} A 61 61 0 0 1 59 ${Y - 8} Q 34 ${Y - 40} 0 ${Y - 42} Q -34 ${Y - 40} -59 ${Y - 8} Z`} {...flat} opacity={0.42} />
+            {path(`M -48 ${Y - 38} Q -50 ${Y - 76} 0 ${Y - 78} Q 50 ${Y - 76} 48 ${Y - 38} Q 24 ${Y - 48} 0 ${Y - 46} Q -24 ${Y - 48} -48 ${Y - 38} Z`)}
+          </g>
+        );
+      }
+      if (view === 'profile') {
+        return (
+          <g>
+            <path d={`M -59 ${Y + 4} Q -63 ${Y - 64} 8 ${Y - 64} Q 46 ${Y - 60} 54 ${Y - 34} Q 20 ${Y - 44} -14 ${Y - 28} Q -32 ${Y - 14} -38 ${Y + 8} Z`} {...flat} opacity={0.42} />
+            {path(`M -52 ${Y - 28} Q -54 ${Y - 74} 8 ${Y - 76} Q 50 ${Y - 74} 54 ${Y - 38} Q 26 ${Y - 48} -10 ${Y - 42} Q -36 ${Y - 38} -52 ${Y - 28} Z`)}
+          </g>
+        );
+      }
+      return (
+        <g>
+          <path d={BOWL} {...flat} opacity={0.42} />
+          {path(`M -56 ${Y - 22} A 60 60 0 0 1 56 ${Y - 22} Q 0 ${Y - 10} -56 ${Y - 22} Z`)}
+        </g>
+      );
+    }
+    case 'waves': {
+      // flowing medium-long layered waves framing the face
+      if (view === 'front') {
+        if (part === 'behind') {
+          return path(
+            `M -72 ${Y + 62} Q -84 ${Y + 26} -68 ${Y - 10} Q -82 ${Y - 72} 0 ${Y - 76} Q 82 ${Y - 72} 68 ${Y - 10} Q 84 ${Y + 26} 72 ${Y + 62} Q 52 ${Y + 76} 36 ${Y + 56} Q 0 ${Y + 46} -36 ${Y + 56} Q -52 ${Y + 76} -72 ${Y + 62} Z`,
+          );
+        }
+        return path(
+          `M -62 ${Y + 14} Q -68 ${Y - 72} -6 ${Y - 72} Q 68 ${Y - 72} 62 ${Y + 14} Q 52 ${Y - 18} 38 ${Y - 34} Q 14 ${Y - 42} -6 ${Y - 54} Q -26 ${Y - 40} -44 ${Y - 30} Q -54 ${Y - 14} -62 ${Y + 14} Z`,
+        );
+      }
+      if (view === 'profile') {
+        if (part === 'behind') {
+          return path(`M 10 ${Y - 68} Q -82 ${Y - 66} -76 ${Y - 2} Q -88 ${Y + 34} -68 ${Y + 66} Q -46 ${Y + 76} -28 ${Y + 58} Q -34 ${Y + 14} 8 ${Y - 38} Z`);
+        }
+        return cap;
+      }
+      return part === 'over' ? (
+        <g>
+          {path(`M -74 ${Y + 64} Q -86 ${Y + 26} -72 ${Y - 12} Q -84 ${Y - 74} 0 ${Y - 76} Q 84 ${Y - 74} 72 ${Y - 12} Q 86 ${Y + 26} 74 ${Y + 64} Q 42 ${Y + 78} 0 ${Y + 70} Q -42 ${Y + 78} -74 ${Y + 64} Z`)}
+          <path d={`M -44 ${Y + 10} Q -24 ${Y + 24} 0 ${Y + 12} Q 24 ${Y + 24} 44 ${Y + 10}`} stroke={line} strokeWidth={2.5} fill="none" opacity={0.45} strokeLinecap="round" />
+        </g>
+      ) : null;
+    }
+    case 'afro': {
+      // voluminous sculpted afro with subtle organic cloud silhouette
+      if (view === 'front') {
+        if (part === 'behind') {
+          return path(
+            `M -76 ${Y + 16} Q -96 ${Y - 14} -82 ${Y - 46} Q -76 ${Y - 84} -40 ${Y - 90} Q 0 ${Y - 106} 40 ${Y - 90} Q 76 ${Y - 84} 82 ${Y - 46} Q 96 ${Y - 14} 76 ${Y + 16} Q 52 ${Y + 34} 0 ${Y + 28} Q -52 ${Y + 34} -76 ${Y + 16} Z`,
+          );
+        }
+        return path(`M -58 ${Y - 18} Q -54 ${Y - 64} 0 ${Y - 68} Q 54 ${Y - 64} 58 ${Y - 18} Q 32 ${Y - 42} 0 ${Y - 44} Q -32 ${Y - 42} -58 ${Y - 18} Z`);
+      }
+      if (view === 'profile') {
+        if (part === 'behind') {
+          return path(
+            `M -74 ${Y + 22} Q -98 ${Y - 12} -86 ${Y - 48} Q -76 ${Y - 88} -30 ${Y - 94} Q 14 ${Y - 102} 44 ${Y - 76} Q 64 ${Y - 56} 58 ${Y - 26} Q 20 ${Y - 40} -18 ${Y - 20} Q -42 ${Y + 20} -74 ${Y + 22} Z`,
+          );
+        }
+        return path(`M -56 ${Y - 6} Q -56 ${Y - 66} 8 ${Y - 68} Q 54 ${Y - 62} 56 ${Y - 26} Q 26 ${Y - 44} -4 ${Y - 36} Q -34 ${Y - 32} -56 ${Y - 6} Z`);
+      }
+      return part === 'over'
+        ? path(
+            `M -78 ${Y + 24} Q -98 ${Y - 10} -84 ${Y - 46} Q -78 ${Y - 86} -40 ${Y - 92} Q 0 ${Y - 108} 40 ${Y - 92} Q 78 ${Y - 86} 84 ${Y - 46} Q 98 ${Y - 10} 78 ${Y + 24} Q 42 ${Y + 46} 0 ${Y + 44} Q -42 ${Y + 46} -78 ${Y + 24} Z`,
+          )
+        : null;
+    }
+    case 'high-bun': {
+      // sleek pulled-back hair with a tall top-knot bun and wispy temple strands
+      const at = view === 'profile' ? { x: -20, y: Y - 88 } : { x: 0, y: Y - 92 };
+      const knot = (
+        <g>
+          <ellipse cx={at.x} cy={at.y} rx={27} ry={23} {...st} />
+          <rect x={at.x - 19} y={at.y + 16} width={38} height={8} rx={4} fill={line} opacity={0.85} />
+        </g>
+      );
+      if (view === 'back') return part === 'over' ? <g>{path(BOWL)}{knot}</g> : null;
+      if (part === 'behind') return knot;
+      const wisps =
+        view === 'front' ? (
+          <g>
+            {path(`M -58 ${Y - 22} Q -68 ${Y + 2} -58 ${Y + 26} Q -54 ${Y + 4} -50 ${Y - 18} Z`)}
+            {path(`M 58 ${Y - 22} Q 68 ${Y + 2} 58 ${Y + 26} Q 54 ${Y + 4} 50 ${Y - 18} Z`)}
+          </g>
+        ) : (
+          path(`M 8 ${Y - 38} Q 18 ${Y - 6} 10 ${Y + 22} Q 5 ${Y - 2} 2 ${Y - 30} Z`)
+        );
+      return <g>{cap}{wisps}</g>;
+    }
+    case 'undercut': {
+      // shaved tapered sides with a bold sweeping longer top section
+      if (part !== 'over') return null;
+      if (view === 'front') {
+        return (
+          <g>
+            <path d={`M -59 ${Y - 10} A 61 61 0 0 1 59 ${Y - 10} Q 0 ${Y - 42} -59 ${Y - 10} Z`} {...flat} opacity={0.34} />
+            {path(`M -52 ${Y - 34} Q -56 ${Y - 82} 8 ${Y - 84} Q 62 ${Y - 82} 64 ${Y - 34} Q 40 ${Y - 52} 6 ${Y - 52} Q -24 ${Y - 52} -52 ${Y - 34} Z`)}
+          </g>
+        );
+      }
+      if (view === 'profile') {
+        return (
+          <g>
+            <path d={`M -59 ${Y + 4} Q -63 ${Y - 64} 8 ${Y - 64} Q 46 ${Y - 60} 54 ${Y - 34} Q 18 ${Y - 44} -14 ${Y - 26} Q -32 ${Y - 12} -38 ${Y + 8} Z`} {...flat} opacity={0.34} />
+            {path(`M -58 ${Y - 30} Q -60 ${Y - 80} 10 ${Y - 82} Q 64 ${Y - 80} 68 ${Y - 42} Q 38 ${Y - 56} -8 ${Y - 48} Q -38 ${Y - 44} -58 ${Y - 30} Z`)}
+          </g>
+        );
+      }
+      return (
+        <g>
+          <path d={BOWL} {...flat} opacity={0.34} />
+          {path(`M -56 ${Y - 22} Q -60 ${Y - 78} 0 ${Y - 80} Q 60 ${Y - 78} 56 ${Y - 22} Q 0 ${Y - 10} -56 ${Y - 22} Z`)}
+        </g>
+      );
+    }
+    case 'curtain': {
+      // middle-parted curtain bangs with soft sweeping arcs framing the forehead
+      if (view === 'front') {
+        if (part === 'behind') {
+          return path(`M -66 ${Y + 14} Q -74 ${Y - 56} 0 ${Y - 72} Q 74 ${Y - 56} 66 ${Y + 14} Q 48 ${Y + 20} 44 ${Y - 12} L -44 ${Y - 12} Q -48 ${Y + 20} -66 ${Y + 14} Z`);
+        }
+        return (
+          <g>
+            {path(`M -62 ${Y + 6} Q -66 ${Y - 74} 0 ${Y - 72} Q -10 ${Y - 36} -38 ${Y - 14} Q -52 ${Y - 4} -62 ${Y + 6} Z`)}
+            {path(`M 62 ${Y + 6} Q 66 ${Y - 74} 0 ${Y - 72} Q 10 ${Y - 36} 38 ${Y - 14} Q 52 ${Y - 4} 62 ${Y + 6} Z`)}
+          </g>
+        );
+      }
+      if (view === 'profile') {
+        if (part === 'behind') {
+          return path(`M -58 ${Y + 14} Q -72 ${Y - 58} 6 ${Y - 70} Q -20 ${Y - 28} -40 ${Y + 16} Z`);
+        }
+        return path(`M -58 ${Y + 2} Q -64 ${Y - 72} 8 ${Y - 72} Q 58 ${Y - 68} 62 ${Y - 16} Q 46 ${Y - 34} 28 ${Y - 18} Q 16 ${Y - 42} -14 ${Y - 38} Q -40 ${Y - 34} -58 ${Y + 2} Z`);
+      }
+      return part === 'over' ? path(`M -64 ${Y + 22} A 64 64 0 1 1 64 ${Y + 22} Q 38 ${Y + 48} 0 ${Y + 46} Q -38 ${Y + 48} -64 ${Y + 22} Z`) : null;
+    }
+    case 'quiff': {
+      // voluminous swept-up front quiff with neat tapered sides
+      if (part !== 'over') return null;
+      if (view === 'front') {
+        return path(`M -58 ${Y - 18} Q -62 ${Y - 68} -18 ${Y - 74} Q 10 ${Y - 98} 48 ${Y - 82} Q 68 ${Y - 68} 58 ${Y - 18} Q 40 ${Y - 44} 6 ${Y - 46} Q -30 ${Y - 46} -58 ${Y - 18} Z`);
+      }
+      if (view === 'profile') {
+        return path(`M -58 ${Y + 2} Q -64 ${Y - 68} 0 ${Y - 72} Q 34 ${Y - 96} 66 ${Y - 74} Q 76 ${Y - 58} 56 ${Y - 36} Q 30 ${Y - 50} -4 ${Y - 42} Q -34 ${Y - 38} -58 ${Y + 2} Z`);
+      }
+      return (
+        <g>
+          {path(BOWL)}
+          {path(`M -46 ${Y - 46} Q 0 ${Y - 88} 46 ${Y - 46} Q 0 ${Y - 60} -46 ${Y - 46} Z`)}
+        </g>
+      );
+    }
     default:
       return null;
   }
